@@ -61,6 +61,7 @@ Until the scaffold lands, this repo is documentation and a work graph.
 
 | Path | What it holds |
 |---|---|
+| [`docs/adr/`](docs/adr/) | Decisions that would look wrong without the reasoning: why the font tag data is fetched rather than vendored, and which libraries are adopted, which are ruled out, and what a visitor is allowed to download. |
 | [`docs/research/oss-landscape.md`](docs/research/oss-landscape.md) | Which libraries to use for color math, contrast, and DTCG, and which to avoid. Sizes measured locally, every claim cited. |
 | [`docs/agents/`](docs/agents/) | Conventions for agents working in this repo: issue tracker, triage labels, domain docs. |
 | [`AGENTS.md`](AGENTS.md) | Entry point for coding agents. `CLAUDE.md` imports it. |
