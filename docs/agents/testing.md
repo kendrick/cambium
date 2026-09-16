@@ -36,26 +36,42 @@ Two patterns are worth borrowing from unbranded-ds, the only prior art the issue
 
 One shared contract suite over the four interface methods, run against the IndexedDB implementation under `fake-indexeddb` in Node. The whole point is that a future HTTP implementation runs that suite unchanged, so keep the suite implementation-blind.
 
+## The browser tier
+
+Playwright is the only browser runner. Vitest gets no browser tier: it keeps the Node-side work, which is the pure core, the RecordStore contract under `fake-indexeddb`, and the bundle measurement. The `cat.color` rule family the interface audit needs is inert under jsdom, which does no layout and resolves no cascade, and run 4 exercises real IndexedDB and real file handling that `fake-indexeddb` cannot prove. Once a browser is running for both, `@axe-core/playwright` covers the audit in the same suite and a second runner earns nothing. Static export keeps the cost down: build, serve `out/` as files, point a browser at it.
+
+The suite automates runs 1, 2, and 4 of issue #1's five demonstrable runs. Run 1 needs no key and no network, run 2 runs with the model call intercepted at the route rather than against a real key, and run 4 needs a browser. Run 3 stays manual, because a person looking at the rendered theme is the step that proves the output is real rather than merely plausible; #49 adds a contract test asserting the generated unbranded-ds theme document against that project's registration input, so shape drift fails on its own. Run 5 is the existing core suite and does not change.
+
+The suite arrives in two parts. #47 stands up the harness and automates the keyed path as far as v1 reaches; #48 extends it to the keyless demo, the round trip, and contrast repair once those features exist. `pnpm install` brings the Playwright client library and no browser binaries, so #47 owns running `npx playwright install`.
+
 ## Deliberately not tested automatically
 
 Reader implementations. Once seed parsing moved into the core, they are I/O shells with no logic left to test.
 
-The UI. Verify it by hand against the five demonstrable runs in issue #1's completion criteria. There is no e2e tier and Playwright is not a dependency. Component tests against a prototype interface that is still moving cost more than they return, and speed matters more here.
+Component tests. The interface is still moving, and tests against a prototype interface cost more than they return. That rejects component tests rather than testing the interface: the five runs are flows against the definition of done, which is the one part of the spec that should not move, and three of them are automated in the Playwright suite above.
 
 Both are tradeoffs the spec makes on purpose. Leave them alone rather than filing them as missing coverage.
 
 ## Tooling
 
-`pnpm test` runs once, `pnpm test:watch` watches; `vitest.config.ts` holds the rest. Co-locate a test beside the code it covers. That is convention rather than configuration, so the config will not tell you, and `core/` is the pattern to follow.
+`pnpm test` runs the unit project once and `pnpm test:watch` watches it. `pnpm test:bundle` measures a real build against the budget in `lib/bundle-budget.ts`, and `pnpm verify` chains typecheck, lint, format, tests, build, and that budget. `vitest.config.ts` holds the rest. Co-locate a test beside the code it covers. That is convention rather than configuration, so the config will not tell you, and `core/` is the pattern to follow.
+
+Vitest runs two projects. `unit` is everything except `**/*.bundle.test.ts`, and `bundle` is that glob alone, which needs a real `out/` and so stays out of the default run. Keep new test files `.ts`, because the include glob does not match `.test.tsx`.
 
 Contrast assertions are plain Vitest against the math, because the generator is a pure function. Routing them through axe instead would mean mounting and styling DOM nodes to divide two luminance numbers, and it answers the question far more slowly.
 
-Rendered-component accessibility is a real need that arrives with the UI tickets. axe-core measures *rendered* accessibility, and jsdom resolves no cascade and does no layout, so those checks belong in Vitest browser mode with axe-core called directly. None of it exists today: `@vitest/browser`, `@vitest/browser-playwright`, `playwright`, and `axe-core` all still need adding when those tickets land. Call `axe.run()` and assert on the result; a ten-line local matcher replaces the wrapper.
+Rendered-component accessibility goes through `@axe-core/playwright` inside the Playwright suite, never through Vitest. axe-core measures *rendered* accessibility, and jsdom resolves no cascade and does no layout. `@playwright/test` and `@axe-core/playwright` are pinned; `@vitest/browser` and `@vitest/browser-playwright` are not installed and must not be, because one runner already covers both jobs. That supersedes section 8 of `docs/research/oss-landscape.md`, which recommends Vitest browser mode with a provider package: it answered how to run axe, and the tier question changed the answer.
 
-Reach for axe-core directly. Its popular wrapper `vitest-axe` is abandoned—the `latest` tag points at a 2022 build, and the maintainer has not answered since early 2025—so do not install it, or `@types/jest-axe`.
+`@axe-core/playwright` is the only axe wrapper here. Its Vitest counterpart `vitest-axe` is abandoned—the `latest` tag points at a 2022 build, and the maintainer has not answered since early 2025—so do not install it, or `@types/jest-axe`.
+
+## Test-first
+
+Required for the pure core, and left to the contributor everywhere else.
+
+The core is where behaviour is written down before it is built. The seed schema, the twelve-step ramps, contrast repair, and the export adapters all have their expected output specified in issue #1 before any code exists. The interface does not, and the spec says it is still moving.
 
 ## Undefined
 
-Two things the project has not decided. Ask before either one becomes an assumption.
+One thing the project has not decided. Ask before it becomes an assumption.
 
-No coverage thresholds are configured, and no target is written down anywhere. Nothing in this repo requires writing tests before implementation either, so TDD is not a documented convention here.
+No coverage thresholds are configured, and no target is written down anywhere.

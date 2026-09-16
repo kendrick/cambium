@@ -18,7 +18,7 @@ Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/
 
 ### Testing
 
-Read before writing or changing a test: two seams, a fixed coverage list, and what is deliberately left untested. See `docs/agents/testing.md`.
+Read before writing or changing a test: the two Vitest seams, the browser tier, where test-first is required, and what is deliberately left untested. See `docs/agents/testing.md`.
 
 ### Code review
 
