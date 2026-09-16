@@ -2,12 +2,14 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { type DtcgViolation, validateDtcg } from './validate';
 
-const repoRoot = new URL('../../', import.meta.url).pathname;
+// `fileURLToPath`, not `.pathname`: a checkout path containing a space arrives percent-encoded.
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const scratch = mkdtempSync(join(tmpdir(), 'cambium-dtcg-'));
 
 afterAll(() => {
@@ -54,8 +56,8 @@ const validDocument = {
 	},
 };
 
-function violationsOf(document: unknown): DtcgViolation[] {
-	const result = validateDtcg(document);
+function violationsOf(tokenDocument: unknown): DtcgViolation[] {
+	const result = validateDtcg(tokenDocument);
 
 	if (result.valid) throw new Error('expected this document to fail validation');
 

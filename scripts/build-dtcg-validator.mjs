@@ -1,4 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
@@ -16,8 +18,10 @@ const SCHEMA = new URL('../core/dtcg/format.2025.10.json', import.meta.url);
 
 // The committed path is the default. `core/dtcg/validator.test.ts` passes a scratch path so it can
 // regenerate and diff without touching the file it is checking.
+// `pathToFileURL`, not string concatenation: a working directory containing a space or a `#`
+// does not survive being pasted into a URL.
 const TARGET = process.argv[2]
-	? new URL(process.argv[2], `file://${process.cwd()}/`)
+	? pathToFileURL(resolve(process.argv[2]))
 	: new URL('../core/dtcg/format-validator.generated.mjs', import.meta.url);
 
 const schema = JSON.parse(await readFile(SCHEMA, 'utf8'));
@@ -65,5 +69,5 @@ export default validate;
 
 await writeFile(new URL(`${TARGET.href.replace(/\.mjs$/, '')}.d.mts`), types);
 
-console.log(`${TARGET.pathname}
+console.log(`${fileURLToPath(TARGET)}
   ${Buffer.byteLength(banner) + Buffer.byteLength(source)} bytes`);

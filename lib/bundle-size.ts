@@ -1,4 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 /**
@@ -42,13 +44,24 @@ export type BundleMeasurement = {
  */
 const SCRIPT_SRC = /<script\b[^>]*?\ssrc="([^"]+)"/g;
 
+/*
+ * Two assumptions this pins, both true of the current build and neither guaranteed forever.
+ *
+ * Only `<script src>` counts as first load. A chunk Next emits as `modulepreload` alone would
+ * measure as lazy; today every preloaded chunk is also a `<script src>`, so the two agree.
+ *
+ * Every script lives under `_next/static`. One served from `public/` would not be globbed, and
+ * `measureBundle` throws rather than measuring, which is the failure this file wants.
+ */
+
 /**
  * Reduces a `<script src>` to a path relative to the export directory. `basePath` prefixes the src
  * with the deploy prefix (see lib/deploy-paths.ts) while the file on disk keeps its bare path, so
  * anchor on `_next/` rather than stripping a fixed number of segments.
  */
 function toOutputPath(src: string): string {
-	const withoutQuery = src.split(/[?#]/)[0] ?? src;
+	// `split` always yields at least one element, so this never needs a fallback.
+	const [withoutQuery] = src.split(/[?#]/);
 	const nextIndex = withoutQuery.indexOf('_next/');
 
 	return nextIndex === -1 ? withoutQuery.replace(/^\/+/, '') : withoutQuery.slice(nextIndex);
@@ -101,18 +114,20 @@ export function measureBundle(output: BuildOutput): BundleMeasurement {
  * and scopes the manifest directory by build id, so nothing here is stable enough to hard-code.
  */
 export function readStaticExport(outDir: URL): BuildOutput {
-	const staticDir = new URL('_next/static/', outDir);
+	// Filesystem paths throughout, never URL pathnames. `URL.pathname` percent-encodes, so a
+	// checkout living under a directory with a space in it makes `pathname` longer than the real
+	// path and any offset taken from it lands mid-name.
+	const root = fileURLToPath(outDir);
+	const staticDir = join(root, '_next', 'static');
 
 	const scriptPaths = readdirSync(staticDir, { recursive: true, withFileTypes: true })
 		.filter((entry) => entry.isFile() && entry.name.endsWith('.js'))
-		.map(
-			(entry) => `_next/static/${entry.parentPath.slice(staticDir.pathname.length)}/${entry.name}`,
-		)
-		.map((path) => path.replace(/\/{2,}/g, '/'));
+		// Separators normalise to `/` because these keys are compared against `<script src>`.
+		.map((entry) => relative(root, join(entry.parentPath, entry.name)).split(sep).join('/'));
 
 	return {
-		entryHtml: readFileSync(new URL('index.html', outDir), 'utf8'),
+		entryHtml: readFileSync(join(root, 'index.html'), 'utf8'),
 		scriptPaths,
-		read: (path) => readFileSync(new URL(path, outDir)),
+		read: (path) => readFileSync(join(root, path)),
 	};
 }

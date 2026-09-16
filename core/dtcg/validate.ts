@@ -21,8 +21,8 @@ export type DtcgValidationResult = { valid: true } | { valid: false; violations:
  * passes here and has to be caught structurally instead. Schema and parser are complementary;
  * neither one alone means conformant.
  */
-export function validateDtcg(document: unknown): DtcgValidationResult {
-	if (validateAgainstSchema(document)) return { valid: true };
+export function validateDtcg(tokenDocument: unknown): DtcgValidationResult {
+	if (validateAgainstSchema(tokenDocument)) return { valid: true };
 
 	// Ajv hangs the failures off the function itself and overwrites them on the next call, so read
 	// them before anything else can validate.
