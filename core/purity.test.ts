@@ -72,10 +72,10 @@ const record = {
  * cannot be asserted the way it can for `document`; stubbing it to throw is what turns a
  * stray call into a failure.
  *
- * The entries below are enumerated by hand and nothing discovers a new one, so a module added
- * to the pure core is covered here only if someone adds it.
+ * Nothing discovers a new entry in the table below, so a module added to the pure core is
+ * guarded here only if someone adds it.
  */
-describe('core schema purity', () => {
+describe('core purity', () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
 	});
