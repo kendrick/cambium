@@ -7,7 +7,7 @@ import { TokenSetSchema } from './token-set';
  * Bumped whenever a stored record's shape changes. Parsing rejects anything else, because
  * the export archive is the only migration path and it only works if a mismatch is loud.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * Only the downscaled image actually sent to the model is stored, plus a hash of the
@@ -35,6 +35,10 @@ export const FontTableRefSchema = z.strictObject({
  * docs/adr/0001-fetch-google-fonts-tags-at-runtime.md. `interpretation` matters because the
  * presets re-derive the whole system with no model call, so two versions can share a seed and
  * hold different tokens with nothing else to tell them apart.
+ *
+ * `rawResponse` is the model's output as it arrived, kept so a version stays diagnosable long
+ * after the call and so #23 can show it when parsing failed. It is null exactly when no model
+ * call produced the version, which is the interpretation-preset case above.
  */
 export const BrandVersionSchema = z.strictObject({
 	createdAt: z.iso.datetime(),
@@ -43,6 +47,7 @@ export const BrandVersionSchema = z.strictObject({
 	provider: z.string().min(1),
 	model: z.string().min(1),
 	promptVersion: z.string().min(1),
+	rawResponse: z.string().nullable(),
 	scaleEngine: z.string().min(1),
 	fontTable: FontTableRefSchema,
 	interpretation: z.enum(['faithful', 'balanced', 'expressive']),

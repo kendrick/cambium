@@ -46,6 +46,7 @@ const record = {
 			provider: 'anthropic',
 			model: 'claude-opus-5',
 			promptVersion: 'seed-v3',
+			rawResponse: '{"keyColors":[{"proposedRole":"brand"}]}',
 			scaleEngine: 'cambium-oklch-1',
 			fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 			interpretation: 'balanced',
