@@ -9,13 +9,12 @@ const ramp = Array.from({ length: 12 }, (_, i) => ({
 	h: 259.8,
 }));
 
+const layer = { primitives: { brand: ramp, neutral: ramp }, semantic: { border: 'brand.6' } };
+
 const validTokenSet = {
 	primitives: { brand: ramp, neutral: ramp },
 	semantic: { border: 'brand.6', primary: 'brand.9', foreground: 'neutral.12' },
-	schemes: {
-		light: { primitives: { brand: ramp, neutral: ramp }, semantic: { border: 'brand.6' } },
-		dark: { primitives: { brand: ramp, neutral: ramp }, semantic: { border: 'brand.6' } },
-	},
+	schemes: { light: layer, dark: layer },
 };
 
 describe('TokenSetSchema', () => {
@@ -26,21 +25,62 @@ describe('TokenSetSchema', () => {
 		expect(Object.keys(parsed.schemes)).toEqual(['light', 'dark']);
 	});
 
-	// Step roles are positional: border is step 6, primary is step 9, foreground is step 12.
-	// A ramp of any other length silently breaks every semantic alias downstream of it.
-	it('rejects a ramp that is not twelve steps and names the offending path', () => {
-		const shortRamp = { ...validTokenSet, primitives: { brand: ramp.slice(0, 9), neutral: ramp } };
+	it('rejects a ramp that is not twelve steps', () => {
+		const short = { ...validTokenSet, primitives: { brand: ramp.slice(0, 9), neutral: ramp } };
 
-		const result = TokenSetSchema.safeParse(shortRamp);
+		expect(TokenSetSchema.safeParse(short).success).toBe(false);
+	});
+
+	// Twelve entries all labelled step 1 satisfied the length check and the per-entry bounds,
+	// which defeats the whole point of fixing the length: semantic roles address steps by
+	// number, so a ramp can otherwise lack the very steps its aliases target.
+	it('rejects twelve entries that are not steps 1 through 12 in order', () => {
+		const duplicated = ramp.map((s) => ({ ...s, step: 1 }));
+
+		const result = TokenSetSchema.safeParse({
+			...validTokenSet,
+			primitives: { brand: duplicated, neutral: ramp },
+		});
 
 		expect(result.success).toBe(false);
-		expect(result.error?.issues[0]?.path.slice(0, 2)).toEqual(['primitives', 'brand']);
+	});
+
+	it('rejects an alias pointing at a ramp that does not exist', () => {
+		const dangling = { ...validTokenSet, semantic: { border: 'missing.6' } };
+
+		expect(TokenSetSchema.safeParse(dangling).success).toBe(false);
+	});
+
+	it('rejects an alias pointing at a step outside the ramp', () => {
+		const offRamp = { ...validTokenSet, semantic: { border: 'brand.99' } };
+
+		expect(TokenSetSchema.safeParse(offRamp).success).toBe(false);
+	});
+
+	it('rejects an alias that is not in ramp.step form', () => {
+		const malformed = { ...validTokenSet, semantic: { border: '#0f172a' } };
+
+		expect(TokenSetSchema.safeParse(malformed).success).toBe(false);
+	});
+
+	// A blank token set parsed clean and reached generation and export carrying nothing.
+	it.each(['primitives', 'semantic'])('rejects an empty %s layer', (key) => {
+		expect(TokenSetSchema.safeParse({ ...validTokenSet, [key]: {} }).success).toBe(false);
 	});
 
 	it('requires both schemes rather than deriving one from the other', () => {
 		const { dark: _dropped, ...lightOnly } = validTokenSet.schemes;
 
-		const result = TokenSetSchema.safeParse({ ...validTokenSet, schemes: lightOnly });
+		expect(TokenSetSchema.safeParse({ ...validTokenSet, schemes: lightOnly }).success).toBe(false);
+	});
+
+	it('cross-checks aliases inside each scheme, not just at the top level', () => {
+		const badScheme = { ...layer, semantic: { border: 'missing.6' } };
+
+		const result = TokenSetSchema.safeParse({
+			...validTokenSet,
+			schemes: { light: badScheme, dark: layer },
+		});
 
 		expect(result.success).toBe(false);
 	});
