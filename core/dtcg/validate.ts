@@ -1,8 +1,14 @@
 import validateAgainstSchema from './format-validator.generated.mjs';
 
 /**
- * A single way in which a document departs from the DTCG Format Module. `path` is a JSON Pointer
- * into the document the caller passed, so a UI can walk straight to the offending token.
+ * A single way in which a document departs from the DTCG Format Module. `path` is an RFC 6901
+ * JSON Pointer into the document the caller passed, so a UI can walk straight to the offending
+ * token.
+ *
+ * The root is the empty string, which is what RFC 6901 §5 specifies and not a placeholder. `/` is
+ * a different pointer: it addresses the property whose name is the empty string. Rendering the
+ * root as something a person reads is the caller's job, and doing it here would hand every
+ * caller a pointer that resolves to the wrong place.
  */
 export type DtcgViolation = {
 	path: string;
@@ -31,8 +37,7 @@ export function validateDtcg(tokenDocument: unknown): DtcgValidationResult {
 	return {
 		valid: false,
 		violations: errors.map((error) => ({
-			// Ajv spells the document root as an empty string; `/` reads as a path.
-			path: error.instancePath || '/',
+			path: error.instancePath,
 			message: error.message ?? `failed the ${error.keyword} constraint`,
 		})),
 	};

@@ -56,6 +56,24 @@ const validDocument = {
 	},
 };
 
+/**
+ * RFC 6901 §4 resolution. The promise `DtcgViolation` makes is not that `path` has a particular
+ * spelling, it is that a caller can walk it to the value that failed, so the tests walk it. A
+ * pointer asserted as a string looks right in exactly the case where it is wrong.
+ */
+function resolvePointer(tokenDocument: unknown, pointer: string): unknown {
+	if (pointer === '') return tokenDocument;
+
+	return pointer
+		.slice(1)
+		.split('/')
+		.map((token) => token.replaceAll('~1', '/').replaceAll('~0', '~'))
+		.reduce<unknown>(
+			(node, token) => (node as Record<string, unknown> | undefined)?.[token],
+			tokenDocument,
+		);
+}
+
 function violationsOf(tokenDocument: unknown): DtcgViolation[] {
 	const result = validateDtcg(tokenDocument);
 
@@ -74,17 +92,27 @@ describe('validateDtcg', () => {
 	 * not including 360, and this value-level strictness is why the official schema was chosen over
 	 * every parser in the survey: the parsers accept it.
 	 */
-	it('rejects an OKLCH hue of 360 and names the component that failed', () => {
-		const paths = violationsOf({
+	it('rejects an OKLCH hue of 360 and points at the component that failed', () => {
+		const badHue = {
 			color: {
 				brand: { $type: 'color', $value: { colorSpace: 'oklch', components: [0.62, 0.19, 360] } },
 			},
-		}).map((violation) => violation.path);
+		};
+
+		const paths = violationsOf(badHue).map((violation) => violation.path);
 
 		expect(paths).toContain('/color/brand/$value/components/2');
+		expect(resolvePointer(badHue, '/color/brand/$value/components/2')).toBe(360);
 	});
 
-	it('reports the root as a path rather than an empty string', () => {
-		expect(violationsOf('not a token document')[0]?.path).toBe('/');
+	// RFC 6901 §5: the empty string addresses the whole document, and `/` addresses the property
+	// named by the empty string. Returning `/` here would resolve to `document[""]`, which is a
+	// different place and usually no place at all.
+	it('addresses a root-level failure with the empty pointer', () => {
+		const notADocument = 'not a token document';
+		const [violation] = violationsOf(notADocument);
+
+		expect(violation?.path).toBe('');
+		expect(resolvePointer(notADocument, violation?.path ?? '/')).toBe(notADocument);
 	});
 });
