@@ -115,6 +115,55 @@ describe('validateDtcg', () => {
 	// RFC 6901 §5: the empty string addresses the whole document, and `/` addresses the property
 	// named by the empty string. Returning `/` here would resolve to `document[""]`, which is a
 	// different place and usually no place at all.
+	/**
+	 * Ajv reports `additionalProperties` against the object holding the key and says only "must NOT
+	 * have additional properties", so the key lives in `params` or nowhere. Without it a caller
+	 * cannot name the field that broke.
+	 */
+	it('points at the offending key when a document carries one the schema forbids', () => {
+		const strayKey = { $foo: 1 };
+
+		expect(violationsOf(strayKey).map((violation) => violation.pointer)).toContain('/$foo');
+	});
+
+	/**
+	 * RFC 6901 §3 escaping of the key this module appends, with the mutation that catches a
+	 * reversed implementation: escape `~` before `/`, or the `~1` written for the slash is
+	 * re-escaped to `~01` and the pointer walks somewhere else.
+	 *
+	 * The name has to start with `$` to reach this code at all. A name like `a~b/c` is legal under
+	 * the DTCG pattern, so it goes to `patternProperties` and Ajv builds the pointer itself, already
+	 * escaped. Testing that name would measure Ajv's escaping rather than this module's, which is
+	 * what an earlier version of this test did.
+	 */
+	it('escapes ~ and / in a key it appends, so the pointer still resolves', () => {
+		const awkwardName = { '$a~b/c': 1 };
+		const [pointer] = violationsOf(awkwardName).map((violation) => violation.pointer);
+
+		expect(pointer).toBe('/$a~0b~1c');
+		expect(resolvePointer(awkwardName, pointer ?? '')).toBe(1);
+	});
+
+	/**
+	 * Characterization, not endorsement. One bad value produces many diagnostics because Ajv
+	 * reports every rejected `oneOf` branch, and some of those describe a branch the author never
+	 * intended. Collapsing them means guessing that branch, and a wrong guess hides a real error
+	 * elsewhere, so the noise stays until #11 says what it wants. This test exists so that whoever
+	 * changes it sees exactly what they changed.
+	 */
+	it('returns every branch diagnostic, so one bad value yields several', () => {
+		const badHue = {
+			color: {
+				brand: { $type: 'color', $value: { colorSpace: 'oklch', components: [0.62, 0.19, 360] } },
+			},
+		};
+
+		const pointers = violationsOf(badHue).map((violation) => violation.pointer);
+
+		expect(pointers.length).toBeGreaterThan(1);
+		expect(pointers.some((pointer) => pointer !== '/color/brand/$value/components/2')).toBe(true);
+	});
+
 	it('addresses a root-level failure with the empty pointer', () => {
 		const [violation] = violationsOf('not a token document');
 
