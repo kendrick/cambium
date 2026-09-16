@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { BrandSeedSchema } from './brand-seed';
+import { parseSeed } from './parse-seed';
 import { TokenSetSchema } from './token-set';
 
 const ramp = Array.from({ length: 12 }, (_, i) => ({
@@ -34,6 +35,13 @@ const seed = {
 
 const tokenSet = { ...layer, schemes: { light: layer, dark: layer } };
 
+const rawResponse = {
+	raw: JSON.stringify(seed),
+	provider: 'anthropic',
+	model: 'claude-opus-5',
+	promptVersion: 'seed-v3',
+};
+
 const record = {
 	id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
 	schemaVersion: SCHEMA_VERSION,
@@ -46,6 +54,7 @@ const record = {
 			provider: 'anthropic',
 			model: 'claude-opus-5',
 			promptVersion: 'seed-v3',
+			rawResponse: '{"keyColors":[{"proposedRole":"brand"}]}',
 			scaleEngine: 'cambium-oklch-1',
 			fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 			interpretation: 'balanced',
@@ -62,8 +71,11 @@ const record = {
  * refinement would leave the test green. `fetch` is a live global under Node, so absence
  * cannot be asserted the way it can for `document`; stubbing it to throw is what turns a
  * stray call into a failure.
+ *
+ * Nothing discovers a new entry in the table below, so a module added to the pure core is
+ * guarded here only if someone adds it.
  */
-describe('core schema purity', () => {
+describe('core purity', () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
 	});
@@ -75,14 +87,15 @@ describe('core schema purity', () => {
 	});
 
 	it.each([
-		['BrandSeedSchema', BrandSeedSchema, seed],
-		['TokenSetSchema', TokenSetSchema, tokenSet],
-		['BrandRecordSchema', BrandRecordSchema, record],
-	])('%s parses a valid value without reaching the network', (_name, schema, value) => {
+		['BrandSeedSchema', () => BrandSeedSchema.safeParse(seed).success],
+		['TokenSetSchema', () => TokenSetSchema.safeParse(tokenSet).success],
+		['BrandRecordSchema', () => BrandRecordSchema.safeParse(record).success],
+		['parseSeed', () => parseSeed(rawResponse).ok],
+	])('%s parses a valid value without reaching the network', (_name, parses) => {
 		vi.stubGlobal('fetch', () => {
 			throw new Error('the pure core must not reach the network');
 		});
 
-		expect(schema.safeParse(value).success).toBe(true);
+		expect(parses()).toBe(true);
 	});
 });

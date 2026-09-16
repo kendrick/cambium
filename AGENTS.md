@@ -19,3 +19,7 @@ Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/
 ### Testing
 
 Read before writing or changing a test: two seams, a fixed coverage list, and what is deliberately left untested. See `docs/agents/testing.md`.
+
+### Code review
+
+Before calling a feature done, run the `code-review` skill over the branch since `main` and fix what holds up. Every ticket inherits the rule, so no issue body has to restate it.

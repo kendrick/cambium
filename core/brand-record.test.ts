@@ -29,6 +29,7 @@ const version = {
 	provider: 'anthropic',
 	model: 'claude-opus-5',
 	promptVersion: 'seed-v3',
+	rawResponse: '{"keyColors":[{"proposedRole":"brand"}]}',
 	scaleEngine: 'cambium-oklch-1',
 	fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 	interpretation: 'balanced',
@@ -64,7 +65,7 @@ describe('BrandRecordSchema', () => {
 	// named, or two versions can record identical inputs and hold different tokens. The
 	// interpretation preset is one of those: the same seed under Faithful and Expressive
 	// produces different systems with no model call between them.
-	it.each(['provider', 'model', 'scaleEngine', 'fontTable', 'interpretation'])(
+	it.each(['provider', 'model', 'scaleEngine', 'fontTable', 'interpretation', 'rawResponse'])(
 		'requires every version to record its %s',
 		(field) => {
 			const { [field]: _dropped, ...incomplete } = version as Record<string, unknown>;
@@ -142,6 +143,12 @@ describe('BrandRecordSchema integrity', () => {
 		};
 
 		expect(BrandRecordSchema.safeParse({ ...record, versions: [orphaned] }).success).toBe(false);
+	});
+
+	it('accepts a version that records no raw response, because a preset makes no model call', () => {
+		const rederived = { ...version, rawResponse: null };
+
+		expect(BrandRecordSchema.safeParse({ ...record, versions: [rederived] }).success).toBe(true);
 	});
 
 	it('accepts a version that has neither a seed nor a token set', () => {
