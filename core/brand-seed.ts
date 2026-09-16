@@ -14,12 +14,28 @@ const HueSchema = z
 /** Lightness is a 0-1 ratio. A model returning `62` for "62%" parses as a number and would anchor a ramp outside the gamut. */
 export const OklchTripleSchema = z.tuple([z.number().min(0).max(1), z.number().min(0), HueSchema]);
 
-export const RectSchema = z.strictObject({
-	x: z.number(),
-	y: z.number(),
-	width: z.number().positive(),
-	height: z.number().positive(),
-});
+/**
+ * A source region is expressed as 0-to-1 fractions of the reference image, matching the
+ * extraction contract in docs/research/oss-landscape.md. Fractions rather than pixels keep the
+ * region meaningful after the image is downscaled, which it always is before storage.
+ *
+ * The sum checks are the ones worth writing down: every coordinate can sit inside 0 to 1 while
+ * the rectangle still runs off the edge, and a region pointing at pixels that do not exist is
+ * provenance that cannot be followed.
+ */
+export const RectSchema = z
+	.strictObject({
+		x: z.number().min(0).max(1),
+		y: z.number().min(0).max(1),
+		width: z.number().gt(0).max(1),
+		height: z.number().gt(0).max(1),
+	})
+	.refine((r) => r.x + r.width <= 1, {
+		message: 'region extends past the right edge of the image',
+	})
+	.refine((r) => r.y + r.height <= 1, {
+		message: 'region extends past the bottom edge of the image',
+	});
 
 export const KeyColorSchema = z.strictObject({
 	oklch: OklchTripleSchema,

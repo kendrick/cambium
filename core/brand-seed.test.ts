@@ -197,3 +197,37 @@ describe('SuggestedPairingSchema ordering', () => {
 		expect(result.success).toBe(true);
 	});
 });
+
+describe('RectSchema', () => {
+	const region = (r: Record<string, number>) =>
+		BrandSeedSchema.safeParse({
+			...colorsOnly,
+			keyColors: [{ ...colorsOnly.keyColors[0], sourceRegion: r }],
+		}).success;
+
+	it('accepts a region expressed as 0 to 1 fractions of the image', () => {
+		expect(region({ x: 0.1, y: 0.2, width: 0.5, height: 0.4 })).toBe(true);
+	});
+
+	it('accepts a region covering the whole image', () => {
+		expect(region({ x: 0, y: 0, width: 1, height: 1 })).toBe(true);
+	});
+
+	// Extraction samples a region as fractions of the image, so anything outside 0 to 1 points
+	// at pixels that do not exist and makes the claimed source area unusable as evidence.
+	it.each([
+		['negative x', { x: -0.1, y: 0, width: 0.5, height: 0.5 }],
+		['width above the image', { x: 0, y: 0, width: 2, height: 1 }],
+		['zero-area region', { x: 0, y: 0, width: 0, height: 0.5 }],
+	])('rejects a region with %s', (_label, r) => {
+		expect(region(r)).toBe(false);
+	});
+
+	// Each coordinate can sit inside 0 to 1 while the rectangle still runs off the edge.
+	it.each([
+		['horizontally', { x: 0.8, y: 0, width: 0.5, height: 0.5 }],
+		['vertically', { x: 0, y: 0.8, width: 0.5, height: 0.5 }],
+	])('rejects a region that is in bounds but extends past the edge %s', (_label, r) => {
+		expect(region(r)).toBe(false);
+	});
+});
