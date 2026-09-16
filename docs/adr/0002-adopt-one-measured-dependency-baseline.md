@@ -1,0 +1,45 @@
+# Adopt One Measured Dependency Baseline and Write Down What It Rejects
+
+Cambium's pipeline needs colour math, contrast measurement, DTCG validation, image extraction, archive packing, IndexedDB access, and font metrics, and nine open tickets each reach for one of those. A research pass measured every candidate locally rather than reading a size badge, and recorded a verdict and a citation for each in [`docs/research/oss-landscape.md`](../research/oss-landscape.md). So Cambium installs the whole Adopt list at once, pins every version exactly, and writes the rejections down here. The evidence stays in the research notes; this file carries the policy, which is what a ticket needs before it picks a package.
+
+## Considered Options
+
+### Install Per Ticket
+
+The default, and it costs nothing today. It also means each of nine tickets either re-reads a 1,100-line survey or guesses, and a guess lands on the popular package rather than the correct one. Several of the popular packages in this space install cleanly, bundle cleanly, and then fail at runtime or in a licence review, so a ticket that picks wrong still looks finished.
+
+### Take Only What the Acceptance Criteria Name
+
+Half the Adopt list now, the rest later. It looks smaller and it is not. The deferred half is where most of the traps live, and a partial baseline leaves the avoid-list with no home, which is the part that actually stops a mistake.
+
+### Range the Versions
+
+Caret ranges are npm's default and the scaffold already carried nine of them. But every figure in the research notes measures one version, and a range lets the measured thing drift out from under the number that justified it. Pinning exactly costs a proposed pull request per update and buys a baseline that means what it says.
+
+## Consequences
+
+Two packages are licence traps and neither ever ships. `apca-w3` is patent-pending, restricted to web content by field of use, carries an AGPL fallback for anything outside that, and obliges downstream users to stay current; `bridge-pca` is the same author under the same terms. This also rules out Adobe Leonardo, which bundles `apca-w3` and does not tree-shake it out even when the caller asks only for `formula: 'wcag2'`. The advisory APCA figure comes from chroma-js instead, whose independent implementation matches `apca-w3` to the last decimal place across both polarities under BSD-3.
+
+Several packages here are abandoned and the download count does not show it. Never install `vitest-axe` or `@types/jest-axe`. The `latest` tag on `vitest-axe` points at a 2022 build, and a million downloads a week land on it. `extract-colors` was abandoned mid-release, `apcach` is dead and bundles a second copy of culori beside the pinned one, and `rothko` has been dormant since April 2026 while claiming MIT in its manifest with no LICENSE file anywhere in the repository.
+
+Never install `browser-image-compression`. With its default options it calls `importScripts()` against jsDelivr at runtime, which breaks offline use, breaks any strict CSP, and executes whatever that URL serves forever, outside the lockfile and outside SRI. The platform's `createImageBitmap` does the same job for nothing, and its consumer is a vision model rather than a human eye.
+
+The rest are rejected on size or on correctness. `@material/material-color-utilities` does not import under standards-compliant Node ESM and has not for eight months, so it fails the test suite before it fails anything else. `colorjs.io` costs 2.4 times culori for the same job and barely tree-shakes; use it in tests as a correctness oracle if a second opinion is ever wanted, never in the bundle. `jszip` ships an opaque UMD bundle with no tree-shaking at all, 30.3 kB against fflate's 4.6 kB. `dexie` is well maintained and buys compound indexes, live queries, schema migrations, and a query DSL, none of which Cambium has a use for, at 32.8 kB against `idb`'s 1.5 kB. `style-dictionary` consumes DTCG rather than emitting it and weighs 645 kB, so it is a build step or nothing. Do not install the bare `fontsource` package; it is a security placeholder.
+
+Three import shapes fail at runtime rather than at build time, which is the worst place to find them. `colorthief` has no default export, so import the named functions. `node-vibrant`'s main entry is a literal `throw` telling you to use a subpath, and it bundles at 180 bytes before exploding, so import from the four scoped `@vibrant/*` packages that are installed instead. `@capsizecss/metrics` must be reached one family at a time through its dynamic-import subpath; its `entireMetricsCollection` export is 255 kB and importing it is always a mistake.
+
+Several of the new devDependencies stay out of the bundle for reasons worth holding. Ajv and `ajv-formats` run at build time only, because `pnpm dtcg:build` precompiles the DTCG validator and the browser never compiles a schema. `axe-core` is MPL-2.0, a file-level copyleft whose obligations attach on distribution, so it is free of them only as long as it never ships; it stays pinned directly even though `@axe-core/playwright` also depends on it, because `~4.13.0` would let the rule engine move under a recorded result. `@radix-ui/colors` is static data adopted as test fixtures; Radix publishes no scale generator, and its own hand-tuned scales have failed its documented contrast guarantee since February 2024, so treat those fixtures as a taste reference and never as a correctness oracle.
+
+Playwright is the only browser runner, and that supersedes the research notes. Section 8 of the notes recommends Vitest browser mode with a provider package, and it was answering the question of how to run axe. Issue #46 asked what test tiers should exist, and its answer changed the answer to the first question: Playwright drives the completion-criteria flow runs against a built `out/`, and `@axe-core/playwright` covers the rendered accessibility audit inside that same suite. One runner covers both, so Vitest keeps the pure core and nothing else. Never install `@vitest/browser`, `@vitest/browser-playwright`, or bare `playwright`. `@playwright/test` brings `playwright-core`, which is `@axe-core/playwright`'s only peer.
+
+One version in the research notes was never checked against the registry. The recommended block at `oss-landscape.md:1079` lists `playwright ^1.50.0`, and the current release is 1.63.0, which is what is pinned here. Every other version in that document was verified against npm, so this is the exception rather than a reason to doubt the rest.
+
+Browser binaries are not installed, and this ticket does not install them. `pnpm install` brings the Playwright client library alone, so the e2e suite cannot launch a browser until the ticket that owns it runs `npx playwright install`. A machine that already holds a browser cache from another project will not see this, which is why it is written down here.
+
+`@terrazzo/parser` is installed and is import-on-demand only. It is the largest single item in the baseline at 54.9 kB gzipped, it is needed only when reading a token file somebody else wrote, and the landing route never does that. Never import it statically from anything the landing route reaches.
+
+First-load JavaScript stays under 200 kB gzipped and total shipped JavaScript under 400 kB, enforced by `pnpm test:bundle` against a real static export. The scaffold already ships 176.0 kB, and the research notes project roughly 185 kB for the full library set imported eagerly against roughly 60 kB for the minimum viable set with font data code-split. That 24 kB of headroom is deliberate. It forces every pipeline library behind a dynamic import, and the total is the backstop, because code-splitting moves weight out of first-load rather than removing it.
+
+This measurement diverges from the research notes on purpose. The notes bundle a library in isolation through esbuild to price a package; the budget reads the built app to price a page load. Same `gzip -9`, different question, and figures from the two are not interchangeable.
+
+`package.json` is the installed baseline and the Adopt rows of the notes' summary table are where it came from. Pinning exactly means an update is a deliberate commit rather than a side effect of an install, and it means a measured figure stays attached to the version it measured. When a version moves and its size matters, measure it again rather than carrying the old number forward.
