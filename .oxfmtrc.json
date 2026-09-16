@@ -1,0 +1,9 @@
+{
+	"semi": true,
+	"singleQuote": true,
+	"trailingComma": "all",
+	"printWidth": 100,
+	"useTabs": true,
+	"tabWidth": 2,
+	"ignorePatterns": ["out/**", ".next/**", "**/*.md", "package.json", "components.json"]
+}

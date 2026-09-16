@@ -1,0 +1,35 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"plugins": [
+		"typescript",
+		"unicorn",
+		"oxc",
+		"react",
+		"react-perf",
+		"nextjs",
+		"jsx-a11y",
+		"import",
+		"promise",
+		"vitest"
+	],
+	"categories": {
+		"correctness": "error",
+		"suspicious": "error",
+		"perf": "warn"
+	},
+	"rules": {
+		// Next compiles JSX with the automatic runtime, which is why tsconfig carries
+		// `"jsx": "react-jsx"`. Importing React purely to satisfy this rule would add a
+		// binding nothing reads.
+		"react/react-in-jsx-scope": "off",
+		// `import './globals.css'` is how a stylesheet enters the bundle. There is nothing
+		// to assign it to.
+		"import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }]
+	},
+	"env": {
+		"builtin": true,
+		"browser": true,
+		"node": true
+	},
+	"ignorePatterns": ["out/**", ".next/**", "next-env.d.ts"]
+}
