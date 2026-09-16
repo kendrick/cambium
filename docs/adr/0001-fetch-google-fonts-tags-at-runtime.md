@@ -18,9 +18,11 @@ Rejected. A static client-side app has to ship the key alongside the ciphertext,
 
 ## Consequences
 
-Stage 2 keeps its promise of deterministic local math with one documented exception: a one-time enrichment fetch that caches to IndexedDB, rather than a call per generation. The feature degrades to Cambium's own table when the network or the CDN is unavailable, so a failed fetch is never a failed generation.
+The table is an input to stage 2 rather than something stage 2 fetches. Resolving it happens before derivation runs, and the result caches, so stage 2 stays a pure function of the seed and the table with no network call inside it. The spec calls that split the load-bearing decision, and nothing here gets to make an exception to it.
 
-Pin a commit SHA rather than `main`. jsDelivr serves a pinned path as immutable for a year, where `raw.githubusercontent.com` caches the same file for 300 seconds. Pinning also keeps generation reproducible.
+Reproducibility follows the pattern the spec already uses, which is to achieve it by reference. Each record persists the resolved table's source and version beside the prompt version, provider, and model identifier it stores today. A client that fell back to the in-repo table and one that fetched the full taxonomy rank the same seed differently, so without that recorded identity the promise that the same seed always produces the same tokens is false across the boundary between them.
+
+Pin a commit SHA rather than `main`. jsDelivr serves a pinned path as immutable for a year, where `raw.githubusercontent.com` caches the same file for 300 seconds. Pinning removes drift within one source. The recorded identity is what covers drift between the two.
 
 Attribution obligations attach to what Cambium ships, never to what it generates. Naming Inter and calling it a neo-grotesque is a fact about a typeface, so the token sets Cambium produces carry no obligation into the repos they land in.
 
