@@ -15,3 +15,7 @@ The five canonical roles, each label string equal to its name. See `docs/agents/
 ### Domain docs
 
 Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Testing
+
+Read before writing or changing a test: two seams, a fixed coverage list, and what is deliberately left untested. See `docs/agents/testing.md`.
