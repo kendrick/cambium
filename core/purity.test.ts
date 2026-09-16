@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { BrandSeedSchema } from './brand-seed';
+import { validateDtcg } from './dtcg/validate';
 import { parseSeed } from './parse-seed';
 import { TokenSetSchema } from './token-set';
 
@@ -40,6 +41,13 @@ const rawResponse = {
 	provider: 'anthropic',
 	model: 'claude-opus-5',
 	promptVersion: 'seed-v3',
+};
+
+const dtcgDocument = {
+	color: {
+		$type: 'color',
+		brand: { $value: { colorSpace: 'oklch', components: [0.62, 0.19, 259.8], alpha: 1 } },
+	},
 };
 
 const record = {
@@ -90,6 +98,7 @@ describe('core purity', () => {
 		['BrandSeedSchema', () => BrandSeedSchema.safeParse(seed).success],
 		['TokenSetSchema', () => TokenSetSchema.safeParse(tokenSet).success],
 		['BrandRecordSchema', () => BrandRecordSchema.safeParse(record).success],
+		['the DTCG format validator', () => validateDtcg(dtcgDocument).valid],
 		['parseSeed', () => parseSeed(rawResponse).ok],
 	])('%s parses a valid value without reaching the network', (_name, parses) => {
 		vi.stubGlobal('fetch', () => {

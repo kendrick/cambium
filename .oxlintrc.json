@@ -31,5 +31,5 @@
 		"browser": true,
 		"node": true
 	},
-	"ignorePatterns": ["out/**", ".next/**", "next-env.d.ts"]
+	"ignorePatterns": ["core/dtcg/*.generated.*", "out/**", ".next/**", "next-env.d.ts"]
 }
