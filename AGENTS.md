@@ -18,4 +18,4 @@ Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/
 
 ### Testing
 
-Two seams, a fixed coverage list, and what is deliberately left untested. See `docs/agents/testing.md`.
+Read before writing or changing a test: two seams, a fixed coverage list, and what is deliberately left untested. See `docs/agents/testing.md`.

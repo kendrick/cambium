@@ -8,8 +8,6 @@ Tests assert external behavior at a seam, never implementation details. A test s
 
 Assert that a given seed produces a token set whose `border` token resolves to primitive step 6 and passes AA against its surface. Do not assert which function computed it, in what order, or through which intermediate structure.
 
-The seam count is kept deliberately low. Two seams, one of them four methods wide.
-
 ## Seam 1: the pure core
 
 Pure TypeScript, no DOM, no network, no storage:
@@ -48,7 +46,7 @@ Both are tradeoffs the spec makes on purpose. Leave them alone rather than filin
 
 ## Tooling
 
-`pnpm test` runs once, `pnpm test:watch` watches. `vitest.config.ts` sets the node environment and matches `**/*.test.ts`. Co-locating a test beside the code it covers is convention rather than configuration, so follow what `core/` does.
+`pnpm test` runs once, `pnpm test:watch` watches; `vitest.config.ts` holds the rest. Co-locate a test beside the code it covers. That is convention rather than configuration, so the config will not tell you, and `core/` is the pattern to follow.
 
 Contrast assertions are plain Vitest against the math, because the generator is a pure function. Routing them through axe instead would mean mounting and styling DOM nodes to divide two luminance numbers, and it answers the question far more slowly.
 
@@ -58,6 +56,6 @@ Reach for axe-core directly. Its popular wrapper `vitest-axe` is abandoned—the
 
 ## Undefined
 
-Two things the project has not decided. Don't infer either one.
+Two things the project has not decided. Ask before either one becomes an assumption.
 
 No coverage thresholds are configured, and no target is written down anywhere. Nothing in this repo requires writing tests before implementation either, so TDD is not a documented convention here.
