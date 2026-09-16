@@ -62,7 +62,15 @@ export function parseSeed(response: RawReaderResponse): ParseSeedResult {
 			error: {
 				...response,
 				kind: 'schema',
-				issues: result.error.issues.map((issue) => ({ path: issue.path, message: issue.message })),
+				// Zod reports an unrecognised key against the object that holds it and names the key in
+				// a separate array, so the issue's own path stops one segment short of the field that
+				// failed. Joining the two gives every issue a path pointing at the offending field,
+				// which is what lets #23 highlight it instead of string-matching the message.
+				issues: result.error.issues.flatMap((issue) =>
+					issue.code === 'unrecognized_keys'
+						? issue.keys.map((key) => ({ path: [...issue.path, key], message: issue.message }))
+						: [{ path: issue.path, message: issue.message }],
+				),
 			},
 		};
 	}

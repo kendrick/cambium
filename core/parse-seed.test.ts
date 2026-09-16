@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import colorsOnly from './fixtures/raw-responses/colors-only.json';
 import fullSeed from './fixtures/raw-responses/full-seed.json';
 import lightnessAsPercentage from './fixtures/raw-responses/lightness-as-percentage.json';
+import nestedUnknownKeys from './fixtures/raw-responses/nested-unknown-keys.json';
 import omittedField from './fixtures/raw-responses/omitted-field.json';
 import pairingOutOfOrder from './fixtures/raw-responses/pairing-out-of-order.json';
 import proseNotJson from './fixtures/raw-responses/prose-not-json.json';
@@ -60,17 +61,24 @@ describe('parseSeed', () => {
 	});
 
 	// The seed schemas are strict, so a key they do not declare is a rejection rather than a
-	// silent drop. Zod reports an unrecognised key against the object holding it, so the path
-	// is empty and the message is the part that names the key.
-	it('rejects a key the seed schema does not declare and names it in the message', () => {
+	// silent drop. Zod reports that against the object holding the key and names the key in a
+	// separate array, so an issue has to carry both to point at the field that actually failed.
+	it('names an undeclared key by path rather than only in the message', () => {
 		const result = parseSeed(unknownKey);
 
 		expect(result.error?.kind).toBe('schema');
-		expect(result.error?.issues[0]?.message).toContain('confidence');
+		expect(result.error?.issues[0]?.path).toEqual(['confidence']);
 	});
 
-	// A failed generation is still persisted, and which model answered under which prompt is
-	// most of what makes it diagnosable afterwards.
+	it('gives every undeclared key its own path, however deep the key sits', () => {
+		const result = parseSeed(nestedUnknownKeys);
+
+		expect(result.error?.issues.map((issue) => issue.path)).toEqual([
+			['radiusCharacter', 'unit'],
+			['radiusCharacter', 'scale'],
+		]);
+	});
+
 	it('carries the provider, model, and prompt version of the response that failed', () => {
 		const result = parseSeed(proseNotJson);
 
