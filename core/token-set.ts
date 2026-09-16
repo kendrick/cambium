@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const RampStepSchema = z.object({
+export const RampStepSchema = z.strictObject({
 	step: z.number().int().min(1).max(12),
 	l: z.number().min(0).max(1),
 	c: z.number().min(0),
@@ -79,19 +79,25 @@ function checkAliasesResolve(
 }
 
 export const SchemeSchema = z
-	.object({ primitives: PrimitiveLayerSchema, semantic: SemanticLayerSchema })
+	.strictObject({ primitives: PrimitiveLayerSchema, semantic: SemanticLayerSchema })
 	.superRefine(checkAliasesResolve);
 
 /**
+ * Strict rather than stripping, here and throughout the persisted shapes. Zod drops unknown
+ * keys by default, which for something written to disk means losing data without a word. The
+ * non-colour categories #7 derives and the `$extensions` payload #9 attaches both need slots
+ * this schema does not have yet, so each ticket gets a parse error naming the file to widen
+ * instead of a silent gap in the archive.
+ *
  * Light and dark are both required. Dark is generated independently against the same step
  * roles rather than inverted from light, so a set holding one scheme is incomplete rather
  * than something the pipeline can finish later.
  */
 export const TokenSetSchema = z
-	.object({
+	.strictObject({
 		primitives: PrimitiveLayerSchema,
 		semantic: SemanticLayerSchema,
-		schemes: z.object({ light: SchemeSchema, dark: SchemeSchema }),
+		schemes: z.strictObject({ light: SchemeSchema, dark: SchemeSchema }),
 	})
 	.superRefine(checkAliasesResolve);
 

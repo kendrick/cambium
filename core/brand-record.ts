@@ -14,13 +14,13 @@ export const SCHEMA_VERSION = 1;
  * original. That is the true model input, so it is what makes a version reproducible, and it
  * costs a fraction of the original's storage. The id is what seed provenance points back at.
  */
-export const ReferenceImageSchema = z.object({
+export const ReferenceImageSchema = z.strictObject({
 	id: z.string().min(1),
 	downscaled: z.string().min(1),
 	originalHash: z.string().min(1),
 });
 
-export const FontTableRefSchema = z.object({
+export const FontTableRefSchema = z.strictObject({
 	source: z.string().min(1),
 	version: z.string().min(1),
 });
@@ -36,7 +36,7 @@ export const FontTableRefSchema = z.object({
  * presets re-derive the whole system with no model call, so two versions can share a seed and
  * hold different tokens with nothing else to tell them apart.
  */
-export const BrandVersionSchema = z.object({
+export const BrandVersionSchema = z.strictObject({
 	createdAt: z.iso.datetime(),
 	seed: BrandSeedSchema.nullable(),
 	tokenSet: TokenSetSchema.nullable(),
@@ -58,7 +58,7 @@ export const BrandVersionSchema = z.object({
  * reads as evidence.
  */
 export const BrandRecordSchema = z
-	.object({
+	.strictObject({
 		id: z.uuid(),
 		schemaVersion: z.literal(SCHEMA_VERSION),
 		images: z.array(ReferenceImageSchema),

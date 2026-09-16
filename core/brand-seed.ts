@@ -14,14 +14,14 @@ const HueSchema = z
 /** Lightness is a 0-1 ratio. A model returning `62` for "62%" parses as a number and would anchor a ramp outside the gamut. */
 export const OklchTripleSchema = z.tuple([z.number().min(0).max(1), z.number().min(0), HueSchema]);
 
-export const RectSchema = z.object({
+export const RectSchema = z.strictObject({
 	x: z.number(),
 	y: z.number(),
 	width: z.number().positive(),
 	height: z.number().positive(),
 });
 
-export const KeyColorSchema = z.object({
+export const KeyColorSchema = z.strictObject({
 	oklch: OklchTripleSchema,
 	proposedRole: z.enum(['brand', 'accent', 'danger', 'warning', 'success', 'info']),
 	sourceImageId: z.string().min(1),
@@ -37,13 +37,13 @@ export const KeyColorSchema = z.object({
  * a key colour is.
  */
 export const FontCandidateSchema = z.discriminatedUnion('provenance', [
-	z.object({
+	z.strictObject({
 		provenance: z.literal('derived'),
 		family: z.string().min(1),
 		score: z.number().min(0).max(100),
 		rationale: z.string().min(1),
 	}),
-	z.object({
+	z.strictObject({
 		provenance: z.literal('invented'),
 		family: z.string().min(1),
 		score: z.null(),
@@ -70,20 +70,20 @@ const rankedByScore = z.array(FontCandidateSchema).refine(
 	{ message: 'derived candidates must run highest score first' },
 );
 
-export const SuggestedPairingSchema = z.object({
+export const SuggestedPairingSchema = z.strictObject({
 	display: rankedByScore,
 	body: rankedByScore,
 	mono: rankedByScore,
 });
 
-export const TypeClassificationSchema = z.object({
+export const TypeClassificationSchema = z.strictObject({
 	category: z.enum(['serif', 'sans', 'slab', 'mono']),
 	tone: z.enum(['geometric', 'humanist', 'grotesque']),
 	xHeight: z.enum(['low', 'medium', 'high']),
 	displayDiffersFromBody: z.boolean(),
 });
 
-export const ImageClassificationSchema = z.object({
+export const ImageClassificationSchema = z.strictObject({
 	imageId: z.string().min(1),
 	detected: z.enum(['logo', 'ui', 'photo', 'artwork']),
 });
@@ -100,15 +100,15 @@ export const ImageClassificationSchema = z.object({
  * Field shapes come from the canonical type block in issue #1, which is more precise than the
  * prose beside it.
  */
-export const BrandSeedSchema = z.object({
+export const BrandSeedSchema = z.strictObject({
 	keyColors: z.array(KeyColorSchema).nullable(),
-	neutralTemperature: z.object({ hue: HueSchema, chroma: z.number().min(0) }).nullable(),
+	neutralTemperature: z.strictObject({ hue: HueSchema, chroma: z.number().min(0) }).nullable(),
 	surfacePolarity: z.enum(['light-first', 'dark-first']).nullable(),
 	radiusCharacter: z
-		.object({ base: z.number().min(0), progression: z.enum(['sharp', 'soft', 'pill']) })
+		.strictObject({ base: z.number().min(0), progression: z.enum(['sharp', 'soft', 'pill']) })
 		.nullable(),
 	shadowCharacter: z
-		.object({ spread: z.enum(['tight', 'diffuse']), tintFromSurface: z.boolean() })
+		.strictObject({ spread: z.enum(['tight', 'diffuse']), tintFromSurface: z.boolean() })
 		.nullable(),
 	trackingFeel: z.enum(['tight', 'normal', 'wide']).nullable(),
 	typeClassification: TypeClassificationSchema.nullable(),
