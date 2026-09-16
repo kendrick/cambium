@@ -81,9 +81,8 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 	});
 
 	describe('put', () => {
-		// AC 6 is a property of the schema, not a check this store adds: `BrandRecordSchema` is a
-		// `z.strictObject` with no field shaped for a credential, so validating input before
-		// storing it is what makes an API key unrepresentable here, smuggled or not.
+		// AC 6 is a property of the schema rather than a check this store adds; see the
+		// no-credential guarantee documented on `RecordStore` in ./record-store.ts.
 		it('rejects a record carrying a field the schema does not declare', async () => {
 			const withSmuggledKey = { ...makeRecord(), apiKey: 'sk-live-something' };
 
