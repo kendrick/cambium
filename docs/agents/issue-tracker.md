@@ -91,7 +91,11 @@ Any ticket you intended to gate that reports an empty list did not get its edge 
 
 ## Milestones
 
-**Every spec is a milestone. Every issue belonging to that spec carries it.**
+**Every spec is at least one milestone. Every issue belonging to that spec carries one.**
+
+A spec that ships in one pass gets one milestone, named for its slug. A spec delivered in phases gets one milestone per phase, named `<spec-slug>-v1`, `-v2`, and so on in delivery order. The spec issue itself carries the first phase's milestone.
+
+A phased spec also grows a layer in the issue graph. One **epic** issue per phase sits between the spec and its tickets: the epic is a sub-issue of the spec, and every ticket in that phase is a sub-issue of the epic. The epic carries its phase's milestone, which makes it the thing a ticket reads its milestone from.
 
 The spec itself stays a GitHub issue—downstream skills reference it by number (`/to-spec #<issue>`, sub-issue parentage, dependency edges), and a milestone has no comment thread or relationship graph to hang those on. The milestone is the container and the progress surface, not the spec body.
 
@@ -125,7 +129,7 @@ gh api --method PATCH /repos/:owner/:repo/milestones/<n> -f state='closed'
 **Constraints, so you don't design around them by accident:**
 
 - An issue holds exactly **one** milestone, unlike labels. A ticket that genuinely serves two specs has no home—stop and ask rather than picking one silently.
-- Milestones **do not nest**. A wayfinder map spanning several specs cannot be a milestone of milestones; it gets its own milestone or none.
+- Milestones **do not nest**. A wayfinder map spanning several specs cannot be a milestone of milestones; it gets its own milestone or none. Phased specs get the nesting they need from epics in the issue graph instead.
 - Milestones are **repo-scoped**. Work spanning repos needs a milestone per repo with a matching title.
 
 **Issues that may have no milestone:** standalone bug reports, incoming triage, and anything not descended from a spec. Everything produced by `/to-spec`, `/file-issue`, or `/wayfinder` must have one.
@@ -158,8 +162,8 @@ Run `gh issue view <number> --comments`.
 
 Used by `/file-issue`. Three things are non-optional for every ticket produced:
 
-1. **Milestone.** Read it from the parent spec issue (`gh issue view <spec> --json milestone --jq .milestone.title`) and pass `--milestone` on create. Do not re-derive the slug from the spec title—read it from the issue, so a renamed milestone stays authoritative.
-2. **Parentage.** Attach the ticket to the spec issue as a native sub-issue, per **Issue relationships** above. The spec is the parent; every ticket is a child.
+1. **Milestone.** Read it from the ticket's parent (`gh issue view <parent> --json milestone --jq .milestone.title`) and pass `--milestone` on create. On a single-phase spec the parent is the spec issue; on a phased one it is the epic. Read the value from the issue rather than re-deriving the slug from a title, so a rename stays authoritative.
+2. **Parentage.** Attach the ticket as a native sub-issue of its parent, per **Issue relationships** above. On a single-phase spec that parent is the spec issue. On a phased spec it is the phase's epic, which is itself a sub-issue of the spec, so every ticket stays a descendant of the spec it came from.
 3. **Blocking edges.** Every blocking relationship the slicing pass identifies becomes a native dependency, per **Issue relationships** above. A ticket that declares a blocker in prose but carries no edge has not been sliced correctly.
 
 Sequence the whole pass to respect the rate-limit note: create all issues, collect database IDs, then write parentage, then write edges.
