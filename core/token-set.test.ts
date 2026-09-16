@@ -85,3 +85,17 @@ describe('TokenSetSchema', () => {
 		expect(result.success).toBe(false);
 	});
 });
+
+describe('TokenSetSchema alias lookups', () => {
+	// `primitives` is a plain object, so `primitives['constructor']` walks the prototype chain
+	// and returns a truthy function whose `length` is 1. Both the existence check and the step
+	// bound passed on inherited properties rather than on a ramp anyone declared.
+	it.each(['constructor.1', 'toString.1', 'valueOf.1'])(
+		'rejects %j, which resolves only through the prototype chain',
+		(alias) => {
+			const result = TokenSetSchema.safeParse({ ...validTokenSet, semantic: { border: alias } });
+
+			expect(result.success).toBe(false);
+		},
+	);
+});

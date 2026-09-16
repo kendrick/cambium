@@ -161,3 +161,39 @@ describe('BrandSeedSchema', () => {
 		expect(result.success).toBe(false);
 	});
 });
+
+describe('SuggestedPairingSchema ordering', () => {
+	const at = (score: number) => ({ ...derivedCandidate, score });
+
+	// The candidates are documented as ranked, and the score is what ranks them. A consumer
+	// taking the first entry would otherwise get the worst face in the list.
+	it('rejects derived candidates that do not descend by score', () => {
+		const result = BrandSeedSchema.safeParse({
+			...colorsOnly,
+			suggestedPairing: { display: [at(10), at(90)], body: [], mono: [] },
+		});
+
+		expect(result.success).toBe(false);
+	});
+
+	it('accepts derived candidates in descending order', () => {
+		const parsed = BrandSeedSchema.parse({
+			...colorsOnly,
+			suggestedPairing: { display: [at(90), at(10)], body: [], mono: [] },
+		});
+
+		expect(parsed.suggestedPairing?.display[0]?.score).toBe(90);
+	});
+
+	// An invented candidate has no score, so it cannot participate in an ordering built on one.
+	it('ignores invented candidates when checking the order', () => {
+		const invented = { ...derivedCandidate, provenance: 'invented' as const, score: null };
+
+		const result = BrandSeedSchema.safeParse({
+			...colorsOnly,
+			suggestedPairing: { display: [at(90), invented, at(10)], body: [], mono: [] },
+		});
+
+		expect(result.success).toBe(true);
+	});
+});

@@ -67,7 +67,9 @@ export const BrandRecordSchema = z
 	.superRefine((record, ctx) => {
 		record.versions.forEach((version, index) => {
 			const previous = record.versions[index - 1];
-			if (previous && version.createdAt < previous.createdAt) {
+			// z.iso.datetime() accepts variable fractional precision, and lexicographic order is
+			// not chronological across it: ".1Z" sorts before "Z" while naming a later instant.
+			if (previous && Date.parse(version.createdAt) < Date.parse(previous.createdAt)) {
 				ctx.addIssue({
 					code: 'custom',
 					path: ['versions', index, 'createdAt'],
@@ -77,6 +79,28 @@ export const BrandRecordSchema = z
 		});
 
 		const imageIds = new Set(record.images.map((image) => image.id));
+
+		// Two images sharing an id leave every reference to it ambiguous, so provenance resolves
+		// while identifying nothing in particular.
+		if (imageIds.size !== record.images.length) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['images'],
+				message: 'reference image ids must be unique',
+			});
+		}
+
+		// The seed is the principal input behind a generated token set. A version holding tokens
+		// without one cannot be regenerated or explained, which is what a history is for.
+		record.versions.forEach((version, index) => {
+			if (version.tokenSet && !version.seed) {
+				ctx.addIssue({
+					code: 'custom',
+					path: ['versions', index, 'seed'],
+					message: 'a version storing a token set must store the seed that produced it',
+				});
+			}
+		});
 
 		record.versions.forEach((version, index) => {
 			version.seed?.keyColors?.forEach((color, colorIndex) => {

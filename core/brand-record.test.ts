@@ -104,3 +104,49 @@ describe('BrandRecordSchema', () => {
 		expect(BrandRecordSchema.safeParse({ ...record, versions: [orphaned] }).success).toBe(false);
 	});
 });
+
+describe('BrandRecordSchema integrity', () => {
+	// z.iso.datetime() accepts variable fractional precision, and lexicographic order is not
+	// chronological order across it: ".1Z" sorts before "Z" while naming a later instant.
+	it('orders versions by instant rather than by ISO text', () => {
+		const later = { ...version, createdAt: '2026-09-16T12:00:00.1Z' };
+		const earlier = { ...version, createdAt: '2026-09-16T12:00:00Z' };
+
+		const result = BrandRecordSchema.safeParse({ ...record, versions: [later, earlier] });
+
+		expect(result.success).toBe(false);
+	});
+
+	// Two images sharing an id make every provenance reference to it ambiguous, so the
+	// reference resolves while identifying nothing in particular.
+	it('rejects duplicate reference image ids', () => {
+		const duplicated = [record.images[0], { ...record.images[0], originalHash: 'sha256:def' }];
+
+		expect(BrandRecordSchema.safeParse({ ...record, images: duplicated }).success).toBe(false);
+	});
+
+	// The seed is the principal input behind a generated token set. A version holding tokens
+	// without one cannot be regenerated or explained, which is the whole point of a history.
+	it('rejects a version that stores tokens without the seed that produced them', () => {
+		const ramp = Array.from({ length: 12 }, (_, i) => ({
+			step: i + 1,
+			l: 0.05 + i * 0.08,
+			c: 0.05,
+			h: 259.8,
+		}));
+		const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' } };
+		const orphaned = {
+			...version,
+			seed: null,
+			tokenSet: { ...layer, schemes: { light: layer, dark: layer } },
+		};
+
+		expect(BrandRecordSchema.safeParse({ ...record, versions: [orphaned] }).success).toBe(false);
+	});
+
+	it('accepts a version that has neither a seed nor a token set', () => {
+		const empty = { ...version, seed: null, tokenSet: null };
+
+		expect(BrandRecordSchema.safeParse({ ...record, versions: [empty] }).success).toBe(true);
+	});
+});

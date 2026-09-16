@@ -51,7 +51,12 @@ function checkAliasesResolve(
 		if (!match) continue;
 
 		const [, rampName, rawStep] = match;
-		const ramp = value.primitives[rampName!];
+		// `primitives` is a plain object, so a bare index walks the prototype chain: an alias of
+		// `constructor.1` returns a truthy function whose `length` is 1 and satisfies both checks
+		// below without any such ramp being declared.
+		const ramp = Object.hasOwn(value.primitives, rampName!)
+			? value.primitives[rampName!]
+			: undefined;
 		const step = Number(rawStep);
 
 		if (!ramp) {

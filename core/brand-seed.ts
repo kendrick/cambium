@@ -57,10 +57,23 @@ export const FontCandidateSchema = z.discriminatedUnion('provenance', [
  * addressed separately. An empty array is a role with no candidate, which is different from
  * the whole pairing being absent.
  */
+/**
+ * Ranked means ordered. The score is what ranks a derived candidate, so a consumer taking the
+ * first entry has to get the best one. Invented candidates carry no score and sit outside the
+ * ordering rather than breaking it.
+ */
+const rankedByScore = z.array(FontCandidateSchema).refine(
+	(candidates) => {
+		const scores = candidates.filter((c) => c.provenance === 'derived').map((c) => c.score);
+		return scores.every((score, i) => i === 0 || score <= scores[i - 1]!);
+	},
+	{ message: 'derived candidates must run highest score first' },
+);
+
 export const SuggestedPairingSchema = z.object({
-	display: z.array(FontCandidateSchema),
-	body: z.array(FontCandidateSchema),
-	mono: z.array(FontCandidateSchema),
+	display: rankedByScore,
+	body: rankedByScore,
+	mono: rankedByScore,
 });
 
 export const TypeClassificationSchema = z.object({
