@@ -38,7 +38,7 @@ One shared contract suite over the four interface methods, run against the Index
 
 ## The browser tier
 
-Playwright is the only browser runner, and Vitest keeps the pure core and nothing else. The `cat.color` rule family the interface audit needs is inert under jsdom, which does no layout and resolves no cascade, and run 4 exercises real IndexedDB and real file handling that `fake-indexeddb` cannot prove. Once a browser is running for both, `@axe-core/playwright` covers the audit in the same suite and a second runner earns nothing. Static export keeps the cost down: build, serve `out/` as files, point a browser at it.
+Playwright is the only browser runner. Vitest gets no browser tier: it keeps the Node-side work, which is the pure core, the RecordStore contract under `fake-indexeddb`, and the bundle measurement. The `cat.color` rule family the interface audit needs is inert under jsdom, which does no layout and resolves no cascade, and run 4 exercises real IndexedDB and real file handling that `fake-indexeddb` cannot prove. Once a browser is running for both, `@axe-core/playwright` covers the audit in the same suite and a second runner earns nothing. Static export keeps the cost down: build, serve `out/` as files, point a browser at it.
 
 The suite automates runs 1, 2, and 4 of issue #1's five demonstrable runs. Run 1 needs no key and no network, run 2 runs with the model call intercepted at the route rather than against a real key, and run 4 needs a browser. Run 3 stays manual, because a person looking at the rendered theme is the step that proves the output is real rather than merely plausible; #49 adds a contract test asserting the generated unbranded-ds theme document against that project's registration input, so shape drift fails on its own. Run 5 is the existing core suite and does not change.
 
@@ -48,7 +48,7 @@ The suite arrives in two parts. #47 stands up the harness and automates the keye
 
 Reader implementations. Once seed parsing moved into the core, they are I/O shells with no logic left to test.
 
-Component tests. The interface is still moving, and tests against a prototype interface cost more than they return. That rejects component tests rather than testing the interface: the five runs are flows against the definition of done, which is the one part of the spec that should not move, and they run in the Playwright suite above.
+Component tests. The interface is still moving, and tests against a prototype interface cost more than they return. That rejects component tests rather than testing the interface: the five runs are flows against the definition of done, which is the one part of the spec that should not move, and three of them are automated in the Playwright suite above.
 
 Both are tradeoffs the spec makes on purpose. Leave them alone rather than filing them as missing coverage.
 
@@ -62,7 +62,7 @@ Contrast assertions are plain Vitest against the math, because the generator is 
 
 Rendered-component accessibility goes through `@axe-core/playwright` inside the Playwright suite, never through Vitest. axe-core measures *rendered* accessibility, and jsdom resolves no cascade and does no layout. `@playwright/test` and `@axe-core/playwright` are pinned; `@vitest/browser` and `@vitest/browser-playwright` are not installed and must not be, because one runner already covers both jobs. That supersedes section 8 of `docs/research/oss-landscape.md`, which recommends Vitest browser mode with a provider package: it answered how to run axe, and the tier question changed the answer.
 
-Reach for axe-core directly. Its popular wrapper `vitest-axe` is abandoned—the `latest` tag points at a 2022 build, and the maintainer has not answered since early 2025—so do not install it, or `@types/jest-axe`.
+`@axe-core/playwright` is the only axe wrapper here. Its Vitest counterpart `vitest-axe` is abandoned—the `latest` tag points at a 2022 build, and the maintainer has not answered since early 2025—so do not install it, or `@types/jest-axe`.
 
 ## Test-first
 

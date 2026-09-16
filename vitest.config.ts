@@ -1,8 +1,9 @@
 import { defineConfig } from 'vitest/config';
 
-// Node is enough for the deterministic half of Cambium, which is all of stage 2.
-// Rendered-component and axe checks need browser mode and arrive with the UI tickets;
-// see docs/research/oss-landscape.md on why jsdom cannot answer colour questions.
+// Node is enough for everything Vitest runs here: the pure core, the RecordStore contract under
+// fake-indexeddb, and the bundle measurement. Vitest gets no browser tier at all. Rendered-component
+// and axe checks belong to the Playwright suite instead, because jsdom does no layout and resolves
+// no cascade, so the colour rules are inert there. See docs/agents/testing.md.
 const node = {
 	environment: 'node' as const,
 	globals: true,
