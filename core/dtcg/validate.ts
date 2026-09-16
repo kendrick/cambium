@@ -22,30 +22,6 @@ export type DtcgViolation = {
 export type DtcgValidationResult = { valid: true } | { valid: false; violations: DtcgViolation[] };
 
 /**
- * Validates a parsed DTCG document against the vendored 2025.10 Format schema.
- *
- * The schema is the only validator in the survey that scored 37/37 on the official conformance
- * suite, and it is stricter than any parser about values: colour space enums, component counts,
- * and numeric ranges. It is deliberately not the whole story. JSON Schema cannot propagate a
- * group's `$type` down to its children, so a bare `"#ff0000"` string `$value` under a typed group
- * passes here and has to be caught structurally instead. Schema and parser are complementary;
- * neither one alone means conformant.
- *
- * What comes back is every diagnostic Ajv produced, including the ones from rejected `oneOf`
- * alternatives. That is not a list of problems. A single bad value routinely yields many
- * diagnostics: one bad OKLCH hue produces nineteen, several describing the same failure, and some
- * describing a branch the author never intended. A colour token that fails the colour branch is
- * also reported as failing the alias branch, so it draws a "must have required property '$ref'"
- * and a "must NOT have additional properties" naming `$value`, and that second one is simply
- * false about the document.
- *
- * Collapsing that into one problem per mistake needs a consumer to say what it wants, because
- * doing it here means guessing which `oneOf` branch the author intended, and a wrong guess drops
- * a real error somewhere else in the document. Noise is the better failure. #11 is the consumer
- * that gets to make the call, so do not add a filter, a heuristic, or a deepest-pointer-wins rule
- * before then.
- */
-/**
  * RFC 6901 §3 escaping for one reference token. `~` first, then `/`: reversed, the `~1` produced
  * by escaping a slash gets re-escaped into `~01`, and the pointer resolves somewhere else.
  */
@@ -61,10 +37,12 @@ function escapeToken(key: string): string {
  * it rather than string-match. `core/parse-seed.ts` does the same on the zod side for
  * `unrecognized_keys`.
  *
- * Every other keyword already carries its detail in `message`, checked against Ajv rather than
- * assumed: `required` says "must have required property 'colorSpace'", `type` says "must be
- * string", `exclusiveMaximum` says "must be < 360", `const` says "must be equal to constant".
- * `required` is deliberately left alone even though it names a key, because that key is by
+ * It is the only keyword whose dropped detail is a *location*. Others drop detail too: `const`
+ * says "must be equal to constant" and `enum` says "must be equal to one of the allowed values",
+ * both holding the actual values only in `params`. That is a poorer message, not a wrong pointer,
+ * and enriching messages is #11's call rather than this module's.
+ *
+ * `required` is deliberately left alone even though it does name a key, because that key is by
  * definition absent from the document, so extending the pointer would address a member that does
  * not exist. Under `oneOf` it is usually worse than that: the missing property is often `$ref`,
  * named by a branch the author never intended.
@@ -75,6 +53,33 @@ function pointerFor(error: DtcgSchemaError): string {
 	return typeof key === 'string' ? `${error.instancePath}/${escapeToken(key)}` : error.instancePath;
 }
 
+/**
+ * Validates a parsed DTCG document against the vendored 2025.10 Format schema.
+ *
+ * The schema is the only validator in the survey that scored 37/37 on the official conformance
+ * suite, and it is stricter than any parser about values: colour space enums, component counts,
+ * and numeric ranges. It is deliberately not the whole story. JSON Schema cannot propagate a
+ * group's `$type` down to its children, so a bare `"#ff0000"` string `$value` under a typed group
+ * passes here and has to be caught structurally instead. Schema and parser are complementary;
+ * neither one alone means conformant.
+ *
+ * What comes back is every diagnostic Ajv produced, including the ones from rejected `oneOf`
+ * alternatives. That is not a list of problems. A single bad value routinely yields many
+ * diagnostics: one bad OKLCH hue produces nineteen, several describing the same failure, and some
+ * describing a branch the author never intended. A colour token that fails the colour branch is
+ * also reported as failing the alias branch, which wants `$ref` and nothing else, so it draws a
+ * "must have required property '$ref'" plus four "must NOT have additional properties" naming
+ * `$value`, `colorSpace`, `components` and `brand`. All four of those keys are legal where they
+ * sit, and joining the key onto the pointer makes those diagnostics read more confidently than
+ * before: they now address a real value rather than its parent. Treat an `additionalProperties`
+ * diagnostic under a failed `oneOf` as a claim about one rejected branch, not about the document.
+ *
+ * Collapsing that into one problem per mistake needs a consumer to say what it wants, because
+ * doing it here means guessing which `oneOf` branch the author intended, and a wrong guess drops
+ * a real error somewhere else in the document. Noise is the better failure. #11 is the consumer
+ * that gets to make the call, so do not add a filter, a heuristic, or a deepest-pointer-wins rule
+ * before then.
+ */
 export function validateDtcg(tokenDocument: unknown): DtcgValidationResult {
 	if (validateAgainstSchema(tokenDocument)) return { valid: true };
 

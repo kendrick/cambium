@@ -75,6 +75,12 @@ function resolvePointer(tokenDocument: unknown, pointer: string): unknown {
 		);
 }
 
+const badHue = {
+	color: {
+		brand: { $type: 'color', $value: { colorSpace: 'oklch', components: [0.62, 0.19, 360] } },
+	},
+};
+
 function violationsOf(tokenDocument: unknown): DtcgViolation[] {
 	const result = validateDtcg(tokenDocument);
 
@@ -94,12 +100,6 @@ describe('validateDtcg', () => {
 	 * every parser in the survey: the parsers accept it.
 	 */
 	it('rejects an OKLCH hue of 360 and points at the component that failed', () => {
-		const badHue = {
-			color: {
-				brand: { $type: 'color', $value: { colorSpace: 'oklch', components: [0.62, 0.19, 360] } },
-			},
-		};
-
 		// Keyed by the pointers the validator returned, so nothing here resolves a literal the
 		// author typed. A missing pointer shows up as an undefined lookup.
 		const resolved = new Map(
@@ -112,9 +112,6 @@ describe('validateDtcg', () => {
 		expect(resolved.get('/color/brand/$value/components/2')).toBe(360);
 	});
 
-	// RFC 6901 §5: the empty string addresses the whole document, and `/` addresses the property
-	// named by the empty string. Returning `/` here would resolve to `document[""]`, which is a
-	// different place and usually no place at all.
 	/**
 	 * Ajv reports `additionalProperties` against the object holding the key and says only "must NOT
 	 * have additional properties", so the key lives in `params` or nowhere. Without it a caller
@@ -127,14 +124,10 @@ describe('validateDtcg', () => {
 	});
 
 	/**
-	 * RFC 6901 §3 escaping of the key this module appends, with the mutation that catches a
-	 * reversed implementation: escape `~` before `/`, or the `~1` written for the slash is
-	 * re-escaped to `~01` and the pointer walks somewhere else.
-	 *
-	 * The name has to start with `$` to reach this code at all. A name like `a~b/c` is legal under
-	 * the DTCG pattern, so it goes to `patternProperties` and Ajv builds the pointer itself, already
-	 * escaped. Testing that name would measure Ajv's escaping rather than this module's, which is
-	 * what an earlier version of this test did.
+	 * The name has to start with `$` to reach the escaping in `validate.ts` at all. A name like
+	 * `a~b/c` is legal under the DTCG pattern, so it goes to `patternProperties` and Ajv builds the
+	 * pointer itself, already escaped. Testing that name measures Ajv rather than this module,
+	 * which is exactly what an earlier version of this test did.
 	 */
 	it('escapes ~ and / in a key it appends, so the pointer still resolves', () => {
 		const awkwardName = { '$a~b/c': 1 };
@@ -145,25 +138,38 @@ describe('validateDtcg', () => {
 	});
 
 	/**
-	 * Characterization, not endorsement. One bad value produces many diagnostics because Ajv
-	 * reports every rejected `oneOf` branch, and some of those describe a branch the author never
-	 * intended. Collapsing them means guessing that branch, and a wrong guess hides a real error
-	 * elsewhere, so the noise stays until #11 says what it wants. This test exists so that whoever
-	 * changes it sees exactly what they changed.
+	 * Characterization, not endorsement. One bad value produces nineteen diagnostics because Ajv
+	 * reports every rejected `oneOf` branch, and four of the six distinct pointers below address
+	 * keys that are perfectly legal where they sit. Collapsing that means guessing which branch the
+	 * author intended, and a wrong guess hides a real error elsewhere, so the noise stays until #11
+	 * says what it wants.
+	 *
+	 * The exact figures are pinned on purpose. A vague assertion would let the shape drift without
+	 * anyone noticing, and these can only move when someone runs `pnpm dtcg:refresh`, which is a
+	 * deliberate act with a diff to review. If this test fails, read the new numbers and decide;
+	 * do not relax it.
 	 */
-	it('returns every branch diagnostic, so one bad value yields several', () => {
-		const badHue = {
-			color: {
-				brand: { $type: 'color', $value: { colorSpace: 'oklch', components: [0.62, 0.19, 360] } },
-			},
-		};
+	it('returns every branch diagnostic, including ones that are false about the document', () => {
+		const violations = violationsOf(badHue);
 
-		const pointers = violationsOf(badHue).map((violation) => violation.pointer);
-
-		expect(pointers.length).toBeGreaterThan(1);
-		expect(pointers.some((pointer) => pointer !== '/color/brand/$value/components/2')).toBe(true);
+		expect(violations).toHaveLength(19);
+		// Compared as a Set so the assertion does not depend on Ajv's diagnostic ordering, which is
+		// not part of anything this module promises.
+		expect(new Set(violations.map((violation) => violation.pointer))).toEqual(
+			new Set([
+				'/color',
+				'/color/brand',
+				'/color/brand/$value',
+				'/color/brand/$value/colorSpace',
+				'/color/brand/$value/components',
+				'/color/brand/$value/components/2',
+			]),
+		);
 	});
 
+	// The empty string addresses the whole document, and `/` addresses the property named by the
+	// empty string. Returning `/` here would resolve to `document[""]`, a different place and
+	// usually no place at all.
 	it('addresses a root-level failure with the empty pointer', () => {
 		const [violation] = violationsOf('not a token document');
 
