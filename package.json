@@ -40,10 +40,12 @@
     "lint:fix": "oxlint --fix",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --project unit",
+    "test:watch": "vitest --project unit",
+    "test:bundle": "vitest run --project bundle",
     "dtcg:refresh": "node scripts/refresh-dtcg-schema.mjs",
-    "dtcg:build": "node scripts/build-dtcg-validator.mjs"
+    "dtcg:build": "node scripts/build-dtcg-validator.mjs",
+    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build && pnpm test:bundle"
   },
   "dependencies": {
     "@base-ui/react": "1.8.0",
