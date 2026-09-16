@@ -57,9 +57,10 @@ const validDocument = {
 };
 
 /**
- * RFC 6901 §4 resolution. The promise `DtcgViolation` makes is not that `path` has a particular
- * spelling, it is that a caller can walk it to the value that failed, so the tests walk it. A
- * pointer asserted as a string looks right in exactly the case where it is wrong.
+ * RFC 6901 §4 resolution. The promise `DtcgViolation` makes is not that `pointer` has a
+ * particular spelling, it is that a caller can walk it to the value that failed, so the tests
+ * walk the pointers the validator actually returned. A pointer asserted only as a string looks
+ * right in exactly the case where it is wrong.
  */
 function resolvePointer(tokenDocument: unknown, pointer: string): unknown {
 	if (pointer === '') return tokenDocument;
@@ -99,20 +100,24 @@ describe('validateDtcg', () => {
 			},
 		};
 
-		const paths = violationsOf(badHue).map((violation) => violation.path);
+		// Keyed by the pointers the validator returned, so nothing here resolves a literal the
+		// author typed. A missing pointer shows up as an undefined lookup.
+		const resolved = new Map(
+			violationsOf(badHue).map((violation) => [
+				violation.pointer,
+				resolvePointer(badHue, violation.pointer),
+			]),
+		);
 
-		expect(paths).toContain('/color/brand/$value/components/2');
-		expect(resolvePointer(badHue, '/color/brand/$value/components/2')).toBe(360);
+		expect(resolved.get('/color/brand/$value/components/2')).toBe(360);
 	});
 
 	// RFC 6901 §5: the empty string addresses the whole document, and `/` addresses the property
 	// named by the empty string. Returning `/` here would resolve to `document[""]`, which is a
 	// different place and usually no place at all.
 	it('addresses a root-level failure with the empty pointer', () => {
-		const notADocument = 'not a token document';
-		const [violation] = violationsOf(notADocument);
+		const [violation] = violationsOf('not a token document');
 
-		expect(violation?.path).toBe('');
-		expect(resolvePointer(notADocument, violation?.path ?? '/')).toBe(notADocument);
+		expect(violation?.pointer).toBe('');
 	});
 });

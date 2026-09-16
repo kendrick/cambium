@@ -1,17 +1,19 @@
 import validateAgainstSchema from './format-validator.generated.mjs';
 
 /**
- * A single way in which a document departs from the DTCG Format Module. `path` is an RFC 6901
+ * A single way in which a document departs from the DTCG Format Module. `pointer` is an RFC 6901
  * JSON Pointer into the document the caller passed, so a UI can walk straight to the offending
- * token.
+ * token. It is `pointer` rather than `path` because the repo already spells three other things
+ * `path`, and only this one is a JSON Pointer.
  *
- * The root is the empty string, which is what RFC 6901 §5 specifies and not a placeholder. `/` is
- * a different pointer: it addresses the property whose name is the empty string. Rendering the
- * root as something a person reads is the caller's job, and doing it here would hand every
- * caller a pointer that resolves to the wrong place.
+ * A failure at the root carries the empty pointer, which is what RFC 6901 evaluates a pointer
+ * with no reference tokens to, not a placeholder. `/` is a different pointer: it addresses the
+ * property whose name is the empty string. Rendering the root as something a person reads is the
+ * caller's job, and doing it here would hand every caller a pointer that resolves to the wrong
+ * place.
  */
 export type DtcgViolation = {
-	path: string;
+	pointer: string;
 	message: string;
 };
 
@@ -37,7 +39,7 @@ export function validateDtcg(tokenDocument: unknown): DtcgValidationResult {
 	return {
 		valid: false,
 		violations: errors.map((error) => ({
-			path: error.instancePath,
+			pointer: error.instancePath,
 			message: error.message ?? `failed the ${error.keyword} constraint`,
 		})),
 	};
