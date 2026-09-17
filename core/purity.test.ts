@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { BrandSeedSchema } from './brand-seed';
 import { validateDtcg } from './dtcg/validate';
+import { resolveCandidatePool } from './font-table';
 import { parseSeed } from './parse-seed';
 import { TokenSetSchema } from './token-set';
 
@@ -72,6 +73,8 @@ const record = {
 	],
 };
 
+const fontTable = [{ family: 'Geo Sans', tag: '/Sans/Geometric', score: 100 }];
+
 /**
  * Stage 2 stays free of DOM and browser APIs so it can run server-side unchanged, which the
  * headless generate CLI depends on.
@@ -102,6 +105,10 @@ describe('core purity', () => {
 		['BrandRecordSchema', () => BrandRecordSchema.safeParse(record).success],
 		['the DTCG format validator', () => validateDtcg(dtcgDocument).valid],
 		['parseSeed', () => parseSeed(rawResponse).ok],
+		[
+			'resolveCandidatePool',
+			() => resolveCandidatePool(fontTable, 'sans', 'geometric').matched === 'tone',
+		],
 	])('%s parses a valid value without reaching the network', (_name, parses) => {
 		vi.stubGlobal('fetch', () => {
 			throw new Error('the pure core must not reach the network');
