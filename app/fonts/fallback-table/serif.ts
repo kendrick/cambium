@@ -9,9 +9,9 @@ import type { AuthoredRow } from '../../../core/font-table';
  * `/Serif/Modern`, `/Serif/Scotch`, `/Serif/Transitional`, and `/Serif/Fat Face` is what answers
  * those two pairs.
  *
- * At least one family here also carries a `/Theme/*` tag. The whole table owes #42's
- * display-versus-body filter four of them, and four agents curating in parallel only reach that
- * total if each file carries its own share.
+ * No family here carries a `/Theme/*` tag, because no serif in this list honestly reads as one of
+ * the five theme names. The table owes #42's display-versus-body filter four themed families and
+ * the other three category files supply them, which `fallback-table.test.ts` asserts table-wide.
  *
  * Every family also carries both `/Quality/*` rows and at least three `/Expressive/*` rows,
  * because #42 ranks on the seed's expressive axes and a family tagged on tone alone can never
@@ -168,11 +168,10 @@ export const SERIF_ROWS: readonly AuthoredRow[] = [
 	{ family: 'Prata', tag: '/Expressive/Calm', score: 50 },
 	{ family: 'Prata', tag: '/Expressive/Vintage', score: 50 },
 
-	// Grenze carries this file's `/Theme/*` row because it reads blackletter and still files as
-	// a serif on Google Fonts. The unambiguous blackletter faces there are all display, and
-	// #42's display-versus-body filter needs a face it can hold out of a body slot.
+	// Grenze carries no `/Theme/*` row. It is a sharp-cut latin serif, and the blackletter face
+	// that shares its name is Grenze Gotisch, a different family. The table's four themed
+	// families all sit in the other three category files.
 	{ family: 'Grenze', tag: '/Serif/Transitional', score: 50 },
-	{ family: 'Grenze', tag: '/Theme/Blackletter', score: 80 },
 	{ family: 'Grenze', tag: '/Quality/Spacing', score: 60 },
 	{ family: 'Grenze', tag: '/Quality/Wordspace', score: 60 },
 	{ family: 'Grenze', tag: '/Expressive/Vintage', score: 80 },

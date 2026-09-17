@@ -70,8 +70,9 @@ export type TagName =
  * - 60: present and legible in the design, not the first thing you would say about it.
  * - 40: a weak reading. Defensible, arguable.
  *
- * The values between those rungs are for a face that sits between two of them. Anything below 40
- * is a missing row rather than a low score.
+ * 50, 70, and 90 carry a face that sits between two rungs. They are the ordinary case rather than
+ * the exception, and about half the authored rows land on one. Anything below 40 is a missing row
+ * rather than a low score.
  *
  * Tens rather than every integer, because no test can prove a row was not copied from upstream:
  * the file is not here, and fetching it inside a test would break the offline rule. A ten-point
@@ -179,6 +180,10 @@ function familiesTagged(table: FontTable, tags: readonly TagName[]): string[] {
  * Returns what the table holds instead of padding to three. Three families per pair is the
  * fallback table's obligation, asserted in its own test; over an arbitrary table, the fetched one
  * included, no function here can promise it.
+ *
+ * A table that matches nothing at all, an empty one included, comes back with `matched` reading
+ * `category` and no families. That pair says the tone found nothing, not that the category
+ * answered, so read `families` before building a rationale on the discriminant.
  */
 export function resolveCandidatePool(
 	table: FontTable,

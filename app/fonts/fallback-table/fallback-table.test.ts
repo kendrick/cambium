@@ -36,13 +36,31 @@ function distinct(families: readonly string[]): number {
 }
 
 /**
+ * The pairs `resolveCandidatePool` can only answer from the category pool, because the taxonomy
+ * carries no tag for them: no geometric or grotesque serif, no grotesque slab, and no tones at all
+ * under monospace.
+ *
+ * Asserting which tier answered is what makes the count assertion mean something. `slab / humanist`
+ * sits at exactly three families, so retagging one of them would drop the pair into a category pool
+ * of ten, and a test that counts alone would stay green while the tone quietly stopped being
+ * covered.
+ */
+const CATEGORY_FALLBACK_PAIRS = new Set([
+	'serif/geometric',
+	'serif/grotesque',
+	'slab/grotesque',
+	'mono/geometric',
+	'mono/humanist',
+	'mono/grotesque',
+]);
+
+/**
  * Measured against the shipped rows: `gzipSync(JSON.stringify(FALLBACK_FONT_TABLE), { level: 9 })`
  * comes to 2,579 bytes for the 58 families and 436 rows curated so far.
  *
- * The ceiling is 5,000 bytes, roughly double that figure. The headroom covers the couple of
- * families still needed to reach the sixty ADR-0001 budgets, and the ordinary tag and score
- * corrections curation still makes. It would not cover growth toward the scale of the upstream
- * taxonomy, which is explicitly out of scope for this table.
+ * The ceiling is 5,000 bytes, roughly double that figure. The headroom covers the families a
+ * later pass adds and the ordinary tag and score corrections curation makes. It would not cover
+ * growth toward the scale of the upstream taxonomy, which is out of scope for this table.
  *
  * `lib/bundle-budget.ts` leaves roughly 24 kB of headroom under the 200 kB first-load budget, and
  * this table's chunk is the largest single claim on it. `pnpm test:bundle` cannot defend that
@@ -70,13 +88,34 @@ describe('the in-repo fallback font table', () => {
 		expect(distinct(families)).toBeGreaterThanOrEqual(3);
 	});
 
-	// Called out on its own because monospace is the category most likely to be curated last and
-	// noticed never: it has no tone tags upstream, so all three of its pairs resolve through the
-	// same category fallback and fail or pass together.
-	it('offers three families or more for monospace', () => {
-		const { families } = resolveCandidatePool(FALLBACK_FONT_TABLE, 'mono', 'humanist');
+	it.each(pairs)('answers %s / %s from the tier that has tags for it', (category, tone) => {
+		const { matched } = resolveCandidatePool(FALLBACK_FONT_TABLE, category, tone);
 
-		expect(distinct(families)).toBeGreaterThanOrEqual(3);
+		expect(matched).toBe(CATEGORY_FALLBACK_PAIRS.has(`${category}/${tone}`) ? 'category' : 'tone');
+	});
+
+	// Monospace gets its own assertion because the issue names it separately, and because one pool
+	// answering all three tones is the shape rather than an accident: the taxonomy has no tones
+	// under monospace, so a mono seed's personality has to come from the expressive rows.
+	it('answers every monospace tone from one pool', () => {
+		const pools = tones.map((tone) => resolveCandidatePool(FALLBACK_FONT_TABLE, 'mono', tone));
+
+		expect(distinct(pools[0]!.families)).toBeGreaterThanOrEqual(3);
+
+		for (const pool of pools) {
+			expect(pool.families).toEqual(pools[0]!.families);
+		}
+	});
+
+	// Four is the floor across the whole table rather than one per category file, because #42's
+	// filter reads the tag and never asks which file a row came from. Stated in four curation
+	// comments before it was stated here, which left every one of them unenforced.
+	it('carries four themed families or more', () => {
+		const themed = [...tagsByFamily]
+			.filter(([, tags]) => [...tags].some((tag) => tag.startsWith('/Theme/')))
+			.map(([family]) => family);
+
+		expect(themed.length).toBeGreaterThanOrEqual(4);
 	});
 
 	// #42 ranks on the seed's expressive axes, so a family tagged on tone alone parses fine and then

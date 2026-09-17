@@ -7,9 +7,9 @@ import type { AuthoredRow } from '../../../core/font-table';
  * for a grotesque slab falls back to every `/Slab/*` row in this file, `/Slab/Clarendon` included,
  * so that pair is covered as soon as the other two are.
  *
- * At least one family here also carries a `/Theme/*` tag. The whole table owes #42's
- * display-versus-body filter four of them, and four agents curating in parallel only reach that
- * total if each file carries its own share.
+ * At least one family here also carries a `/Theme/*` tag. The table owes #42's
+ * display-versus-body filter four of them, asserted table-wide in `fallback-table.test.ts`, and
+ * dropping this file's share is what would put that floor at risk.
  *
  * Every family also carries both `/Quality/*` rows and at least three `/Expressive/*` rows,
  * because #42 ranks on the seed's expressive axes and a family tagged on tone alone can never
