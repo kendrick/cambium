@@ -1,0 +1,14 @@
+{
+	"status": 500,
+	"headers": {
+		"request-id": "req_011CServerError7DeFg",
+		"content-type": "application/json"
+	},
+	"body": {
+		"type": "error",
+		"error": {
+			"type": "api_error",
+			"message": "An unexpected error has occurred internal to Anthropic's systems."
+		}
+	}
+}
