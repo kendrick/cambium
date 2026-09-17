@@ -333,7 +333,7 @@ export function createWorkspaceStore({
 		 * It serialises this store and nothing else. Two tabs hold two stores and two queues, and
 		 * `RecordStore.put` replaces a whole record with no compare-and-swap, so the same collision
 		 * is still reachable across tabs. Closing that needs optimistic concurrency at the
-		 * `RecordStore` seam, which no open ticket owns yet.
+		 * `RecordStore` seam, which is #67.
 		 */
 		let queue: Promise<unknown> = Promise.resolve();
 
