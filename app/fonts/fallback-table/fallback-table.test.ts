@@ -36,13 +36,21 @@ function distinct(families: readonly string[]): number {
 }
 
 /**
- * PLACEHOLDER, replaced with a measured figure once the rows land.
+ * Measured against the shipped rows: `gzipSync(JSON.stringify(FALLBACK_FONT_TABLE), { level: 9 })`
+ * comes to 2,579 bytes for the 58 families and 436 rows curated so far.
+ *
+ * The ceiling is 5,000 bytes, roughly double that figure. The headroom covers the couple of
+ * families still needed to reach the sixty ADR-0001 budgets, and the ordinary tag and score
+ * corrections curation still makes. It would not cover growth toward the scale of the upstream
+ * taxonomy, which is explicitly out of scope for this table.
  *
  * `lib/bundle-budget.ts` leaves roughly 24 kB of headroom under the 200 kB first-load budget, and
- * the table's own chunk is the largest single claim on it. Measure the real number, then set this
- * to that figure plus stated headroom so a row added later fails here rather than on a page load.
+ * this table's chunk is the largest single claim on it. `pnpm test:bundle` cannot defend that
+ * headroom yet: nothing imports `load-fallback-table.ts` until #42 wires the table provider, so a
+ * real build never touches these rows and the budget passes whatever they weigh. The assertion
+ * below is what holds the line in the meantime.
  */
-const GZIPPED_CEILING_BYTES = 8_000;
+const GZIPPED_CEILING_BYTES = 5_000;
 
 /**
  * The claim this suite makes is coverage: no seed a Brand Seed can express comes back with an
