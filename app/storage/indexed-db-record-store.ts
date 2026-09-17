@@ -25,7 +25,7 @@ export const DATABASE_NAME = 'cambium';
  * record has. Migration between record shapes is a declared non-goal, so the database version
  * moves only when the store layout does.
  */
-export const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 1;
 
 export const RECORD_STORE_NAME: StoreNames<CambiumDatabase> = 'records';
 
@@ -37,11 +37,6 @@ type RecordWriteStore = IDBPObjectStore<
 >;
 
 const openConnections = new WeakMap<RecordStore, IDBPDatabase<CambiumDatabase>>();
-
-export type IndexedDbRecordStoreOptions = {
-	/** Lets a test or a dev tool work in a database of its own, away from the user's. */
-	databaseName?: string;
-};
 
 /**
  * A `RecordStore` over IndexedDB, which is here for the quota. Three downscaled reference images
@@ -63,27 +58,27 @@ export type IndexedDbRecordStoreOptions = {
  *
  * Opening is async, so the factory is too. The contract suite already accepts a promised store.
  */
-export async function createIndexedDbRecordStore(
-	options: IndexedDbRecordStoreOptions = {},
-): Promise<RecordStore> {
-	const database = await openDB<CambiumDatabase>(
-		options.databaseName ?? DATABASE_NAME,
-		DATABASE_VERSION,
-		{
-			upgrade(created) {
-				// Keyed in-line on the record's own id, so a put cannot file a record under a key that
-				// disagrees with it.
-				created.createObjectStore(RECORD_STORE_NAME, { keyPath: 'id' });
-			},
+export async function createIndexedDbRecordStore(): Promise<RecordStore> {
+	const database = await openDB<CambiumDatabase>(DATABASE_NAME, DATABASE_VERSION, {
+		upgrade(created) {
+			// Keyed in-line on the record's own id, so a put cannot file a record under a key that
+			// disagrees with it.
+			created.createObjectStore(RECORD_STORE_NAME, { keyPath: 'id' });
 		},
-	);
+	});
 
 	/**
-	 * Awaits the request and the transaction together, and both halves earn their place. A write can
-	 * succeed and the transaction still abort afterwards, which is what WebKit does when it suspends
-	 * a page on iOS, and `tx.done` is the only thing that reports it. Every generation is an
-	 * immutable version, so a write dropped in silence loses one. Awaiting the two in sequence
-	 * instead would leave whichever rejects second unhandled.
+	 * Awaits the request and the transaction together. A write can succeed and the transaction still
+	 * abort afterwards, which is what WebKit does when it suspends a page on iOS, and `tx.done` is
+	 * the only thing that reports it. Every generation is an immutable version, so a write dropped
+	 * in silence loses one.
+	 *
+	 * `idb`'s own `db.put` shorthand awaits both today, so this spells out a guarantee the wrapper
+	 * currently gives for free. It is written here anyway, because upstream abort handling is still
+	 * an open question (jakearchibald/idb#166 and PR #338) and a version bump should not be able to
+	 * take the promise away quietly.
+	 *
+	 * Awaiting the two in sequence instead would leave whichever rejects second unhandled.
 	 */
 	async function write(operation: (records: RecordWriteStore) => Promise<unknown>): Promise<void> {
 		const tx = database.transaction(RECORD_STORE_NAME, 'readwrite');

@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type BrandRecord, SCHEMA_VERSION } from '../../core/brand-record';
 
 import {
+	DATABASE_NAME,
 	RECORD_STORE_NAME,
 	closeIndexedDbRecordStore,
 	createIndexedDbRecordStore,
@@ -24,9 +25,9 @@ import {
 import { testRecordStoreContract } from './record-store-contract';
 
 /**
- * `fake-indexeddb/auto` is the documented way to install these and it cannot be used here. It is a
- * bare import, `.oxlintrc.json` errors on any bare import outside CSS, and that fails `pnpm verify`
- * before it fails anything else.
+ * `fake-indexeddb/auto` is the documented way to install these and it cannot be used here. It is an
+ * unassigned import, `.oxlintrc.json` sets `import/no-unassigned-import` to error for everything
+ * but CSS, and that fails `pnpm verify` before it fails anything else.
  *
  * Assigning the globals by hand costs nothing, because a fresh `IDBFactory` per test is what gives
  * every test its own database, which is the isolation the shared contract suite is written to
@@ -109,9 +110,13 @@ describe('createIndexedDbRecordStore persistence', () => {
 		const store = await createIndexedDbRecordStore();
 		await store.put(record);
 
-		// Closing is what makes this a reload rather than a second read. A store that answered from
-		// its own connection would pass either way while proving nothing about the database.
 		closeIndexedDbRecordStore(store);
+
+		// Asserting the connection is gone is what makes the rest of this a reload. Two live
+		// connections would read the same records anyway, so without this line the test would pass
+		// just as well with no close at all, and prove only that IndexedDB shares a database.
+		await expect(store.get(record.id)).rejects.toThrow(Error);
+
 		const reopened = await createIndexedDbRecordStore();
 
 		expect(await reopened.get(record.id)).toEqual(record);
@@ -122,13 +127,12 @@ describe('createIndexedDbRecordStore persistence', () => {
 	// path, and a mismatch that reads as an empty list would look like lost work instead of a
 	// version the archive can carry forward.
 	it('throws when a stored record no longer matches the current schema version', async () => {
-		const databaseName = 'schema-mismatch';
-		const store = await createIndexedDbRecordStore({ databaseName });
+		const store = await createIndexedDbRecordStore();
 		const stale = { ...makeRecordWithImage(), schemaVersion: SCHEMA_VERSION - 1 };
 
 		// Written through a raw connection because `put` is exactly what refuses to store a record the
 		// current schema rejects, which leaves such a record no other way into the database.
-		const seeding = await openDB(databaseName);
+		const seeding = await openDB(DATABASE_NAME);
 		await seeding.put(RECORD_STORE_NAME, stale);
 		seeding.close();
 
