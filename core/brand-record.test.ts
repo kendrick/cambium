@@ -24,6 +24,7 @@ const seed = {
 
 const version = {
 	createdAt: '2026-09-16T12:00:00.000Z',
+	ordinal: 1,
 	seed,
 	tokenSet: null,
 	provider: 'anthropic',
@@ -65,20 +66,24 @@ describe('BrandRecordSchema', () => {
 	// named, or two versions can record identical inputs and hold different tokens. The
 	// interpretation preset is one of those: the same seed under Faithful and Expressive
 	// produces different systems with no model call between them.
-	it.each(['provider', 'model', 'scaleEngine', 'fontTable', 'interpretation', 'rawResponse'])(
-		'requires every version to record its %s',
-		(field) => {
-			const { [field]: _dropped, ...incomplete } = version as Record<string, unknown>;
+	it.each([
+		'provider',
+		'model',
+		'scaleEngine',
+		'fontTable',
+		'interpretation',
+		'rawResponse',
+		'ordinal',
+	])('requires every version to record its %s', (field) => {
+		const { [field]: _dropped, ...incomplete } = version as Record<string, unknown>;
 
-			expect(BrandRecordSchema.safeParse({ ...record, versions: [incomplete] }).success).toBe(
-				false,
-			);
-		},
-	);
+		expect(BrandRecordSchema.safeParse({ ...record, versions: [incomplete] }).success).toBe(false);
+	});
 
 	// Code that treats the last entry as current would otherwise silently select an older one.
+	// The ordinal runs correctly here (1, 2) so this failure is the chronological check's alone.
 	it('rejects a version history that runs out of chronological order', () => {
-		const older = { ...version, createdAt: '2026-09-15T12:00:00.000Z' };
+		const older = { ...version, ordinal: 2, createdAt: '2026-09-15T12:00:00.000Z' };
 
 		const result = BrandRecordSchema.safeParse({ ...record, versions: [version, older] });
 
@@ -108,10 +113,11 @@ describe('BrandRecordSchema', () => {
 
 describe('BrandRecordSchema integrity', () => {
 	// z.iso.datetime() accepts variable fractional precision, and lexicographic order is not
-	// chronological order across it: ".1Z" sorts before "Z" while naming a later instant.
+	// chronological order across it: ".1Z" sorts before "Z" while naming a later instant. The
+	// ordinal runs correctly here (1, 2) so this failure is the chronological check's alone.
 	it('orders versions by instant rather than by ISO text', () => {
 		const later = { ...version, createdAt: '2026-09-16T12:00:00.1Z' };
-		const earlier = { ...version, createdAt: '2026-09-16T12:00:00Z' };
+		const earlier = { ...version, ordinal: 2, createdAt: '2026-09-16T12:00:00Z' };
 
 		const result = BrandRecordSchema.safeParse({ ...record, versions: [later, earlier] });
 
@@ -155,5 +161,63 @@ describe('BrandRecordSchema integrity', () => {
 		const empty = { ...version, seed: null, tokenSet: null };
 
 		expect(BrandRecordSchema.safeParse({ ...record, versions: [empty] }).success).toBe(true);
+	});
+});
+
+/**
+ * `createdAt` alone cannot totally order a history: two versions can legally share an instant,
+ * which is exactly what the interpretation-preset path produces, since it re-derives a whole
+ * system with no model call to spread two versions across time. These tests pin the boundaries
+ * `ordinal` is supposed to hold, rather than trusting a comment to describe them correctly.
+ */
+describe('BrandRecordSchema version ordinals', () => {
+	it('requires a lone version to start at ordinal 1', () => {
+		const misnumbered = { ...version, ordinal: 2 };
+
+		const result = BrandRecordSchema.safeParse({ ...record, versions: [misnumbered] });
+
+		expect(result.success).toBe(false);
+	});
+
+	it('rejects a gap in the ordinal sequence', () => {
+		const first = { ...version, ordinal: 1, createdAt: '2026-09-16T12:00:00.000Z' };
+		const skipped = { ...version, ordinal: 3, createdAt: '2026-09-17T12:00:00.000Z' };
+
+		const result = BrandRecordSchema.safeParse({ ...record, versions: [first, skipped] });
+
+		expect(result.success).toBe(false);
+	});
+
+	// This is the scenario the ordinal exists for: two versions in the same millisecond, told
+	// apart only by which one actually came later.
+	it('accepts two versions sharing an instant when their ordinals still run in sequence', () => {
+		const first = { ...version, ordinal: 1 };
+		const second = { ...version, ordinal: 2 };
+
+		const result = BrandRecordSchema.safeParse({ ...record, versions: [first, second] });
+
+		expect(result.success).toBe(true);
+	});
+
+	// The defect this whole change exists to close: without the ordinal, this record was
+	// indistinguishable from the accepted case just above.
+	it('rejects two versions sharing both an instant and an ordinal', () => {
+		const first = { ...version, ordinal: 1 };
+		const duplicate = { ...version, ordinal: 1 };
+
+		const result = BrandRecordSchema.safeParse({ ...record, versions: [first, duplicate] });
+
+		expect(result.success).toBe(false);
+	});
+
+	// The two checks are independent: correct timestamps do not excuse an ordinal running
+	// backward.
+	it('rejects an ordinal that runs backward even though timestamps run forward', () => {
+		const first = { ...version, ordinal: 2, createdAt: '2026-09-16T12:00:00.000Z' };
+		const second = { ...version, ordinal: 1, createdAt: '2026-09-17T12:00:00.000Z' };
+
+		const result = BrandRecordSchema.safeParse({ ...record, versions: [first, second] });
+
+		expect(result.success).toBe(false);
 	});
 });

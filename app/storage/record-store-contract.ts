@@ -7,6 +7,7 @@ import type { RecordStore } from './record-store';
 function makeVersion(overrides: Partial<BrandVersion> = {}): BrandVersion {
 	return {
 		createdAt: '2026-01-01T00:00:00.000Z',
+		ordinal: 1,
 		seed: null,
 		tokenSet: null,
 		provider: 'anthropic',
@@ -114,7 +115,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			const versionsAtPutTime = [...record.versions];
 			await store.put(record);
 
-			record.versions.push(makeVersion({ interpretation: 'faithful' }));
+			record.versions.push(makeVersion({ ordinal: 2, interpretation: 'faithful' }));
 
 			expect(await store.get(record.id)).toEqual({ ...record, versions: versionsAtPutTime });
 		});
@@ -130,7 +131,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 
 			const fetched = await store.get(record.id);
 			const versionsBeforeMutation = fetched ? [...fetched.versions] : [];
-			fetched?.versions.push(makeVersion({ interpretation: 'faithful' }));
+			fetched?.versions.push(makeVersion({ ordinal: 2, interpretation: 'faithful' }));
 
 			expect((await store.get(record.id))?.versions).toEqual(versionsBeforeMutation);
 		});
@@ -139,17 +140,40 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		// versions unchanged": generating one is the record library's job and out of scope here,
 		// but the store must not corrupt an earlier version when a caller re-puts a longer history.
 		it('leaves earlier versions unchanged when a longer history is put under the same id', async () => {
-			const first = makeVersion({ createdAt: '2026-01-01T00:00:00.000Z' });
+			const first = makeVersion({ ordinal: 1, createdAt: '2026-01-01T00:00:00.000Z' });
 			const record = makeRecord({ versions: [first] });
 			await store.put(record);
 
 			const second = makeVersion({
+				ordinal: 2,
 				createdAt: '2026-01-02T00:00:00.000Z',
 				interpretation: 'expressive',
 			});
 			await store.put({ ...record, versions: [first, second] });
 
 			expect((await store.get(record.id))?.versions).toEqual([first, second]);
+		});
+
+		// Neither the shape above nor the schema's own tests exercise more than two versions, so
+		// a store that reorders on the way out, or drops one from the middle, has nothing here to
+		// catch it. Three versions, checked as one array so both position and count matter.
+		it('preserves version order and drops none of a longer history', async () => {
+			const v1 = makeVersion({ ordinal: 1, createdAt: '2026-01-01T00:00:00.000Z' });
+			const v2 = makeVersion({
+				ordinal: 2,
+				createdAt: '2026-01-02T00:00:00.000Z',
+				interpretation: 'expressive',
+			});
+			const v3 = makeVersion({
+				ordinal: 3,
+				createdAt: '2026-01-03T00:00:00.000Z',
+				interpretation: 'faithful',
+			});
+			const record = makeRecord({ versions: [v1, v2, v3] });
+
+			await store.put(record);
+
+			expect((await store.get(record.id))?.versions).toEqual([v1, v2, v3]);
 		});
 	});
 

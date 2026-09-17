@@ -7,7 +7,7 @@ import { TokenSetSchema } from './token-set';
  * Bumped whenever a stored record's shape changes. Parsing rejects anything else, because
  * the export archive is the only migration path and it only works if a mismatch is loud.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * Only the downscaled image actually sent to the model is stored, plus a hash of the
@@ -39,9 +39,18 @@ export const FontTableRefSchema = z.strictObject({
  * `rawResponse` is the model's output as it arrived, kept so a version stays diagnosable long
  * after the call and so #23 can show it when parsing failed. It is null exactly when no model
  * call produced the version, which is the interpretation-preset case above.
+ *
+ * `ordinal` exists because `createdAt` cannot totally order a history by itself: two versions
+ * can legally share an instant, and the interpretation-preset path just above is exactly the
+ * one likely to produce that, since it re-derives a whole system with no model call and
+ * therefore no network round trip to spread two versions across. `createdAt` still says when a
+ * version was made; `ordinal` says which one is actually later when that isn't enough. It
+ * starts at 1 for a record's first version and increases by exactly one with no gaps, checked
+ * independently of `createdAt` in `BrandRecordSchema`'s refinement below.
  */
 export const BrandVersionSchema = z.strictObject({
 	createdAt: z.iso.datetime(),
+	ordinal: z.number().int().positive(),
 	seed: BrandSeedSchema.nullable(),
 	tokenSet: TokenSetSchema.nullable(),
 	provider: z.string().min(1),
@@ -79,6 +88,21 @@ export const BrandRecordSchema = z
 					code: 'custom',
 					path: ['versions', index, 'createdAt'],
 					message: 'versions must run oldest first',
+				});
+			}
+		});
+
+		// Independent of the createdAt check above: two versions can legally share an instant
+		// (the interpretation-preset path makes no model call, so nothing spreads them across
+		// time), and ordinal is what still orders that pair. A gap or a repeat here is corrupt
+		// regardless of what the timestamps say.
+		record.versions.forEach((version, index) => {
+			const expected = index + 1;
+			if (version.ordinal !== expected) {
+				ctx.addIssue({
+					code: 'custom',
+					path: ['versions', index, 'ordinal'],
+					message: `expected ordinal ${expected}, starting at 1 with no gaps`,
 				});
 			}
 		});
