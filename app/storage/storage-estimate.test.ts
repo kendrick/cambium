@@ -54,8 +54,8 @@ describe('requestPersistentStorage', () => {
 		expect(await requestPersistentStorage(storage)).toBe(true);
 	});
 
-	// A decline is not a failure. Chrome grants persistence on engagement heuristics, so the same
-	// request can be worth making again once the user has more history with the site.
+	// A decline is not a failure. The caller has to see it apart from a missing `persist()`, which is
+	// why it comes back as false rather than as the null that means the browser cannot answer.
 	it('reports a refusal as a refusal rather than an error', async () => {
 		const storage = { persist: async () => false } as StorageManager;
 
@@ -71,6 +71,21 @@ describe('requestPersistentStorage', () => {
 		vi.stubGlobal('navigator', { storage: { persist: async () => true } });
 
 		expect(await requestPersistentStorage()).toBe(true);
+	});
+
+	// Pins what the docblock promises. A rejection is not flattened into the null that means the
+	// browser cannot answer, because a caller wiring this into a save decides for itself whether a
+	// failed durability request is worth showing.
+	it('lets a rejection through rather than answering null', async () => {
+		const storage = {
+			persist: async (): Promise<boolean> => {
+				throw new DOMException('insecure origin', 'SecurityError');
+			},
+		} as StorageManager;
+
+		await expect(requestPersistentStorage(storage)).rejects.toMatchObject({
+			name: 'SecurityError',
+		});
 	});
 });
 
