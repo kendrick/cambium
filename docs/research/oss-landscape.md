@@ -60,6 +60,9 @@ The entry file imports only the symbols Cambium would actually use. That matters
 | 8. Testing | `axe-core` | 4.13.0 | 2026-08-05 | MPL-2.0 | dev only | **Adopt** as a devDependency |
 | 8. Testing | `vitest-axe` | 0.1.0 | **2022-10-21** | MIT |, | **Avoid, abandoned trap** |
 | 8. Testing | `jest-axe` | 11.0.0 | 2026-07-26 | MIT | dev only | **Fallback** if stuck on jsdom |
+| 9. State management | `zustand` | 5.0.15 | 2026-08-13 | MIT | 0.4 kB | **Adopt** |
+| 9. State management | `jotai` | 3.0.0 | 2026-09-08 | MIT | 3.2 kB | **Avoid**—wrong shape for one store |
+| 9. State management | `valtio` | 2.3.2 | 2026-05-01 | MIT | 2.5 kB | **Avoid**—mutation idiom fights the ticket |
 
 ### The Five Loudest Warnings
 
@@ -1086,6 +1089,56 @@ Testing tokens through axe gives the slowest possible version of the first quest
 Token contrast assertions go in plain Vitest against the math. Rendered-component a11y goes through `axe.run()` in browser mode, which also serves spec story 76 (the app itself must be keyboard navigable and screen-reader usable). IndexedDB tests get `import 'fake-indexeddb/auto'` in `setupFiles`.
 
 **Do not install** `vitest-axe` or `@types/jest-axe`.
+
+## 9. Workspace State Management
+
+Issue #21 names Zustand by name for the workspace UI store: the record that is open, the active version, uncommitted seed edits, and the active interpretation preset. The ADR requires a measured verdict before that adoption starts, so this section supplies one.
+
+### zustand 5.0.15—Adopt
+
+Published 2026-08-13, MIT, zero runtime dependencies. Confirmed against the [registry](https://registry.npmjs.org/zustand) and the [LICENSE file](https://github.com/pmndrs/zustand/blob/main/LICENSE) in the tarball. The [repository](https://github.com/pmndrs/zustand) carries two open issues against 58,700 stars, both documentation requests, and last pushed 2026-09-14. That is the healthiest maintenance signal of anything in this document.
+
+**Measured size.** The `create` entry pulls in React's `useSyncExternalStore`, so these numbers externalize `react` and `react-dom`: Cambium already ships React 19.3.0 in first load, and bundling it a second time here would price it twice. Same command as the rest of this document, with that one addition: `esbuild <entry> --bundle --minify --format=esm --platform=browser --target=es2022 --external:react --external:react-dom`, then `gzip -9`.
+
+| Import | Gzip |
+|---|---|
+| `zustand/vanilla`'s `createStore` alone | 0.3 kB |
+| `zustand`'s `create`, React attached | 0.4 kB |
+| plus `zustand/react/shallow`'s `useShallow` | 0.8 kB |
+| plus `zustand/middleware`'s `devtools` and `subscribeWithSelector` | 2.1 kB |
+| plus `zustand/middleware`'s `persist` (issue #21 forbids this) | 1.4 kB |
+
+`lib/bundle-budget.ts` sets aside 24 kB of first-load headroom. The whole store costs under half a kilobyte of it.
+
+**Node ESM: clean.** `import('zustand/vanilla')` and `import('zustand')` both resolve and run under plain Node 24, no jsdom, no DOM shim, no build step. Verified by constructing a store and calling `getState()` in a bare `node -e`. That satisfies issue #21's "store logic is tested without a browser" line directly: `zustand/vanilla` never touches React, so the store under test is the same store the app runs.
+
+**Tree-shaking: real.** `package.json` sets `sideEffects: false`, and the number backs it up: importing only `subscribeWithSelector` out of the 16 kB `zustand/middleware` bundle measures 39 bytes gzipped, not the whole file. The core store carries no reference to middleware at all; grepping the built ESM for the string `middleware` turns up nothing outside `middleware.mjs` itself. Core and middleware are separate files, not one bundle saved by a dead-code eliminator's mercy.
+
+**No trap shaped like `chroma-js/light`, but a related one exists.** Every subpath the README documents resolves and runs: `zustand`, `zustand/vanilla`, `zustand/react`, `zustand/react/shallow`, `zustand/shallow`, `zustand/middleware`, `zustand/middleware/immer`. `zustand/traditional`, the legacy `useStore(api, selector, equalityFn)` entry, is the exception. It imports `use-sync-external-store/shim/with-selector.js` directly, and that package is an optional peer dependency: neither npm nor pnpm installs it automatically. Import `zustand/traditional` without also adding `use-sync-external-store` as a direct dependency, and the import fails with `Cannot find package 'use-sync-external-store'`. Issue #21 has no reason to touch that entry point; plain `useStore(selector)` is the current API and needs nothing extra. A later ticket could still hit this blind.
+
+**Types ship inline. No separate package ever existed.** `package.json` points `types` straight at `./index.d.ts`. `@types/zustand` returns a 404 from the registry, not a deprecation notice; it was never published. A `create<State>((set) => ...)` call typechecked correctly under `--strict` with no extra configuration.
+
+**One TypeScript trap, caught at compile time rather than runtime.** Compose middleware with the plain call form and inference breaks silently: `create<State>(devtools(subscribeWithSelector(...)))` fails to typecheck with a `$$storeMutators` mismatch, while the curried form, `create<State>()(devtools(subscribeWithSelector(...)))`, passes. The extra `()` is easy to miss, and the error it produces without it names a generic, not the missing parens. Issue #21 forbids persistence middleware outright; if `devtools` or `subscribeWithSelector` land later, start with the curried form.
+
+**Persistence middleware is separable, and issue #21's ask holds up.** `persist` lives in the same file as `devtools`, `subscribeWithSelector`, `combine`, and `redux`, but nothing in the core store imports it, and nothing forces a caller to. A store built from plain `create()` never touches storage; the store's own interface is what calls `idb`, matching the issue's own framing: "It calls the storage layer. It does not become the storage layer." A grep for `zustand/middleware` after the ticket lands is a real, mechanical check, and the issue already names it as the done condition.
+
+**One closed CVE report, checked and dismissed.** Zustand's issue tracker carries a closed report titled "CVE-2025-55182 (CRITICAL)." Reading it: the CVE is a React Server Components remote-code-execution bug, filed against `pmndrs/zustand` only because Zustand depends on React, not because Zustand is affected. Cambium already ships React 19.3.0, past the 19.2.1 patch line, and ships as a static export with no server functions. [OSV.dev](https://osv.dev) carries no advisory against the `zustand` package at any version.
+
+### The Alternative
+
+Three options surfaced besides Zustand. None displaces it for this ticket.
+
+**Jotai** composes state bottom-up from many small atoms rather than one store object. Measured: an `atom` plus `useAtom` kit costs 3.2 kB gzipped, seven times Zustand's core. Issue #21 wants one store holding four named pieces of state that read and commit together. That shape fits a single top-down store natively; forcing it out of composed atoms works against the library's own grain.
+
+**Valtio** wraps state in a Proxy so mutation looks and feels direct. Measured: a `proxy` plus `useSnapshot` kit costs 2.5 kB gzipped. Size is not the problem here. Issue #21's acceptance criteria state that committing a generation creates a new version and never mutates an existing one, and Valtio's entire pitch is transparent in-place mutation, exactly the habit this ticket exists to prevent. Zustand's `set((s) => ({ ...s, ... }))` pattern already reads as "produce a new state" before a single line of Cambium's own code runs.
+
+**Plain React context with `useSyncExternalStore`** costs nothing to install. It is also, almost verbatim, what Zustand's vanilla core already is: a `Set` of listeners plus `setState`, `getState`, and `subscribe`, at 0.3 kB of shipped code. Writing that by hand gives up what the library already carries at that size: selector memoization, an equality-function hook (`useShallow`), and a pattern any future contributor, human or agent, already knows how to read and test.
+
+One store object matches the ticket's four named fields. The update pattern already reads as immutable. The vanilla entry point satisfies "tested without a browser" with no adapter code. Zustand fits both this ticket's shape and its size budget.
+
+### Recommendation
+
+Pin `zustand@5.0.15` exactly, matching the baseline's version policy. Import from `zustand` where a component needs the store and from `zustand/vanilla` where a test does not want React in the loop. Never import `persist`. If `devtools` or `subscribeWithSelector` show up later, reach for the curried `create<State>()(...)` form from the start, and add `use-sync-external-store` as a direct dependency before anything imports `zustand/traditional`.
 
 ## Rollup: The Bundle, and What Is Actually Left to Build
 
