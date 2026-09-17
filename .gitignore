@@ -3,6 +3,7 @@ node_modules/
 out/
 next-env.d.ts
 *.tsbuildinfo
+swatches/
 
 .env
 .env.local
