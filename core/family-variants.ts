@@ -134,14 +134,40 @@ const NOTO_COVERAGE_BASES: readonly string[] = ['Noto Sans', 'Noto Serif'];
 
 /**
  * The `Noto Sans` and `Noto Serif` cuts that vary something other than script coverage, so they
- * stay distinct for the reason `Roboto Condensed` and `Roboto Slab` do. Counted against the pinned
- * file, these four are the whole set.
+ * stay distinct for the reason `Roboto Condensed` and `Roboto Slab` do.
+ *
+ * The prefix rule above cannot tell a script from anything else in that position, and the structural
+ * tag cannot either: counted against the pinned file, 159 of the 160 `Noto Sans` cuts and 40 of the
+ * 42 `Noto Serif` cuts carry the same `/Sans/Humanist` or `/Serif/Transitional` tag as their base.
+ * That shared tag is exactly why collapsing the script cuts is right, and it is also why these nine
+ * reach a pool and have to be named one at a time.
+ *
+ * `Mono` is the one worth reading twice. `Noto Sans Mono` is a monospace design carrying
+ * `/Sans/Humanist` and no `/Monospace/Monospace` row — no Noto family carries that tag at all — so
+ * it never reaches the mono pool and folding it onto `Noto Sans` costs a distinct sans answer
+ * rather than a mono one. Its `/Quality/Spacing` is 80 against the base's 70, so a craft ranking
+ * really does separate them.
+ *
+ * `Symbols 2` carries no structural tag, so it reaches no pool either way and is here for symmetry
+ * with `Symbols` rather than to fix anything.
+ *
+ * Known limitation, deliberately left. Un-collapsing these means `Noto Sans Math` and friends can
+ * now hold a slot of their own, and a notation face is no one's brand typeface. Nothing in the
+ * table marks a face as non-text, #42 asks for no such filter, and inventing one is a judgement
+ * about candidacy rather than about collapsing. `Noto Znamenny Musical Notation` shows the limit is
+ * older than this set: it sits under neither base, so it never collapsed, and it has been reaching
+ * the sans pool on its own all along.
  */
 const NOTO_NON_SCRIPT_CUTS: ReadonlySet<string> = new Set([
 	'Display',
+	'Indic Siyaq Numbers',
+	'Math',
+	'Mayan Numerals',
 	'Mono',
+	'SignWriting',
 	'Symbols',
 	'Symbols 2',
+	'Tamil Supplement',
 ]);
 
 /**

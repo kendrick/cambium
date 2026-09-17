@@ -83,14 +83,44 @@ describe('canonicalFamily', () => {
 		expect(canonicalFamily(family)).toBe(canonical);
 	});
 
-	// The cuts that vary something other than coverage. A mono or display cut of Noto Sans is a
-	// different design, exactly as Roboto Mono is, so it keeps its own slot.
-	it.each(['Noto Sans Mono', 'Noto Sans Display', 'Noto Serif Display', 'Noto Sans Symbols 2'])(
-		'leaves %s alone, where the cut is not script coverage',
-		(family) => {
-			expect(canonicalFamily(family)).toBe(family);
-		},
-	);
+	// The cuts that vary something other than coverage. Every one of these carries the same
+	// structural tag as its base, so the tag cannot tell them apart and each has to be named.
+	// `Noto Sans Mono` is the sharp one: a monospace design tagged `/Sans/Humanist` with no
+	// `/Monospace/Monospace` row, so folding it onto the base loses a distinct sans answer.
+	it.each([
+		'Noto Sans Mono',
+		'Noto Sans Display',
+		'Noto Serif Display',
+		'Noto Sans Math',
+		'Noto Sans Symbols',
+		'Noto Sans Symbols 2',
+		'Noto Sans SignWriting',
+		'Noto Sans Mayan Numerals',
+		'Noto Sans Indic Siyaq Numbers',
+		'Noto Sans Tamil Supplement',
+	])('leaves %s alone, where the cut is not script coverage', (family) => {
+		expect(canonicalFamily(family)).toBe(family);
+	});
+
+	// The rule the exceptions sit inside still has to hold, or the exception set would be doing all
+	// the work. `Tamil Supplement` is excepted while plain `Tamil` collapses, which is the pair most
+	// likely to be broken by a careless edit to either list.
+	it.each([
+		['Noto Sans Tamil', 'Noto Sans'],
+		['Noto Sans Sunuwar', 'Noto Sans'],
+		['Noto Serif Todhri', 'Noto Serif'],
+	])('still collapses the script cut %s', (family, canonical) => {
+		expect(canonicalFamily(family)).toBe(canonical);
+	});
+
+	// Not under either base, so the prefix rule never reached it. Pinned because it is the standing
+	// example of the limitation recorded on `NOTO_NON_SCRIPT_CUTS`: a notation face nothing marks as
+	// non-text, reaching the sans pool on its own.
+	it('leaves Noto Znamenny Musical Notation alone, having never collapsed it', () => {
+		expect(canonicalFamily('Noto Znamenny Musical Notation')).toBe(
+			'Noto Znamenny Musical Notation',
+		);
+	});
 
 	// Noto families that are their own design rather than a cut of Noto Sans or Noto Serif. The
 	// prefix rule must not reach them.
