@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	StorageQuotaExceededError,
 	estimateStorageUsage,
+	requestPersistentStorage,
 	toStorageWriteError,
 } from './storage-estimate';
 
@@ -29,6 +30,27 @@ describe('estimateStorageUsage', () => {
 
 	it('resolves null when the browser answers with no figures', async () => {
 		expect(await estimateStorageUsage(stubStorageManager({}))).toBeNull();
+	});
+});
+
+describe('requestPersistentStorage', () => {
+	it('reports a granted origin', async () => {
+		const storage = { persist: async () => true } as StorageManager;
+
+		expect(await requestPersistentStorage(storage)).toBe(true);
+	});
+
+	// A decline is not a failure. Chrome grants persistence on engagement heuristics, so the same
+	// request can be worth making again once the user has more history with the site.
+	it('reports a refusal as a refusal rather than an error', async () => {
+		const storage = { persist: async () => false } as StorageManager;
+
+		expect(await requestPersistentStorage(storage)).toBe(false);
+	});
+
+	it('resolves null where the Storage API is unavailable', async () => {
+		expect(await requestPersistentStorage(undefined)).toBeNull();
+		expect(await requestPersistentStorage({} as StorageManager)).toBeNull();
 	});
 });
 

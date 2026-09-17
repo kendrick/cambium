@@ -1,7 +1,7 @@
 /**
- * Usage and the quota failure sit beside `RecordStore` as exports rather than on it. The interface
- * describes moving records, and how much room the origin has left is a fact about the browser
- * rather than about any one store. An HTTP implementation could not answer it at all.
+ * Usage, durability, and the quota failure sit beside `RecordStore` as exports rather than on it.
+ * The interface describes moving records, and how much room the origin has left is a fact about
+ * the browser rather than about any one store. An HTTP implementation could not answer it at all.
  */
 
 /** Both numbers are bytes. The platform's own `usage` and `quota` name no unit. */
@@ -33,6 +33,33 @@ export async function estimateStorageUsage(
 	return usage === undefined || quota === undefined
 		? null
 		: { usedBytes: usage, quotaBytes: quota };
+}
+
+/**
+ * Asks the browser to keep this origin's data when the device runs short of room. Until something
+ * asks, the data is best-effort and eviction-eligible, and an evicted origin takes every saved
+ * token set with it. A record holds a brand's whole version history, so a single eviction is a lot
+ * of lost work that the user is never told about.
+ *
+ * Deliberately not called from `put`. `persist()` wants a user gesture behind it, and a store
+ * method cannot know whether it has one, so asking from the write path spends the request at an
+ * arbitrary moment the browser is free to decline. The flow that saves a brand for the first time
+ * owns the call, from inside the click that triggers it. See `docs/research/oss-landscape.md`
+ * section 7a for the compatibility figures behind that advice.
+ *
+ * Resolves true once the origin is persistent, false when the browser declined, and null where the
+ * API does not exist, which is the same answer `estimateStorageUsage` gives. A decline is worth
+ * telling apart from a missing `persist()`, because a browser that says no today can say yes to
+ * the same request later, once the user has more history with the site.
+ */
+export async function requestPersistentStorage(
+	storage: StorageManager | undefined = globalThis.navigator?.storage,
+): Promise<boolean | null> {
+	if (!storage?.persist) {
+		return null;
+	}
+
+	return storage.persist();
 }
 
 /**
