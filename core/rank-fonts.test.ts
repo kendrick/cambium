@@ -165,8 +165,11 @@ describe('rankFonts', () => {
 	it('ranks display on the seed personality and body on the quality axes', () => {
 		const { display, body } = pairingOf(seedWith({}));
 
-		expect(familiesOf(display)).toEqual(['Geo Sans', 'Crack Sans', 'Round Sans']);
-		expect(familiesOf(body)).toEqual(['Round Sans', 'Loud Sans', 'Geo Sans']);
+		// `Geo Sans Thai` leads both, on different grounds: the calm seed reads its /Expressive/Calm
+		// 100, and body reads its 100/100 quality pair. `Crack Sans` places second on personality and
+		// is absent from body, which is the themed exclusion.
+		expect(familiesOf(display)).toEqual(['Geo Sans Thai', 'Crack Sans', 'Round Sans']);
+		expect(familiesOf(body)).toEqual(['Geo Sans Thai', 'Round Sans', 'Loud Sans']);
 	});
 
 	// The acceptance criteria and the planning doc both say this backwards. A face tagged
@@ -188,14 +191,29 @@ describe('rankFonts', () => {
 		const { display, body } = pairingOf(seedWith({ displayDiffersFromBody: false }));
 
 		expect(body).toEqual(display);
-		expect(familiesOf(display)).toEqual(['Geo Sans', 'Round Sans', 'Loud Sans']);
+		// Display's mode over body's exclusion: ranked on personality, with themed `Crack Sans` gone.
+		expect(familiesOf(display)).toEqual(['Geo Sans Thai', 'Round Sans', 'Loud Sans']);
 	});
 
+	// Which member of the group wins is the ranking's business; that only one of them takes a slot
+	// is #42's requirement. Asserting the count rather than a name is what keeps this test about the
+	// requirement.
 	it('keeps a family to one slot per role however many script variants it has', () => {
-		const { display, body } = pairingOf(seedWith({}));
+		const { display, body, mono } = pairingOf(seedWith({}));
+		const geoSans = (candidates: FontCandidate[]) =>
+			familiesOf(candidates).filter((family) => family.startsWith('Geo Sans'));
 
-		expect(familiesOf(display)).not.toContain('Geo Sans Thai');
-		expect(familiesOf(body)).not.toContain('Geo Sans Thai');
+		expect(geoSans(display)).toHaveLength(1);
+		expect(geoSans(body)).toHaveLength(1);
+		expect(geoSans(mono)).toHaveLength(0);
+	});
+
+	// The bug this pins: the group used to inherit the bare base's score and place in the order, so
+	// `Geo Sans` at 40/40 replaced `Geo Sans Thai` at 100/100 and sank to the bottom of body.
+	it('ranks a variant group where its strongest member ranked', () => {
+		const { body } = pairingOf(seedWith({}));
+
+		expect(body[0]).toMatchObject({ family: 'Geo Sans Thai', score: 100 });
 	});
 
 	it('returns at most three candidates, and fewer when the pool holds fewer', () => {
@@ -213,8 +231,8 @@ describe('rankFonts', () => {
 	it('applies an explicit mode to every role', () => {
 		const { display, body, mono } = pairingOf(seedWith({}), { mode: 'craft' });
 
-		expect(familiesOf(display)).toEqual(['Crack Sans', 'Round Sans', 'Loud Sans']);
-		expect(familiesOf(body)).toEqual(['Round Sans', 'Loud Sans', 'Geo Sans']);
+		expect(familiesOf(display)).toEqual(['Geo Sans Thai', 'Crack Sans', 'Round Sans']);
+		expect(familiesOf(body)).toEqual(['Geo Sans Thai', 'Round Sans', 'Loud Sans']);
 		expect(familiesOf(mono)).toEqual(['Fixed Mono', 'Slim Mono', 'Pixel Mono']);
 	});
 
@@ -249,14 +267,36 @@ describe('rankFonts', () => {
 		it('names the tag and the score that placed a candidate', () => {
 			const { display } = pairingOf(seedWith({}));
 
-			expect(display[0]!.rationale).toContain('100 on /Sans/Geometric');
+			expect(display[0]!.rationale).toContain('Scores 90 on /Sans/Geometric');
 		});
 
-		it('says so when the tone matched nothing and the category answered', () => {
+		// Two routes reach the category pool and the rationale has to tell them apart. There is no
+		// grotesque serif in the taxonomy at all, so claiming a match was attempted would be false.
+		it('says the taxonomy has no such tone when the pair carries no tag', () => {
 			const { display } = pairingOf(seedWith({ category: 'serif', tone: 'grotesque' }));
 
 			expect(familiesOf(display)).toEqual(['Sharp Serif', 'Old Serif']);
-			expect(display[0]!.rationale).toContain('the whole serif category answered');
+			expect(display[0]!.rationale).toContain('the taxonomy has no grotesque serif');
+		});
+
+		// The other route: humanist sans is a real pair with real tags, and this table carries no
+		// family on either of them.
+		it('says the tone found no family when the pair is tagged but unmatched', () => {
+			const { display } = pairingOf(seedWith({ tone: 'humanist' }));
+
+			expect(display[0]!.rationale).toContain('no family here carries the humanist tags');
+			expect(display[0]!.rationale).toContain('the whole sans category answered');
+		});
+
+		// Monospace has no tone subdivision whatever the seed's tone, so every mono candidate takes
+		// the no-tag route rather than reporting a match that failed.
+		it('never tells a mono candidate its tone matched nothing', () => {
+			const { mono } = pairingOf(seedWith({ category: 'mono' }));
+
+			for (const candidate of mono) {
+				expect(candidate.rationale).not.toContain('no family here carries');
+				expect(candidate.rationale).toContain('the taxonomy has no');
+			}
 		});
 
 		it('says so when personality fell back to the quality axes', () => {

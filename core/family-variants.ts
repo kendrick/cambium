@@ -5,7 +5,7 @@
  * ...). Those name a distinct type family, not a coverage variant of one, and folding them in
  * here would collapse `Roboto` and `Roboto Slab` into a single slot.
  */
-export const VARIANT_SUFFIXES: readonly string[] = [
+const VARIANT_SUFFIXES: readonly string[] = [
 	'Thai Looped',
 	'JP',
 	'KR',
@@ -118,35 +118,27 @@ export function canonicalFamily(family: string): string {
 }
 
 /**
- * Keeps one item per canonical family. Prefers the member whose family name IS the canonical
- * base; failing that, the earliest member in input order. Returns the kept items in input order.
+ * Keeps the first item of each canonical family and drops the rest, in input order.
  *
- * The ranker calls this with a score-sorted list, so "earliest in input order" is how a variant
- * with no base sibling in the pool still wins on rank alone.
+ * The ranker calls this with a score-sorted list, so first means best-ranked, and the group lands
+ * exactly where its strongest member ranked.
+ *
+ * An earlier version preferred the bare base name over a higher-ranked variant, which read well
+ * and ranked wrong: the group inherited the base's position and score, so a family whose Thai
+ * variant carried the pool's best spacing could be demoted below faces it beat, or pushed out of
+ * the role entirely. Naming the base while reporting the variant's score is the other way to lose,
+ * since the rationale would then credit tags the named family does not carry. Whichever member
+ * actually won keeps its own name, score, and tags.
  */
 export function collapseVariants<T>(items: readonly T[], familyOf: (item: T) => string): T[] {
-	const keptIndexByCanonical = new Map<string, number>();
+	const seen = new Set<string>();
 
-	items.forEach((item, index) => {
-		const family = familyOf(item);
-		const canonical = canonicalFamily(family);
-		const currentIndex = keptIndexByCanonical.get(canonical);
+	return items.filter((item) => {
+		const canonical = canonicalFamily(familyOf(item));
 
-		if (currentIndex === undefined) {
-			keptIndexByCanonical.set(canonical, index);
-			return;
-		}
+		if (seen.has(canonical)) return false;
 
-		// A base form beats an earlier-ranked variant when one appears; two variants, or two
-		// bases, otherwise keep whichever came first.
-		const currentIsBase = familyOf(items[currentIndex]) === canonical;
-		const candidateIsBase = family === canonical;
-
-		if (!currentIsBase && candidateIsBase) {
-			keptIndexByCanonical.set(canonical, index);
-		}
+		seen.add(canonical);
+		return true;
 	});
-
-	const keptIndices = new Set(keptIndexByCanonical.values());
-	return items.filter((_, index) => keptIndices.has(index));
 }

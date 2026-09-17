@@ -1,4 +1,10 @@
-import type { BrandSeed, FontCandidate, SuggestedPairing, TypeClassification } from './brand-seed';
+import type {
+	BrandSeed,
+	ExpressiveAxis,
+	FontCandidate,
+	SuggestedPairing,
+	TypeClassification,
+} from './brand-seed';
 import { canonicalFamily, collapseVariants } from './family-variants';
 import {
 	CATEGORY_TAGS,
@@ -65,6 +71,14 @@ function indexByFamily(table: FontTable): Map<string, FamilyTags> {
 	return index;
 }
 
+/**
+ * `core/font-table.ts` derives its own `/Expressive/` tag names from `ExpressiveAxisSchema` and
+ * warns against a second spelling of them. This is the only place that builds one here.
+ */
+function expressiveTag(axis: ExpressiveAxis): TagName {
+	return `/Expressive/${axis}`;
+}
+
 /** A missing row scores zero, per `Score`: the table omits anything it would rate below 40. */
 function scoreOn(tags: FamilyTags | undefined, tag: string): number {
 	return tags?.get(tag) ?? 0;
@@ -82,42 +96,34 @@ function craftScore(tags: FamilyTags | undefined): number {
  * The seed's own score on an axis is that axis's weight, so a brand reading 90 calm and 30
  * competent is ranked mostly on calm. Dividing by the seed's total rather than by the axis count is
  * what keeps an axis the seed never mentioned from voting zero.
+ *
+ * `top` names the axis that contributed most, weighted the same way, for the rationale to quote.
+ * It shares this loop because the two have to agree: an axis picked on its raw tag score could name
+ * one the ranking barely leaned on, which would be a true sentence about the wrong reason.
  */
-function personalityScore(
+function expressiveReading(
 	tags: FamilyTags | undefined,
 	expressive: BrandSeed['expressive'],
-): number {
+): { score: number; top: { axis: ExpressiveAxis; score: number } | undefined } {
 	let weighted = 0;
 	let weight = 0;
+	let top: { axis: ExpressiveAxis; score: number } | undefined;
+	let topContribution = 0;
 
 	for (const axis of expressive ?? []) {
-		weighted += axis.score * scoreOn(tags, `/Expressive/${axis.axis}`);
-		weight += axis.score;
-	}
-
-	return weight === 0 ? 0 : weighted / weight;
-}
-
-function topExpressiveAxis(
-	tags: FamilyTags | undefined,
-	expressive: BrandSeed['expressive'],
-): { axis: string; score: number } | undefined {
-	let best: { axis: string; score: number } | undefined;
-	let bestContribution = 0;
-
-	// Weighted contribution rather than raw tag score: an axis the seed barely asked for is not the
-	// reason a family ranked, however high the family scores on it.
-	for (const axis of expressive ?? []) {
-		const score = scoreOn(tags, `/Expressive/${axis.axis}`);
+		const score = scoreOn(tags, expressiveTag(axis.axis));
 		const contribution = axis.score * score;
 
-		if (contribution > bestContribution) {
-			bestContribution = contribution;
-			best = { axis: axis.axis, score };
+		weighted += contribution;
+		weight += axis.score;
+
+		if (contribution > topContribution) {
+			topContribution = contribution;
+			top = { axis: axis.axis, score };
 		}
 	}
 
-	return best;
+	return { score: weight === 0 ? 0 : weighted / weight, top };
 }
 
 /**
@@ -160,10 +166,18 @@ function rationaleFor(
 	fellBack: boolean,
 ): string {
 	const placement = placementTag(tags, category, tone, matched);
+
+	// Two different things reach the category pool, and saying both the same way misreports one of
+	// them. Six of the twelve pairs a seed can express have no tag in the taxonomy at all, monospace
+	// being all three of its own, so their rationale must not claim a match was attempted and failed.
+	// The other route is a tone that does have tags and found no family carrying them in this table.
+	const toneIsTagged = TONE_TAGS[category][tone].length > 0;
 	const placed =
 		matched === 'tone'
 			? `Scores ${placement.score} on ${placement.tag}, which is the tone classified above.`
-			: `Scores ${placement.score} on ${placement.tag}; the tone matched nothing, so the whole ${category} category answered.`;
+			: toneIsTagged
+				? `Scores ${placement.score} on ${placement.tag}; no family here carries the ${tone} tags, so the whole ${category} category answered.`
+				: `Scores ${placement.score} on ${placement.tag}; the taxonomy has no ${tone} ${category}, so the whole category answered.`;
 
 	if (rankedOn === 'craft') {
 		const axes = `${scoreOn(tags, SPACING_TAG)} on ${SPACING_TAG} and ${scoreOn(tags, WORDSPACE_TAG)} on ${WORDSPACE_TAG}`;
@@ -173,14 +187,14 @@ function rationaleFor(
 			: `${placed} Ranked on the quality axes: ${axes}.`;
 	}
 
-	const top = topExpressiveAxis(tags, seed.expressive);
+	const { top } = expressiveReading(tags, seed.expressive);
 
 	return top
-		? `${placed} Ranked on the seed's expressive characteristics, strongest at ${top.score} on /Expressive/${top.axis}.`
+		? `${placed} Ranked on the seed's expressive characteristics, strongest at ${top.score} on ${expressiveTag(top.axis)}.`
 		: `${placed} Ranked on the seed's expressive characteristics, which this family carries no tag for.`;
 }
 
-/** Rounds to an integer, and clamps a table whose scores run outside the band the schema accepts. */
+/** Clamps as well as rounds, because a fetched table can carry a score outside the band the schema accepts. */
 function toPercent(value: number): number {
 	return Math.min(100, Math.max(0, Math.round(value)));
 }
@@ -210,7 +224,7 @@ function rankRole(request: RoleRequest): FontCandidate[] {
 	const wantsPersonality = mode !== 'craft';
 	const fellBack =
 		wantsPersonality &&
-		pool.every((family) => personalityScore(index.get(family), seed.expressive) === 0);
+		pool.every((family) => expressiveReading(index.get(family), seed.expressive).score === 0);
 	const rankedOn = wantsPersonality && !fellBack ? 'personality' : 'craft';
 
 	const scored = pool.map((family) => {
@@ -219,7 +233,8 @@ function rankRole(request: RoleRequest): FontCandidate[] {
 		return {
 			family,
 			tags,
-			value: rankedOn === 'craft' ? craftScore(tags) : personalityScore(tags, seed.expressive),
+			value:
+				rankedOn === 'craft' ? craftScore(tags) : expressiveReading(tags, seed.expressive).score,
 		};
 	});
 
@@ -231,9 +246,9 @@ function rankRole(request: RoleRequest): FontCandidate[] {
 	// oxlint-disable-next-line unicorn/no-array-sort
 	const sorted = scored.sort((a, b) => b.value - a.value);
 
-	// After the sort and before the slice. Collapsing first would pick a family's representative by
-	// table position rather than by rank, and slicing first would let `IBM Plex Sans` and
-	// `IBM Plex Sans Thai` spend two of the three slots saying the same thing.
+	// Collapsing before the sort would pick a family's representative by table position rather than
+	// by rank, and slicing before it would let `IBM Plex Sans` and `IBM Plex Sans Thai` spend two of
+	// the three slots saying the same thing.
 	const collapsed = collapseVariants(sorted, (entry) => entry.family);
 
 	const derived: FontCandidate[] = collapsed.map((entry) => ({
@@ -248,6 +263,10 @@ function rankRole(request: RoleRequest): FontCandidate[] {
 	}
 
 	const canonical = canonicalFamily(named.family);
+
+	// The seed's own entry may arrive marked `derived` with a score, because the model writes that
+	// field itself. Nothing derived it from a table, so it is re-stamped here rather than trusted:
+	// #42 wants a mixed list to stay honest about which entries a ranking placed.
 	const invented: FontCandidate = {
 		provenance: 'invented',
 		family: named.family,
@@ -282,7 +301,16 @@ export function rankFonts(
 
 	const { category, tone, displayDiffersFromBody } = classification;
 	const index = indexByFamily(table);
+	// `xHeight` and `trackingFeel` are the seed's other type fields and neither ranks anything here.
+	// The taxonomy carries no metric for either, so #42 ranks on the tags that exist; sizing them is
+	// the type-scale work, not this.
+	//
+	// One mode per call rather than one per role. #42 asks for a mode that is "selectable per call",
+	// and a caller wanting to mix them can rank twice and take the roles it wants from each.
 	const modeFor = (role: Role): RankingMode => options.mode ?? DEFAULT_MODE[role];
+
+	// Only the first face the model named for a role. The rest of its list is the model's own
+	// ranking of a pool it never saw, which is the guess #42 exists to replace.
 	const namedFor = (role: Role): FontCandidate | undefined =>
 		modeFor(role) === 'model-led' ? seed.suggestedPairing?.[role][0] : undefined;
 
@@ -294,8 +322,12 @@ export function rankFonts(
 		tone,
 		mode: modeFor('display'),
 		// One face doing both jobs still has to set body copy, so the shared list drops the themed
-		// families body would have dropped. The ranking stays display's, because that one face is
-		// still the brand's expressive face.
+		// families body would have dropped. The ranking stays display's, and the asymmetry is the
+		// point: the filter is a hard constraint, since a Blackletter face cannot set a paragraph at
+		// all, while the mode is only a preference between faces that all can. Excluding what is
+		// unusable and then ranking the rest on brand character is a different call from ranking
+		// everything on spacing, and a brand that gets one face should still get a face with
+		// character.
 		excludeThemed: !displayDiffersFromBody,
 		named: namedFor('display'),
 	});

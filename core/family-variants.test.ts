@@ -54,7 +54,7 @@ interface Candidate {
 const byFamily = (candidate: Candidate) => candidate.family;
 
 describe('collapseVariants', () => {
-	it('keeps one entry per canonical family, named for the canonical base', () => {
+	it('keeps one entry per canonical family', () => {
 		const candidates: Candidate[] = [
 			{ family: 'IBM Plex Sans', score: 90 },
 			{ family: 'IBM Plex Sans Thai', score: 85 },
@@ -66,20 +66,21 @@ describe('collapseVariants', () => {
 		expect(kept).toEqual([{ family: 'IBM Plex Sans', score: 90 }]);
 	});
 
-	// Order in the input does not decide the winner when a base form is present: the base wins
-	// even when a variant was ranked first, because the ranker sorts by score before calling this.
-	it('prefers the base form over a higher-ranked variant', () => {
+	// The ranker sorts by score before calling, so the first member of a group is its best. Keeping
+	// the bare base name instead would hand the group the base's score and the base's place in the
+	// order, which demotes a family below faces its strongest member beat.
+	it('keeps the highest-ranked member even when the base form ranks below it', () => {
 		const candidates: Candidate[] = [
 			{ family: 'IBM Plex Sans Thai', score: 95 },
 			{ family: 'IBM Plex Sans', score: 70 },
 		];
 
 		expect(collapseVariants(candidates, byFamily)).toEqual([
-			{ family: 'IBM Plex Sans', score: 70 },
+			{ family: 'IBM Plex Sans Thai', score: 95 },
 		]);
 	});
 
-	it('falls back to the earliest member in input order when no base form is present', () => {
+	it('keeps the earliest member when no base form is present', () => {
 		const candidates: Candidate[] = [
 			{ family: 'Noto Sans JP', score: 88 },
 			{ family: 'Noto Sans KR', score: 92 },
@@ -110,8 +111,8 @@ describe('collapseVariants', () => {
 		expect(collapseVariants(candidates, byFamily)).toEqual(candidates);
 	});
 
-	// The output preserves the input's own order across groups, not the order canonical families
-	// were first seen or any score order: this function does not sort.
+	// The output preserves the input's own order, which for a score-sorted input is rank order.
+	// This function never sorts.
 	it('returns kept items in input order across interleaved groups', () => {
 		const candidates: Candidate[] = [
 			{ family: 'Noto Sans JP', score: 88 },
@@ -120,11 +121,9 @@ describe('collapseVariants', () => {
 			{ family: 'IBM Plex Sans', score: 70 },
 		];
 
-		// Noto Sans JP survives as the earliest of its ungrouped-by-base pair; IBM Plex Sans wins
-		// its group over the Thai variant despite ranking lower. Both keep their original slots.
 		expect(collapseVariants(candidates, byFamily)).toEqual([
 			{ family: 'Noto Sans JP', score: 88 },
-			{ family: 'IBM Plex Sans', score: 70 },
+			{ family: 'IBM Plex Sans Thai', score: 95 },
 		]);
 	});
 
