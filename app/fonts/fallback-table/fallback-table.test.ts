@@ -63,10 +63,11 @@ const CATEGORY_FALLBACK_PAIRS = new Set([
  * growth toward the scale of the upstream taxonomy, which is out of scope for this table.
  *
  * `lib/bundle-budget.ts` leaves roughly 24 kB of headroom under the 200 kB first-load budget, and
- * this table's chunk is the largest single claim on it. `pnpm test:bundle` cannot defend that
- * headroom yet: nothing imports `load-fallback-table.ts` until #42 wires the table provider, so a
- * real build never touches these rows and the budget passes whatever they weigh. The assertion
- * below is what holds the line in the meantime.
+ * this table's chunk is the largest single claim on it. `font-table-provider.ts` now imports
+ * `load-fallback-table.ts` on every fetch failure, so that import is real code rather than an
+ * orphan accessor, but `pnpm test:bundle` still cannot defend the headroom: no route imports the
+ * provider, so Next emits no chunk for the table and a real build never touches these rows. The
+ * assertion below is what holds the line.
  */
 const GZIPPED_CEILING_BYTES = 5_000;
 
