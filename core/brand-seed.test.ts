@@ -244,6 +244,20 @@ describe('ExpressiveSchema', () => {
 
 		expect(result.success).toBe(false);
 	});
+
+	// An axis is a named measurement, so a seed cannot hold two readings of it. Left
+	// unchecked, this parses even though tied scores are legal: 80 is not greater than 90,
+	// and nothing else looks at the axis name. #42 ranks on these scores, so a duplicate
+	// would silently double one axis's weight rather than fail.
+	it('rejects the same axis appearing twice, even when the scores still descend', () => {
+		const result = BrandSeedSchema.safeParse({
+			...colorsOnly,
+			expressive: [atAxis('Calm', 90), atAxis('Calm', 80)],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['expressive', 1, 'axis']);
+	});
 });
 
 describe('RectSchema', () => {

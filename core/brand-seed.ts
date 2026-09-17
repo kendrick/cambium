@@ -143,11 +143,32 @@ export const ExpressiveScoreSchema = z.strictObject({
  * Ranked means ordered, the same convention `rankedByScore` enforces for font candidates.
  * Every entry here carries a score, so unlike that refinement there is no invented/derived
  * split to filter out first.
+ *
+ * An axis is a named measurement, so a seed cannot hold two readings of it: the duplicate
+ * check below is the same shape `BrandRecordSchema` uses to reject a repeated reference
+ * image id. Without it, `[{Calm, 90}, {Calm, 80}]` would parse, since the ordering check
+ * only compares each score against the one before it and never looks at the axis name.
+ * #42 ranks on these scores, so a duplicate would silently double one axis's weight.
  */
 const rankedByExpressiveScore = z
 	.array(ExpressiveScoreSchema)
 	.refine((axes) => axes.every((axis, i) => i === 0 || axis.score <= axes[i - 1]!.score), {
 		message: 'expressive axes must run highest score first',
+	})
+	.superRefine((axes, ctx) => {
+		const seen = new Set<string>();
+
+		axes.forEach((axis, i) => {
+			if (seen.has(axis.axis)) {
+				ctx.addIssue({
+					code: 'custom',
+					path: [i, 'axis'],
+					message: `axis "${axis.axis}" is already ranked; a seed holds one reading per axis`,
+				});
+			}
+
+			seen.add(axis.axis);
+		});
 	});
 
 /**
