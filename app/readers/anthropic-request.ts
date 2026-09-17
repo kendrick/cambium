@@ -93,9 +93,13 @@ function buildContent(images: ReferenceImage[]) {
 
 /**
  * Builds the request body for `POST /v1/messages` only. No `fetch`, no headers, no API key: the
- * next wave's reader owns transport, and keeping this module blind to the key is what makes "no
- * key reaches the payload" a property a test can check here rather than a claim the reader has
- * to be trusted on.
+ * reader owns transport, and keeping this module blind to the key is what makes "no key reaches
+ * the payload" a property a test can check here rather than a claim the reader has to be trusted
+ * on.
+ *
+ * Neither branch below sends `temperature`, `top_p`, or `top_k`. All three are removed on
+ * claude-opus-5 and any of them returns a 400. Issue #1 pins temperature to zero "because it is
+ * free"—that line predates this model, and this code deliberately does not follow it.
  */
 export function buildSeedRequestBody(input: SeedRequestInput): Record<string, unknown> {
 	const body: Record<string, unknown> = {
@@ -105,9 +109,6 @@ export function buildSeedRequestBody(input: SeedRequestInput): Record<string, un
 		messages: [{ role: 'user', content: buildContent(input.images) }],
 	};
 
-	// `temperature`, `top_p`, and `top_k` are removed on claude-opus-5 and any of the three
-	// returns a 400. Issue #1 says temperature is pinned to zero "because it is free" — that line
-	// predates this model and this code deliberately does not follow it.
 	if (input.outputMode === 'structured') {
 		body.output_config = {
 			format: { type: 'json_schema', schema: SEED_JSON_SCHEMA },

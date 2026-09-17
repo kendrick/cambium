@@ -290,7 +290,10 @@ export const SEED_JSON_SCHEMA = {
 
 /**
  * Split from `SEED_USER_DIRECTIVE` so the standing half stays byte-identical across every
- * generation. That is what a cache breakpoint needs: the images vary, this does not.
+ * generation. The images vary, this does not, which is the prefix stability a cache breakpoint
+ * would need. Nothing sets one yet: `buildSeedRequestBody` sends this as a bare `system` string
+ * with no `cache_control`, and whether this prefix even clears the model's minimum cacheable
+ * length is unmeasured. The split costs nothing and leaves that door open.
  *
  * Says nothing about how the seed travels back. One prompt serves both request shapes: in
  * forced-tool mode the JSON arrives as the tool call's input, in structured mode as the whole
@@ -308,7 +311,7 @@ This is interpretation, not extraction. A logo or a screenshot almost never cont
 
 Return the seed as a single JSON object. All eleven fields must be present: keyColors, neutralTemperature, surfacePolarity, radiusCharacter, shadowCharacter, trackingFeel, typeClassification, suggestedPairing, typeScaleRatio, imageClassifications, expressive. Where the images do not answer a question, the value is null. Null is a real answer and beats a plausible guess, because a user can see a null and fill it in but cannot tell an invented value from an observed one.
 
-Read the field descriptions in the tool schema. They say what each field means and what range it takes.
+Read the field descriptions in the JSON schema. They say what each field means and what range it takes.
 
 Typography works differently from the rest. You are never asked to identify a typeface, and you should not try. A family name read off an image is a guess, and the interface has no way to mark it as one. Classify the characteristics you can see in typeClassification, then propose families that match them in suggestedPairing. A candidate is derived when you chose it because its published characteristics match that classification, and it carries a 0-to-100 score for how well. A candidate is invented when you named it from memory as a good fit with no matching behind it, and its score is null. Either way it carries a one-line rationale, which the user reads beside the family name.
 

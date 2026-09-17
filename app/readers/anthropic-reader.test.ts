@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ReferenceImage } from '../../core/brand-record';
 import { parseSeed } from '../../core/parse-seed';
@@ -19,6 +19,7 @@ import error403 from './fixtures/error-403-permission.json';
 import error413 from './fixtures/error-413-request-too-large.json';
 import error429 from './fixtures/error-429-rate-limit.json';
 import error500 from './fixtures/error-500-server.json';
+import error504 from './fixtures/error-504-gateway-timeout.json';
 import error529 from './fixtures/error-529-overloaded.json';
 import forcedToolSuccess from './fixtures/forced-tool-success.json';
 import malformedNoContentBlock from './fixtures/malformed-no-content-block.json';
@@ -89,6 +90,23 @@ async function rejection(promise: Promise<unknown>): Promise<AnthropicReaderErro
 
 	throw outcome instanceof Error ? outcome : new Error(String(outcome));
 }
+
+/**
+ * Every test drives the injected `fetch`, so nothing here should ever touch the global. Stubbing
+ * it to throw is what turns "the suite makes no live call" into something the suite enforces
+ * rather than something each new test has to remember. `core/purity.test.ts` guards the core the
+ * same way, and for the same reason: `fetch` is a live global under Node, so its absence cannot
+ * be asserted the way `document`'s can.
+ */
+beforeEach(() => {
+	vi.stubGlobal('fetch', () => {
+		throw new Error('the reader suite must not reach the network');
+	});
+});
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
 
 describe('createAnthropicBrandReader success', () => {
 	it('returns the structured text block verbatim, and the core accepts it', async () => {
@@ -161,6 +179,7 @@ describe('createAnthropicBrandReader failures', () => {
 		{ label: '413 request too large', fixture: error413, kind: 'request-too-large' },
 		{ label: '429 rate limit', fixture: error429, kind: 'rate-limit' },
 		{ label: '500 server', fixture: error500, kind: 'server' },
+		{ label: '504 gateway timeout', fixture: error504, kind: 'server' },
 		{ label: '529 overloaded', fixture: error529, kind: 'server' },
 	])('turns $label into a $kind error #23 can act on', async ({ fixture, kind }) => {
 		const error = await rejection(read(stubFetch(fixture)));

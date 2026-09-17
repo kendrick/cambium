@@ -126,8 +126,10 @@ const coloursOnlyExample = {
 };
 
 describe('seed prompt version', () => {
-	// Every fixture under core/fixtures/raw-responses/ carries this string, and each one asserts
-	// that this version produces the current eleven-key shape.
+	// Seven of the eight fixtures under core/fixtures/raw-responses/ were captured under this
+	// version, and each asserts that it produces the current eleven-key shape. The eighth,
+	// prose-not-json.json, is stamped seed-v2 and stays that way: it records a model answering in
+	// prose, which says nothing about a shape and so pins nothing to a version.
 	it('is the version the recorded fixtures were captured under', () => {
 		expect(SEED_PROMPT_VERSION).toBe('seed-v3');
 	});

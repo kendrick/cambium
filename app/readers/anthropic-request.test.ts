@@ -1,14 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ReferenceImage } from '../../core/brand-record';
-import { buildSeedRequestBody, SEED_REQUEST_MAX_TOKENS } from './anthropic-request';
+import {
+	type AnthropicOutputMode,
+	buildSeedRequestBody,
+	SEED_REQUEST_MAX_TOKENS,
+} from './anthropic-request';
 import { SEED_JSON_SCHEMA, SEED_TOOL_NAME } from './seed-prompt';
 
 function image(id: string, downscaled: string): ReferenceImage {
 	return { id, downscaled, originalHash: `sha256:${id}` };
 }
 
+const MODEL = 'claude-opus-5';
 const oneImage = [image('img-1', 'data:image/webp;base64,AA')];
+
+/** The model is fixed in every case below; the mode and the images are what each test varies. */
+function bodyFor(outputMode: AnthropicOutputMode, images: ReferenceImage[] = oneImage) {
+	return buildSeedRequestBody({ images, model: MODEL, outputMode });
+}
 
 /**
  * Forbidden regardless of where in the body they might appear, because a body assembled by hand
@@ -36,7 +46,7 @@ describe('buildSeedRequestBody', () => {
 	it.each(['structured', 'forced-tool'] as const)(
 		'never sends temperature, top_p, or top_k in %s mode',
 		(outputMode) => {
-			const body = buildSeedRequestBody({ images: oneImage, model: 'claude-opus-5', outputMode });
+			const body = bodyFor(outputMode);
 			const keys = collectKeys(body);
 
 			for (const forbidden of FORBIDDEN_KEYS) {
@@ -46,33 +56,21 @@ describe('buildSeedRequestBody', () => {
 	);
 
 	it('does not set stream', () => {
-		const body = buildSeedRequestBody({
-			images: oneImage,
-			model: 'claude-opus-5',
-			outputMode: 'structured',
-		});
+		const body = bodyFor('structured');
 
 		expect(body).not.toHaveProperty('stream');
 	});
 
 	it('sends the chosen model and max_tokens', () => {
-		const body = buildSeedRequestBody({
-			images: oneImage,
-			model: 'claude-opus-5',
-			outputMode: 'structured',
-		});
+		const body = bodyFor('structured');
 
-		expect(body.model).toBe('claude-opus-5');
+		expect(body.model).toBe(MODEL);
 		expect(body.max_tokens).toBe(SEED_REQUEST_MAX_TOKENS);
 	});
 
 	describe('structured mode', () => {
 		it('carries output_config.format.schema identical to SEED_JSON_SCHEMA and no tools', () => {
-			const body = buildSeedRequestBody({
-				images: oneImage,
-				model: 'claude-opus-5',
-				outputMode: 'structured',
-			});
+			const body = bodyFor('structured');
 
 			const outputConfig = body.output_config as { format: { type: string; schema: unknown } };
 			expect(outputConfig.format.type).toBe('json_schema');
@@ -82,11 +80,7 @@ describe('buildSeedRequestBody', () => {
 		});
 
 		it('disables thinking, coupled to the pinned high effort', () => {
-			const body = buildSeedRequestBody({
-				images: oneImage,
-				model: 'claude-opus-5',
-				outputMode: 'structured',
-			});
+			const body = bodyFor('structured');
 
 			expect(body.thinking).toEqual({ type: 'disabled' });
 			expect((body.output_config as { effort: string }).effort).toBe('high');
@@ -95,11 +89,7 @@ describe('buildSeedRequestBody', () => {
 
 	describe('forced-tool mode', () => {
 		it('carries exactly one strict tool named SEED_TOOL_NAME and a matching tool_choice', () => {
-			const body = buildSeedRequestBody({
-				images: oneImage,
-				model: 'claude-opus-5',
-				outputMode: 'forced-tool',
-			});
+			const body = bodyFor('forced-tool');
 
 			const tools = body.tools as { name: string; strict: boolean; input_schema: unknown }[];
 			expect(tools).toHaveLength(1);
@@ -110,27 +100,15 @@ describe('buildSeedRequestBody', () => {
 		});
 
 		it('leaves thinking unset so Opus 5 runs its adaptive default', () => {
-			const body = buildSeedRequestBody({
-				images: oneImage,
-				model: 'claude-opus-5',
-				outputMode: 'forced-tool',
-			});
+			const body = bodyFor('forced-tool');
 
 			expect(body).not.toHaveProperty('thinking');
 		});
 	});
 
 	it('sends the same schema object from both modes, so the two cannot drift apart', () => {
-		const structured = buildSeedRequestBody({
-			images: oneImage,
-			model: 'claude-opus-5',
-			outputMode: 'structured',
-		});
-		const forcedTool = buildSeedRequestBody({
-			images: oneImage,
-			model: 'claude-opus-5',
-			outputMode: 'forced-tool',
-		});
+		const structured = bodyFor('structured');
+		const forcedTool = bodyFor('forced-tool');
 
 		const structuredSchema = (structured.output_config as { format: { schema: unknown } }).format
 			.schema;
@@ -148,11 +126,7 @@ describe('buildSeedRequestBody', () => {
 				image('swatch', 'data:image/gif;base64,CCC'),
 			];
 
-			const body = buildSeedRequestBody({
-				images,
-				model: 'claude-opus-5',
-				outputMode: 'structured',
-			});
+			const body = bodyFor('structured', images);
 			const content = (body.messages as { content: Record<string, unknown>[] }[])[0].content;
 
 			expect(content).toHaveLength(images.length * 2 + 1);
@@ -176,11 +150,7 @@ describe('buildSeedRequestBody', () => {
 		});
 
 		it('takes media_type and data from the data URL', () => {
-			const body = buildSeedRequestBody({
-				images: [image('img-1', 'data:image/png;base64,SGVsbG8=')],
-				model: 'claude-opus-5',
-				outputMode: 'structured',
-			});
+			const body = bodyFor('structured', [image('img-1', 'data:image/png;base64,SGVsbG8=')]);
 			const content = (body.messages as { content: Record<string, unknown>[] }[])[0].content;
 			const imageBlock = content[1] as { source: { media_type: string; data: string } };
 
@@ -194,23 +164,17 @@ describe('buildSeedRequestBody', () => {
 				image('bad-svg', 'data:image/svg+xml;base64,AAA'),
 			];
 
-			expect(() =>
-				buildSeedRequestBody({ images, model: 'claude-opus-5', outputMode: 'structured' }),
-			).toThrow(/bad-svg/);
+			expect(() => bodyFor('structured', images)).toThrow(/bad-svg/);
 		});
 
 		it('throws, naming the offending image id, when downscaled has no data URL prefix at all', () => {
 			const images = [image('plain', 'AAAA')];
 
-			expect(() =>
-				buildSeedRequestBody({ images, model: 'claude-opus-5', outputMode: 'structured' }),
-			).toThrow(/plain/);
+			expect(() => bodyFor('structured', images)).toThrow(/plain/);
 		});
 
 		it('refuses zero images rather than send a request with no way to name provenance', () => {
-			expect(() =>
-				buildSeedRequestBody({ images: [], model: 'claude-opus-5', outputMode: 'structured' }),
-			).toThrow(/at least one reference image/);
+			expect(() => bodyFor('structured', [])).toThrow(/at least one reference image/);
 		});
 	});
 });

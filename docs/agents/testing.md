@@ -46,7 +46,11 @@ The suite arrives in two parts. #47 stands up the harness and automates the keye
 
 ## Deliberately not tested automatically
 
-Reader implementations. Once seed parsing moved into the core, they are I/O shells with no logic left to test.
+Reader implementations, to the extent they stay I/O shells. Moving seed parsing into the core was supposed to leave nothing behind worth testing, and for a reader that only builds a request and hands back a string, it does.
+
+The Anthropic reader turned out not to be one. #17 gave it a status-to-kind error taxonomy, a response normalizer that has to read two different envelopes, and a JSON Schema that has to agree with `BrandSeedSchema` or every generation fails at the trust boundary. That is logic, and #17's acceptance criteria ask for it to be covered: "every error path has a test", against recorded responses with no live call. So `app/readers/` has a Vitest suite, driven by the fixtures in `app/readers/fixtures/` through an injected `fetch`.
+
+Test whatever logic a reader has accumulated. Being able to make an HTTP request is not logic, so a reader with no taxonomy and no normalizer still gets no tests.
 
 Component tests. The interface is still moving, and tests against a prototype interface cost more than they return. That rejects component tests rather than testing the interface: the five runs are flows against the definition of done, which is the one part of the spec that should not move, and three of them are automated in the Playwright suite above.
 

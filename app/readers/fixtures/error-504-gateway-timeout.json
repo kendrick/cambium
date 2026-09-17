@@ -1,0 +1,14 @@
+{
+	"status": 504,
+	"headers": {
+		"request-id": "req_011CGatewayTimeout7Kd2",
+		"content-type": "application/json"
+	},
+	"body": {
+		"type": "error",
+		"error": {
+			"type": "api_error",
+			"message": "Upstream timed out before the response completed."
+		}
+	}
+}

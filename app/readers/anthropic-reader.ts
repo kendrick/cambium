@@ -43,7 +43,7 @@ function contentBlocks(body: unknown): Record<string, unknown>[] {
  * is a success here and `parseSeed`'s `not-json` case downstream, which is the one #23 shows the
  * user and offers a repair retry on.
  */
-function normalizeRaw(body: unknown): string | null {
+function rawSeedFromBody(body: unknown): string | null {
 	const blocks = contentBlocks(body);
 	const toolUses = blocks.filter((block) => block.type === 'tool_use' && block.input !== undefined);
 	const seedToolUse = toolUses.find((block) => block.name === SEED_TOOL_NAME) ?? toolUses[0];
@@ -68,13 +68,15 @@ function modelFromBody(body: unknown): string | null {
  * anything non-numeric resolves to null and #23 falls back to its own wording.
  */
 function parseRetryAfter(headers: Headers): number | null {
-	const value = headers.get('retry-after');
+	const value = headers.get('retry-after')?.trim();
 
-	if (value === null) {
+	// The empty check is not redundant: `Number('')` is 0, so a header present but blank would
+	// otherwise reach the user as "retry in 0 seconds", which reads like permission to retry now.
+	if (!value) {
 		return null;
 	}
 
-	const seconds = Number(value.trim());
+	const seconds = Number(value);
 
 	return Number.isFinite(seconds) ? seconds : null;
 }
@@ -177,7 +179,7 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Brand
 				// with the text attached rather than earning a failure kind of its own.
 			}
 
-			const raw = normalizeRaw(body);
+			const raw = rawSeedFromBody(body);
 
 			if (raw === null) {
 				throw new AnthropicReaderError(
