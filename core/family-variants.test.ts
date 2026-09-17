@@ -45,9 +45,9 @@ describe('canonicalFamily', () => {
 		expect(canonicalFamily('Thai')).toBe('Thai');
 	});
 
-	// Real names from `tags/all/families.csv`, because the whole point of the SC rule is what the
-	// actual file contains: 31 of the 34 ` SC` families collide with a base, and only the two Noto
-	// ones mean Simplified Chinese.
+	// Real names throughout this block, because what the upstream file actually contains is the whole
+	// argument for the rule. `SIMPLIFIED_CHINESE_FAMILY_PREFIX` carries the counts and the commit
+	// they were taken at; they are not repeated here, so a recount changes one place.
 	it.each([
 		['Noto Sans SC', 'Noto Sans'],
 		['Noto Serif SC', 'Noto Serif'],
@@ -55,8 +55,8 @@ describe('canonicalFamily', () => {
 		expect(canonicalFamily(family)).toBe(canonical);
 	});
 
-	// The other 29. A small-caps cut cannot set running text, so folding it into its base can hand
-	// back the small-caps face as the body answer and drop the real one.
+	// A small-caps cut cannot set running text, so folding it into its base can hand back the
+	// small-caps face as the body answer and drop the real one.
 	it.each([
 		'Cormorant SC',
 		'Playfair Display SC',
@@ -69,6 +69,38 @@ describe('canonicalFamily', () => {
 	])('leaves %s alone, where SC is small caps', (family) => {
 		expect(canonicalFamily(family)).toBe(family);
 	});
+
+	// Noto collapses by prefix rather than by an enumerated script list, which is the only way it
+	// scales: Noto covers roughly 190 scripts. Real names, one per shape the prefix rule has to get
+	// right.
+	it.each([
+		['Noto Sans Avestan', 'Noto Sans'],
+		['Noto Sans Anatolian Hieroglyphs', 'Noto Sans'],
+		['Noto Sans Adlam Unjoined', 'Noto Sans'],
+		['Noto Sans Thai Looped', 'Noto Sans'],
+		['Noto Serif Tibetan', 'Noto Serif'],
+	])('collapses %s onto its coverage base', (family, canonical) => {
+		expect(canonicalFamily(family)).toBe(canonical);
+	});
+
+	// The cuts that vary something other than coverage. A mono or display cut of Noto Sans is a
+	// different design, exactly as Roboto Mono is, so it keeps its own slot.
+	it.each(['Noto Sans Mono', 'Noto Sans Display', 'Noto Serif Display', 'Noto Sans Symbols 2'])(
+		'leaves %s alone, where the cut is not script coverage',
+		(family) => {
+			expect(canonicalFamily(family)).toBe(family);
+		},
+	);
+
+	// Noto families that are their own design rather than a cut of Noto Sans or Noto Serif. The
+	// prefix rule must not reach them.
+	it.each(['Noto Kufi Arabic', 'Noto Nastaliq Urdu', 'Noto Color Emoji'])(
+		'does not treat %s as a cut of another Noto family',
+		(family) => {
+			expect(canonicalFamily(family)).not.toBe('Noto Sans');
+			expect(canonicalFamily(family)).not.toBe('Noto Serif');
+		},
+	);
 
 	// The counted evidence for leaving the other CJK suffixes as they are: their only non-Noto
 	// collisions are these two, and both are genuine coverage variants.

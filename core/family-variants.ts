@@ -6,7 +6,7 @@
  * here would collapse `Roboto` and `Roboto Slab` into a single slot.
  *
  * `SC` is absent on purpose and handled by `canonicalFamily` instead, because it is the one suffix
- * whose meaning depends on which family carries it. See `SC_SCRIPT_PREFIX`.
+ * whose meaning depends on which family carries it. See `SIMPLIFIED_CHINESE_FAMILY_PREFIX`.
  */
 const VARIANT_SUFFIXES: readonly string[] = [
 	'Thai Looped',
@@ -110,8 +110,39 @@ const SORTED_VARIANT_SUFFIXES: readonly string[][] = [...VARIANT_SUFFIXES]
  * counted the same way and need no such scoping: `TC` and `HK` have no non-Noto collisions at all,
  * and `JP` and `KR` have exactly one each, `IBM Plex Sans JP` and `IBM Plex Sans KR`, both genuine
  * coverage variants.
+ *
+ * Every count above is a snapshot of one commit, so a SHA bump can age it out. The rule fails
+ * silently if upstream ever ships a Simplified Chinese ` SC` face outside Noto: the tests would all
+ * still pass while the answer went wrong. Recount when the pin moves.
  */
-const SC_SCRIPT_PREFIX = 'Noto ';
+const SIMPLIFIED_CHINESE_FAMILY_PREFIX = 'Noto ';
+
+/**
+ * Noto is a script-coverage superfamily by construction: `Noto Sans Avestan` and `Noto Sans Brahmi`
+ * are one design reaching another writing system, which is the definition of a coverage variant.
+ *
+ * Listing its scripts in `VARIANT_SUFFIXES` does not scale. Noto spans roughly 190 of them against
+ * the 66 tokens that list carries, and counted against the pinned file the shortfall left 94
+ * `Noto Sans` cuts standing as their own family in the `/Sans/Humanist` and `/Sans/Rounded` pool
+ * alone — enough for one typeface to take two of a role's three slots under a different name each
+ * time. Matching the prefix collapses all 199 of them and needs no list of scripts at all.
+ *
+ * Only these two bases. The other nine Noto families are separate designs rather than cuts of
+ * these, `Noto Kufi Arabic` and `Noto Nastaliq Urdu` among them, and they keep their own slot.
+ */
+const NOTO_COVERAGE_BASES: readonly string[] = ['Noto Sans', 'Noto Serif'];
+
+/**
+ * The `Noto Sans` and `Noto Serif` cuts that vary something other than script coverage, so they
+ * stay distinct for the reason `Roboto Condensed` and `Roboto Slab` do. Counted against the pinned
+ * file, these four are the whole set.
+ */
+const NOTO_NON_SCRIPT_CUTS: ReadonlySet<string> = new Set([
+	'Display',
+	'Mono',
+	'Symbols',
+	'Symbols 2',
+]);
 
 /**
  * Strips trailing script and language suffix tokens to the family they vary.
@@ -126,12 +157,27 @@ const SC_SCRIPT_PREFIX = 'Noto ';
  * own. Any suffix added here is worth counting against the real file the same way first.
  */
 export function canonicalFamily(family: string): string {
-	const words = family.split(' ');
+	// Ahead of everything else, because it is the most specific rule and answers outright.
+	for (const base of NOTO_COVERAGE_BASES) {
+		if (!family.startsWith(`${base} `)) continue;
 
-	// Ahead of the general list and returning either way, because ` SC` is the last word whenever it
-	// appears, so no other suffix could apply to these names and stopping here costs nothing.
+		const cut = family.slice(base.length + 1);
+
+		return NOTO_NON_SCRIPT_CUTS.has(cut) ? family : base;
+	}
+
+	let words = family.split(' ');
+
+	// Ahead of the general list, because ` SC` is always the last word and its reading decides
+	// whether anything strips at all. A small-caps cut keeps its whole name: nothing further can
+	// apply once the tail is refused. A Noto one drops the token and falls through, so a name
+	// carrying both a script and `SC` still reduces all the way.
 	if (words.length > 1 && words.at(-1) === 'SC') {
-		return family.startsWith(SC_SCRIPT_PREFIX) ? words.slice(0, -1).join(' ') : family;
+		if (!family.startsWith(SIMPLIFIED_CHINESE_FAMILY_PREFIX)) {
+			return family;
+		}
+
+		words = words.slice(0, -1);
 	}
 
 	for (const suffixWords of SORTED_VARIANT_SUFFIXES) {
@@ -147,7 +193,8 @@ export function canonicalFamily(family: string): string {
 		}
 	}
 
-	return family;
+	// `words` rather than `family`, so a stripped ` SC` survives a pass that matched nothing else.
+	return words.join(' ');
 }
 
 /**
