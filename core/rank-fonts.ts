@@ -262,6 +262,20 @@ function rankRole(request: RoleRequest): FontCandidate[] {
 		return derived.slice(0, MAX_PER_ROLE);
 	}
 
+	// The theme filter is a hard constraint, not a preference, so it does not care who named the
+	// face. A Blackletter or Stencil cut cannot set a paragraph at all, which is a different kind of
+	// statement from one face ranking above another, and `model-led` seats a face rather than
+	// ranking it. On the roles that drop themed families, a named one goes the same way.
+	//
+	// Only a family the table carries can be checked. One the table has never heard of has no tags
+	// to read, so nothing here can call it themed and it stays — that is the ordinary case for a
+	// face the model invented rather than picked.
+	const namedTags = index.get(named.family);
+
+	if (excludeThemed && namedTags !== undefined && isThemed(namedTags)) {
+		return derived.slice(0, MAX_PER_ROLE);
+	}
+
 	const canonical = canonicalFamily(named.family);
 
 	// The seed's own entry may arrive marked `derived` with a score, because the model writes that

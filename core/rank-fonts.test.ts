@@ -138,11 +138,22 @@ function pairingOf(seed: BrandSeed, mode?: Parameters<typeof rankFonts>[2]): Sug
 const familiesOf = (candidates: FontCandidate[]): string[] => candidates.map((c) => c.family);
 
 /** A pairing carrying one model-named face, for the `model-led` mode to seat ahead of the ranking. */
-const named = (family: string): SuggestedPairing => ({
-	display: [{ provenance: 'derived', family, score: 92, rationale: 'The model said so.' }],
-	body: [],
-	mono: [],
-});
+function named(family: string, role: keyof SuggestedPairing = 'display'): SuggestedPairing {
+	// Marked `derived` with a score on purpose: that is how the model writes the field, and the
+	// ranker is supposed to re-stamp it rather than trust it.
+	const candidate: FontCandidate = {
+		provenance: 'derived',
+		family,
+		score: 92,
+		rationale: 'The model said so.',
+	};
+
+	return {
+		display: role === 'display' ? [candidate] : [],
+		body: role === 'body' ? [candidate] : [],
+		mono: role === 'mono' ? [candidate] : [],
+	};
+}
 
 describe('rankFonts', () => {
 	it('refuses a seed with no type classification', () => {
@@ -250,6 +261,49 @@ describe('rankFonts', () => {
 			// The model's pick and a script variant of it are one answer, so the derived `Geo Sans`
 			// entry gives up its slot rather than doubling the family.
 			expect(familiesOf(display)).toEqual(['Geo Sans Thai', 'Crack Sans', 'Round Sans']);
+		});
+
+		// The theme filter is a hard constraint, so seating a face rather than ranking it does not get
+		// round it. `Crack Sans` carries /Theme/Distressed and cannot set a paragraph however it got
+		// into the list.
+		it('drops a themed face the model named for body', () => {
+			const { body } = pairingOf(seedWith({}, { suggestedPairing: named('Crack Sans', 'body') }), {
+				mode: 'model-led',
+			});
+
+			expect(familiesOf(body)).not.toContain('Crack Sans');
+			expect(body.every((candidate) => candidate.provenance === 'derived')).toBe(true);
+		});
+
+		it('drops a themed named face from the shared list when one face does both jobs', () => {
+			const { display, body } = pairingOf(
+				seedWith({ displayDiffersFromBody: false }, { suggestedPairing: named('Crack Sans') }),
+				{ mode: 'model-led' },
+			);
+
+			expect(familiesOf(display)).not.toContain('Crack Sans');
+			expect(body).toEqual(display);
+		});
+
+		// Scoped to the roles that exclude themed faces, and no wider: a display face is exactly
+		// where a Distressed cut belongs.
+		it('keeps a themed face the model named for display', () => {
+			const { display } = pairingOf(seedWith({}, { suggestedPairing: named('Crack Sans') }), {
+				mode: 'model-led',
+			});
+
+			expect(display[0]).toMatchObject({ provenance: 'invented', family: 'Crack Sans' });
+		});
+
+		// A family the table never heard of has no tags to read, so nothing can call it themed. That
+		// is the ordinary case for a face the model invented rather than picked.
+		it('keeps a named face absent from the table even on a role that drops themed faces', () => {
+			const { body } = pairingOf(
+				seedWith({}, { suggestedPairing: named('Invented Face', 'body') }),
+				{ mode: 'model-led' },
+			);
+
+			expect(body[0]).toMatchObject({ provenance: 'invented', family: 'Invented Face' });
 		});
 
 		it('falls through to personality for a role the model named nothing for', () => {
