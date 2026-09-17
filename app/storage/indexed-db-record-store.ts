@@ -75,8 +75,8 @@ export async function createIndexedDbRecordStore(): Promise<RecordStore> {
 	 *
 	 * `idb`'s own `db.put` shorthand awaits both today, so this spells out a guarantee the wrapper
 	 * currently gives for free. It is written here anyway, because upstream abort handling is still
-	 * an open question (jakearchibald/idb#166 and PR #338) and a version bump should not be able to
-	 * take the promise away quietly.
+	 * an open question and a version bump should not be able to take the promise away quietly. See
+	 * `docs/research/oss-landscape.md` section 7a for the issue and pull request that leave it open.
 	 *
 	 * Awaiting the two in sequence instead would leave whichever rejects second unhandled.
 	 */
