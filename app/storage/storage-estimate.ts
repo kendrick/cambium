@@ -41,11 +41,12 @@ export async function estimateStorageUsage(
  * token set with it. A record holds a brand's whole version history, so a single eviction is a lot
  * of lost work that the user is never told about.
  *
- * Deliberately not called from `put`. `persist()` wants a user gesture behind it, and a store
- * method cannot know whether it has one, so asking from the write path spends the request at an
- * arbitrary moment the browser is free to decline. The flow that saves a brand for the first time
- * owns the call, from inside the click that triggers it. See `docs/research/oss-landscape.md`
- * section 7a for the compatibility figures behind that advice.
+ * Deliberately not called from `put`. A durability request belongs to a moment the user chose. A
+ * browser that prompts would raise a dialog nobody asked for, and a browser that decides on
+ * engagement signals sees nothing in a background write worth crediting, so the request is spent
+ * either way. `put` runs whenever a record is written and cannot tell a user's save from any other
+ * write, which is why the flow that saves a brand for the first time owns the call instead. That
+ * timing is what `docs/research/oss-landscape.md` section 7a recommends.
  *
  * Resolves true once the origin is persistent, false when the browser declined, and null where the
  * API does not exist, which is the same answer `estimateStorageUsage` gives. A decline is worth

@@ -114,8 +114,9 @@ describe('createIndexedDbRecordStore persistence', () => {
 
 		// Asserting the connection is gone is what makes the rest of this a reload. Two live
 		// connections would read the same records anyway, so without this line the test would pass
-		// just as well with no close at all, and prove only that IndexedDB shares a database.
-		await expect(store.get(record.id)).rejects.toThrow(Error);
+		// just as well with no close at all, and prove only that IndexedDB shares a database. The
+		// error is matched by name, because any unrelated bug in `get` also throws an `Error`.
+		await expect(store.get(record.id)).rejects.toMatchObject({ name: 'InvalidStateError' });
 
 		const reopened = await createIndexedDbRecordStore();
 
@@ -136,7 +137,25 @@ describe('createIndexedDbRecordStore persistence', () => {
 		await seeding.put(RECORD_STORE_NAME, stale);
 		seeding.close();
 
-		await expect(store.get(stale.id)).rejects.toThrow(Error);
-		await expect(store.list()).rejects.toThrow(Error);
+		// Matched against the offending field rather than against `Error`, so a read that failed for
+		// any other reason cannot pass for the schema check this test exists to make.
+		await expect(store.get(stale.id)).rejects.toThrow(/schemaVersion/);
+		await expect(store.list()).rejects.toThrow(/schemaVersion/);
+	});
+
+	// A durability request belongs to a moment the user chose. A store that asked from the write
+	// path would put a prompt in front of someone who did nothing to summon it, and would spend the
+	// request at a moment the browser is free to decline. See `requestPersistentStorage`, which is
+	// the export the saving flow calls instead.
+	it('never asks for persistent storage while writing', async () => {
+		const persist = vi.fn<() => Promise<boolean>>(async () => true);
+		vi.stubGlobal('navigator', { storage: { persist } });
+		const store = await createIndexedDbRecordStore();
+		const record = makeRecordWithImage();
+
+		await store.put(record);
+		await store.delete(record.id);
+
+		expect(persist).not.toHaveBeenCalled();
 	});
 });

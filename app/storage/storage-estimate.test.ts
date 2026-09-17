@@ -31,6 +31,13 @@ describe('estimateStorageUsage', () => {
 	it('resolves null when the browser answers with no figures', async () => {
 		expect(await estimateStorageUsage(stubStorageManager({}))).toBeNull();
 	});
+
+	// Covers the default parameter rather than an injected stub. Node defines `navigator` and gives
+	// it no `storage`, which is the same shape a browser too old for the API presents, so the
+	// no-argument call every caller will actually write has to resolve here rather than throw.
+	it('resolves null when nothing is injected and the platform has no Storage API', async () => {
+		expect(await estimateStorageUsage()).toBeNull();
+	});
 });
 
 describe('requestPersistentStorage', () => {
@@ -51,6 +58,10 @@ describe('requestPersistentStorage', () => {
 	it('resolves null where the Storage API is unavailable', async () => {
 		expect(await requestPersistentStorage(undefined)).toBeNull();
 		expect(await requestPersistentStorage({} as StorageManager)).toBeNull();
+	});
+
+	it('resolves null when nothing is injected and the platform has no Storage API', async () => {
+		expect(await requestPersistentStorage()).toBeNull();
 	});
 });
 
