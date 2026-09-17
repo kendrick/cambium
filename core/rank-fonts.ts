@@ -156,14 +156,53 @@ function placementTag(
 	return best;
 }
 
+/**
+ * Why a role's list came out in this order, which is the thing its rationale has to explain.
+ *
+ * Three of the four end in the quality axes and they are not the same statement. `craft` is what the
+ * caller asked for. `craft-no-coverage` is a pool that was measured against the seed's axes and
+ * scored zero on all of them. `craft-no-axes` is a seed that named no axes to measure against, which
+ * is the ordinary shape of a keyless extraction rather than an exotic input: #33 fills colours and
+ * leaves the rest null, and `core/fixtures/raw-responses/colors-only.json` is already that seed.
+ *
+ * The last two have to be separated here rather than downstream, because a score cannot tell them
+ * apart. With no axes the weighting loop never runs and every family scores zero, exactly as it does
+ * when a pool genuinely carries none of the tags the seed asked for.
+ */
+type RankingBasis = 'personality' | 'craft' | 'craft-no-coverage' | 'craft-no-axes';
+
+function chooseBasis(
+	mode: RankingMode,
+	pool: readonly string[],
+	index: Map<string, FamilyTags>,
+	expressive: BrandSeed['expressive'],
+): RankingBasis {
+	if (mode === 'craft') {
+		return 'craft';
+	}
+
+	// Read the seed, not the scores, for the reason in `RankingBasis` above.
+	if ((expressive?.length ?? 0) === 0) {
+		return 'craft-no-axes';
+	}
+
+	// A pool with no expressive coverage ties at zero under personality, and a total tie is the
+	// table's own order rather than a ranking. Upstream populates the quality axes for every family,
+	// so falling back to craft keeps the role answering with ordered faces.
+	const noCoverage = pool.every(
+		(family) => expressiveReading(index.get(family), expressive).score === 0,
+	);
+
+	return noCoverage ? 'craft-no-coverage' : 'personality';
+}
+
 function rationaleFor(
 	tags: FamilyTags | undefined,
 	seed: BrandSeed,
 	category: TypeClassification['category'],
 	tone: TypeClassification['tone'],
 	matched: 'tone' | 'category',
-	rankedOn: 'personality' | 'craft',
-	fellBack: boolean,
+	basis: RankingBasis,
 ): string {
 	const placement = placementTag(tags, category, tone, matched);
 
@@ -179,16 +218,28 @@ function rationaleFor(
 				? `Scores ${placement.score} on ${placement.tag}; no family here carries the ${tone} tags, so the whole ${category} category answered.`
 				: `Scores ${placement.score} on ${placement.tag}; the taxonomy has no ${tone} ${category}, so the whole category answered.`;
 
-	if (rankedOn === 'craft') {
+	if (basis !== 'personality') {
 		const axes = `${scoreOn(tags, SPACING_TAG)} on ${SPACING_TAG} and ${scoreOn(tags, WORDSPACE_TAG)} on ${WORDSPACE_TAG}`;
 
-		return fellBack
-			? `${placed} Nothing in this pool carries the expressive axes the seed asked for, so the quality axes ranked it: ${axes}.`
-			: `${placed} Ranked on the quality axes: ${axes}.`;
+		// The distinction the tone branch above draws, one level down. A pool measured against real
+		// axes and scoring zero is a different statement from a seed that named no axes to measure
+		// against, and one sentence used to make both.
+		if (basis === 'craft-no-coverage') {
+			return `${placed} Nothing in this pool carries the expressive axes the seed asked for, so the quality axes ranked it: ${axes}.`;
+		}
+
+		if (basis === 'craft-no-axes') {
+			return `${placed} The seed named no expressive characteristics, so the quality axes ranked it: ${axes}.`;
+		}
+
+		return `${placed} Ranked on the quality axes: ${axes}.`;
 	}
 
 	const { top } = expressiveReading(tags, seed.expressive);
 
+	// Reaching here means the seed named at least one axis, since `chooseBasis` sends a seed that
+	// named none to `craft-no-axes` before any score is read. So a missing `top` is this family
+	// carrying no tag on axes the seed really did ask for, which is what the sentence says.
 	return top
 		? `${placed} Ranked on the seed's expressive characteristics, strongest at ${top.score} on ${expressiveTag(top.axis)}.`
 		: `${placed} Ranked on the seed's expressive characteristics, which this family carries no tag for.`;
@@ -218,14 +269,7 @@ function rankRole(request: RoleRequest): FontCandidate[] {
 		? families.filter((family) => !isThemed(index.get(family)))
 		: [...families];
 
-	// A pool with no expressive coverage ties at zero under personality, and a total tie is the
-	// table's own order rather than a ranking. Upstream populates the quality axes for every family,
-	// so falling back to craft keeps the role answering with ordered faces.
-	const wantsPersonality = mode !== 'craft';
-	const fellBack =
-		wantsPersonality &&
-		pool.every((family) => expressiveReading(index.get(family), seed.expressive).score === 0);
-	const rankedOn = wantsPersonality && !fellBack ? 'personality' : 'craft';
+	const basis = chooseBasis(mode, pool, index, seed.expressive);
 
 	const scored = pool.map((family) => {
 		const tags = index.get(family);
@@ -234,7 +278,7 @@ function rankRole(request: RoleRequest): FontCandidate[] {
 			family,
 			tags,
 			value:
-				rankedOn === 'craft' ? craftScore(tags) : expressiveReading(tags, seed.expressive).score,
+				basis === 'personality' ? expressiveReading(tags, seed.expressive).score : craftScore(tags),
 		};
 	});
 
@@ -255,7 +299,7 @@ function rankRole(request: RoleRequest): FontCandidate[] {
 		provenance: 'derived',
 		family: entry.family,
 		score: toPercent(entry.value),
-		rationale: rationaleFor(entry.tags, seed, category, tone, matched, rankedOn, fellBack),
+		rationale: rationaleFor(entry.tags, seed, category, tone, matched, basis),
 	}));
 
 	return named === undefined

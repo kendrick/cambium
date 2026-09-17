@@ -354,6 +354,33 @@ describe('rankFonts', () => {
 			expect(display[0]!.rationale).toContain('the whole sans category answered');
 		});
 
+		// A seed that named no axes and a pool that carries none of the ones it named both score zero
+		// everywhere, and they used to share a sentence that was only true of the second. `null` and
+		// `[]` are both real: `expressive` is a required-but-nullable key, `colors-only.json` already
+		// holds null, and #33's keyless extractor produces exactly that shape.
+		it.each([
+			['null', null],
+			['an empty array', []],
+		])('says the seed named nothing when expressive is %s', (_label, expressive) => {
+			const { display } = pairingOf(seedWith({}, { expressive }));
+
+			for (const candidate of display) {
+				expect(candidate.rationale).toContain('The seed named no expressive characteristics');
+				expect(candidate.rationale).not.toContain('the expressive axes the seed asked for');
+			}
+		});
+
+		// The other side of the same split, kept distinct: this seed did name an axis, and the slab
+		// pool carries no expressive row at all.
+		it('still says the pool carries nothing when the seed did name axes', () => {
+			const { display } = pairingOf(seedWith({ category: 'slab', tone: 'grotesque' }));
+
+			expect(display[0]!.rationale).toContain(
+				'Nothing in this pool carries the expressive axes the seed asked for',
+			);
+			expect(display[0]!.rationale).not.toContain('The seed named no expressive characteristics');
+		});
+
 		// Monospace has no tone subdivision whatever the seed's tone, so every mono candidate takes
 		// the no-tag route rather than reporting a match that failed.
 		it('never tells a mono candidate its tone matched nothing', () => {
@@ -379,6 +406,18 @@ describe('rankFonts', () => {
 		const { display } = pairingOf(seedWith({ category: 'slab', tone: 'grotesque' }));
 
 		expect(familiesOf(display)).toEqual(['Geo Slab', 'Warm Slab', 'Bracket Slab']);
+	});
+
+	// The keyless path: colours only, everything else null. It still has to return ranked faces, and
+	// they have to be ordered by the quality axes rather than left in the table's order.
+	it.each([
+		['null', null],
+		['an empty array', []],
+	])('ranks on the quality axes when expressive is %s', (_label, expressive) => {
+		const { display, body } = pairingOf(seedWith({}, { expressive }));
+
+		expect(familiesOf(display)).toEqual(['Geo Sans Thai', 'Crack Sans', 'Round Sans']);
+		expect(familiesOf(body)).toEqual(['Geo Sans Thai', 'Round Sans', 'Loud Sans']);
 	});
 
 	it('produces identical lists for identical seeds over an identical table', () => {
