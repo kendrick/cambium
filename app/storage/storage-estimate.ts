@@ -41,17 +41,18 @@ export async function estimateStorageUsage(
  * token set with it. A record holds a brand's whole version history, so a single eviction is a lot
  * of lost work that the user is never told about.
  *
- * Deliberately not called from `put`. A durability request belongs to a moment the user chose. A
- * browser that prompts would raise a dialog nobody asked for, and a browser that decides on
- * engagement signals sees nothing in a background write worth crediting, so the request is spent
- * either way. `put` runs whenever a record is written and cannot tell a user's save from any other
- * write, which is why the flow that saves a brand for the first time owns the call instead. That
- * timing is what `docs/research/oss-landscape.md` section 7a recommends.
+ * Deliberately not called from `put`. A durability request belongs to a moment the user chose.
+ * Firefox answers one with a permission prompt, and a prompt raised by a background write lands in
+ * front of someone who did nothing to summon it. `put` runs whenever a record is written and
+ * cannot tell a user's save from any other write, so the flow that saves a brand for the first
+ * time owns the call instead. That timing is what `docs/research/oss-landscape.md` section 7a
+ * recommends.
  *
  * Resolves true once the origin is persistent, false when the browser declined, and null where the
  * API does not exist, which is the same answer `estimateStorageUsage` gives. A decline is worth
- * telling apart from a missing `persist()`, because a browser that says no today can say yes to
- * the same request later, once the user has more history with the site.
+ * telling apart from a missing `persist()`, because the same request can be granted later, once
+ * the user has more history with the site. A rejection propagates rather than flattening to null,
+ * so whoever calls this during a save must not let it take the save down with it.
  */
 export async function requestPersistentStorage(
 	storage: StorageManager | undefined = globalThis.navigator?.storage,

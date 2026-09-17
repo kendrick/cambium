@@ -143,10 +143,9 @@ describe('createIndexedDbRecordStore persistence', () => {
 		await expect(store.list()).rejects.toThrow(/schemaVersion/);
 	});
 
-	// A durability request belongs to a moment the user chose. A store that asked from the write
-	// path would put a prompt in front of someone who did nothing to summon it, and would spend the
-	// request at a moment the browser is free to decline. See `requestPersistentStorage`, which is
-	// the export the saving flow calls instead.
+	// A durability request belongs to a moment the user chose. A store that asked from the write path
+	// would put a Firefox permission prompt in front of someone who did nothing to summon it. See
+	// `requestPersistentStorage`, which is the export the saving flow calls instead.
 	it('never asks for persistent storage while writing', async () => {
 		const persist = vi.fn<() => Promise<boolean>>(async () => true);
 		vi.stubGlobal('navigator', { storage: { persist } });

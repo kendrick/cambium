@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
 	StorageQuotaExceededError,
@@ -10,6 +10,10 @@ import {
 function stubStorageManager(estimate: StorageEstimate): StorageManager {
 	return { estimate: async () => estimate } as StorageManager;
 }
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
 
 describe('estimateStorageUsage', () => {
 	it('reports what the browser estimates, in bytes', async () => {
@@ -32,11 +36,14 @@ describe('estimateStorageUsage', () => {
 		expect(await estimateStorageUsage(stubStorageManager({}))).toBeNull();
 	});
 
-	// Covers the default parameter rather than an injected stub. Node defines `navigator` and gives
-	// it no `storage`, which is the same shape a browser too old for the API presents, so the
-	// no-argument call every caller will actually write has to resolve here rather than throw.
-	it('resolves null when nothing is injected and the platform has no Storage API', async () => {
-		expect(await estimateStorageUsage()).toBeNull();
+	// Covers the default parameter rather than an injected stub, by standing up the `navigator`
+	// Node does not have. Asserting the figures come back is what pins the default to
+	// `navigator.storage`; asserting null would survive deleting the default parameter outright,
+	// because everything about this function answers null when it is handed nothing.
+	it('reads navigator.storage when nothing is injected', async () => {
+		vi.stubGlobal('navigator', { storage: { estimate: async () => ({ usage: 7, quota: 9 }) } });
+
+		expect(await estimateStorageUsage()).toEqual({ usedBytes: 7, quotaBytes: 9 });
 	});
 });
 
@@ -60,8 +67,10 @@ describe('requestPersistentStorage', () => {
 		expect(await requestPersistentStorage({} as StorageManager)).toBeNull();
 	});
 
-	it('resolves null when nothing is injected and the platform has no Storage API', async () => {
-		expect(await requestPersistentStorage()).toBeNull();
+	it('reads navigator.storage when nothing is injected', async () => {
+		vi.stubGlobal('navigator', { storage: { persist: async () => true } });
+
+		expect(await requestPersistentStorage()).toBe(true);
 	});
 });
 
