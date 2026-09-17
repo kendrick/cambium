@@ -1,0 +1,14 @@
+{
+	"status": 400,
+	"headers": {
+		"request-id": "req_011CBadRequest1AbCdE",
+		"content-type": "application/json"
+	},
+	"body": {
+		"type": "error",
+		"error": {
+			"type": "invalid_request_error",
+			"message": "messages: at least one message is required"
+		}
+	}
+}

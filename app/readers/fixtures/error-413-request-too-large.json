@@ -1,0 +1,14 @@
+{
+	"status": 413,
+	"headers": {
+		"request-id": "req_011CTooLarge5UvWxY",
+		"content-type": "application/json"
+	},
+	"body": {
+		"type": "error",
+		"error": {
+			"type": "request_too_large",
+			"message": "Request exceeds the maximum allowed size of 32 MB. Send fewer or smaller reference images and try again."
+		}
+	}
+}
