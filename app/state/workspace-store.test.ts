@@ -61,6 +61,9 @@ function makeRecord(versions: BrandVersion[] = [makeVersion()]): BrandRecord {
 	};
 }
 
+/** A second record id, for the case where the workspace moves on mid-write. */
+const OTHER_RECORD_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3302';
+
 const PROVENANCE: CommitProvenance = {
 	provider: 'anthropic',
 	model: 'claude-opus-5',
@@ -105,6 +108,37 @@ function countingRecordStore(): RecordStore & { puts: BrandRecord[] } {
 			await inner.put(record);
 		},
 	};
+}
+
+/**
+ * Holds `put` open so a test can act while a commit is mid-write. That window is the only place a
+ * synchronous `open` or `close` can overtake a commit, since everything else the store does is
+ * synchronous.
+ */
+function gatedWorkspace() {
+	let releaseWrite!: () => void;
+	let writeHasStarted!: () => void;
+	const released = new Promise<void>((resolve) => {
+		releaseWrite = resolve;
+	});
+	const writeInFlight = new Promise<void>((resolve) => {
+		writeHasStarted = resolve;
+	});
+	const inner = createInMemoryRecordStore();
+	const store = createWorkspaceStore({
+		recordStore: {
+			...inner,
+			async put(record) {
+				writeHasStarted();
+				await released;
+				await inner.put(record);
+			},
+		},
+		engine: createOklchScaleEngine(),
+		now: () => '2026-06-01T12:00:00.000Z',
+	});
+
+	return { store, writeInFlight, releaseWrite };
 }
 
 function openWorkspace(
@@ -398,6 +432,66 @@ describe('the workspace store', () => {
 		const { store } = openWorkspace();
 
 		expect(() => store.getState().selectVersion(7)).toThrow(/ordinal 7/);
+		expect(store.getState().activeOrdinal).toBe(1);
+	});
+
+	it('discards edits made before a record has any versions', () => {
+		const { store } = openWorkspace(makeRecord([]));
+
+		store.getState().editSeed({ trackingFeel: 'wide' });
+		store.getState().selectPreset('expressive');
+		store.getState().discardEdits();
+
+		// Nothing to restore to, so discarding empties the workspace rather than stranding the edit.
+		const state = store.getState();
+
+		expect(state.draftSeed).toBeNull();
+		expect(state.preset).toBe('balanced');
+		expect(state.derived).toBeNull();
+	});
+
+	it('leaves a newer workspace alone when an older commit lands late', async () => {
+		const { store, writeInFlight, releaseWrite } = gatedWorkspace();
+		const second = { ...makeRecord([makeVersion({ seed: seedWith(50) })]), id: OTHER_RECORD_ID };
+
+		store.getState().open(makeRecord());
+
+		const pending = store.getState().commit();
+
+		// `open` is synchronous and unqueued, so it can land while the write is in flight. Adopting the
+		// finished commit afterwards would pair the old record with the new record's draft and preset.
+		await writeInFlight;
+		store.getState().open(second);
+		releaseWrite();
+
+		await expect(pending).resolves.toMatchObject({ id: makeRecord().id });
+
+		const state = store.getState();
+
+		expect(state.record).toBe(second);
+		expect(state.activeOrdinal).toBe(1);
+		expect(state.draftSeed).toEqual(seedWith(50));
+	});
+
+	it('leaves the workspace alone when the same record is reopened mid-write', async () => {
+		const { store, writeInFlight, releaseWrite } = gatedWorkspace();
+		const record = makeRecord();
+
+		store.getState().open(record);
+
+		const pending = store.getState().commit();
+
+		// Reopening hands back the very same object, so comparing records cannot tell this from never
+		// having left. Leaving and coming back is still a new workspace session, and the commit that
+		// belonged to the old one does not get to move it.
+		await writeInFlight;
+		store.getState().close();
+		store.getState().open(record);
+		releaseWrite();
+
+		await pending;
+
+		expect(store.getState().record).toBe(record);
 		expect(store.getState().activeOrdinal).toBe(1);
 	});
 

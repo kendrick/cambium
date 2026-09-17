@@ -236,6 +236,7 @@ export function createWorkspaceStore({
 }: WorkspaceStoreOptions): StoreApi<WorkspaceState> {
 	return createStore<WorkspaceState>()((set, get) => {
 		async function appendVersion(provenance?: CommitProvenance): Promise<BrandRecord> {
+			const startedIn = session;
 			const { record, activeOrdinal, draftSeed, preset } = get();
 
 			if (!record) {
@@ -288,21 +289,44 @@ export function createWorkspaceStore({
 			// lands, so a rejected commit leaves the workspace showing what storage actually holds.
 			await recordStore.put(next);
 
-			// The draft and the derived tokens already say what was just written, so a commit moves
-			// the record and the active version forward and nothing else.
-			set({ record: next, activeOrdinal: version.ordinal });
+			// Adopt the write only while the workspace is still the session that started it. `open` and
+			// `close` are synchronous and unqueued, so either can land while `put` is in flight, and
+			// reinstating this record afterwards would pair it with a newer record's draft and preset:
+			// one workspace showing two records at once. The write itself stands either way, which is
+			// why the finished record still goes back to the caller.
+			if (session === startedIn) {
+				// The draft and the derived tokens already say what was just written, so a commit moves
+				// the record and the active version forward and nothing else.
+				set({ record: next, activeOrdinal: version.ordinal });
+			}
 
 			return next;
 		}
 
 		/**
-		 * Commits run one at a time. An ordinal is counted off the record as it stands and `put`
-		 * writes the record whole, so two overlapping commits would both claim the same ordinal and
-		 * the second write would drop the first version on the floor. A double-click is enough to
-		 * reach that, and the loss is silent. Queueing makes the second commit read what the first
-		 * one wrote.
+		 * Commits run one at a time within this store. An ordinal is counted off the record as it
+		 * stands and `put` writes the record whole, so two overlapping commits would both claim the
+		 * same ordinal and the second write would drop the first version on the floor. A double-click
+		 * is enough to reach that, and the loss is silent. Queueing makes the second commit read what
+		 * the first one wrote.
+		 *
+		 * It serialises this store and nothing else. Two tabs hold two stores and two queues, and
+		 * `RecordStore.put` replaces a whole record with no compare-and-swap, so the same collision
+		 * is still reachable across tabs. Closing that needs optimistic concurrency at the
+		 * `RecordStore` seam, which no open ticket owns yet.
 		 */
 		let queue: Promise<unknown> = Promise.resolve();
+
+		/**
+		 * Counts how many times the workspace has been pointed somewhere, so a commit can tell whether
+		 * it is still finishing the session it began in.
+		 *
+		 * The record itself cannot answer that. `RecordStore` hands back a fresh object graph on every
+		 * read, so a caller reloading the same record mid-commit looks like a different record, while
+		 * closing and reopening the same object looks like never having left. Counting the moves is
+		 * exact where comparing the records is wrong in both directions.
+		 */
+		let session = 0;
 
 		return {
 			record: null,
@@ -316,10 +340,12 @@ export function createWorkspaceStore({
 				// oldest first, and an empty history leaves nothing active until the first commit.
 				const active = record.versions.at(-1) ?? null;
 
+				session += 1;
 				set({ record, activeOrdinal: active?.ordinal ?? null, ...workspaceFor(engine, active) });
 			},
 
 			close() {
+				session += 1;
 				set({ record: null, activeOrdinal: null, ...workspaceFor(engine, null) });
 			},
 
@@ -350,11 +376,12 @@ export function createWorkspaceStore({
 
 			discardEdits() {
 				const { record, activeOrdinal } = get();
-				const active = record && versionAt(record, activeOrdinal);
 
-				if (active) {
-					set(workspaceFor(engine, active));
-				}
+				// A record with no versions yet has nothing to restore to, so discarding empties the
+				// workspace, which is the state `open` leaves it in. Returning early on a null active
+				// version instead would strand every edit made before the first commit, which is the
+				// one stretch where a user has no way back.
+				set(workspaceFor(engine, record && versionAt(record, activeOrdinal)));
 			},
 
 			commit(provenance) {
