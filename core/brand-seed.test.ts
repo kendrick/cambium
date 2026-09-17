@@ -203,7 +203,7 @@ describe('SuggestedPairingSchema ordering', () => {
 
 const atAxis = (axis: string, score: number) => ({ axis, score });
 
-describe('ExpressiveSchema', () => {
+describe('ExpressiveScoreSchema', () => {
 	it('accepts axes ranked highest score first', () => {
 		const parsed = BrandSeedSchema.parse({
 			...colorsOnly,
