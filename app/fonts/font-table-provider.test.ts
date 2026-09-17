@@ -19,10 +19,32 @@ function errorResponse(status: number): Response {
 	return new Response('', { status });
 }
 
-// Every test in this file stubs fetch and none reaches the network, per the offline rule: a test
-// that only passes with connectivity is a failing test.
+/**
+ * Lets one test make the fallback's own dynamic import fail. Every other test runs the real module,
+ * so the fallback assertions below still compare against the real curated rows.
+ */
+const fallback = vi.hoisted(() => ({ fail: false }));
+
+vi.mock('./load-fallback-table', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('./load-fallback-table')>();
+
+	return {
+		loadFallbackFontTable: () =>
+			fallback.fail
+				? Promise.reject(new Error('chunk load failed'))
+				: actual.loadFallbackFontTable(),
+	};
+});
+
+// The offline rule, enforced rather than remembered: a test that forgets to stub `fetch` gets one
+// that throws rather than one that reaches jsDelivr. `core/purity.test.ts` guards the core the same
+// way. Each test below stubs its own over the top of this.
 beforeEach(() => {
 	resetFontTableCacheForTests();
+	fallback.fail = false;
+	vi.stubGlobal('fetch', () => {
+		throw new Error('the test suite must not reach the network');
+	});
 });
 
 afterEach(() => {
@@ -103,7 +125,9 @@ describe('resolveFontTable', () => {
 		expect(first).toEqual(second);
 	});
 
-	it('fetches once per session: a second call after resolution reuses the cached result', async () => {
+	// The reset in the middle is what proves the cache caused the suppression rather than something
+	// else about the second call.
+	it('fetches once per session, and again only after the cache is cleared', async () => {
 		const fetchMock = vi
 			.fn<() => Promise<Response>>()
 			.mockResolvedValue(okResponse(VALID_FAMILIES_CSV));
@@ -113,18 +137,26 @@ describe('resolveFontTable', () => {
 		await resolveFontTable();
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
-	});
 
-	it('fetches again after the test-only cache reset, proving the cache is what suppressed the second fetch', async () => {
-		const fetchMock = vi
-			.fn<() => Promise<Response>>()
-			.mockResolvedValue(okResponse(VALID_FAMILIES_CSV));
-		vi.stubGlobal('fetch', fetchMock);
-
-		await resolveFontTable();
 		resetFontTableCacheForTests();
 		await resolveFontTable();
 
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	// A failed fetch caches its fallback, which is the point of resolving once. A failure of the
+	// fallback itself must not: that is a chunk that did not load, and remembering the rejection
+	// would pin one bad moment for the rest of the session.
+	it('forgets a rejection so a later call can still resolve', async () => {
+		fallback.fail = true;
+		vi.stubGlobal('fetch', vi.fn<() => Promise<Response>>().mockResolvedValue(errorResponse(500)));
+
+		await expect(resolveFontTable()).rejects.toThrow('chunk load failed');
+
+		fallback.fail = false;
+
+		const { ref } = await resolveFontTable();
+
+		expect(ref).toEqual(FALLBACK_FONT_TABLE_REF);
 	});
 });

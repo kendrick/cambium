@@ -1,5 +1,4 @@
-import type { FontTableRef } from '../../core/brand-record';
-import type { FontTable } from '../../core/font-table';
+import type { ResolvedFontTable } from '../../core/font-table';
 
 /**
  * Holds the only `import()` of the fallback table, which is what keeps sixty families' worth of
@@ -12,7 +11,7 @@ import type { FontTable } from '../../core/font-table';
  * provider, so a real build never touches these rows and the budget passes whatever they weigh.
  * The gzipped-size assertion in fallback-table.test.ts is what holds the line.
  */
-export async function loadFallbackFontTable(): Promise<{ table: FontTable; ref: FontTableRef }> {
+export async function loadFallbackFontTable(): Promise<ResolvedFontTable> {
 	const { FALLBACK_FONT_TABLE, FALLBACK_FONT_TABLE_REF } = await import('./fallback-table');
 
 	return { table: FALLBACK_FONT_TABLE, ref: FALLBACK_FONT_TABLE_REF };

@@ -1,3 +1,4 @@
+import type { FontTableRef } from './brand-record';
 import type { ExpressiveAxis, TypeClassification } from './brand-seed';
 
 /**
@@ -16,6 +17,17 @@ export interface FontTableRow {
 }
 
 export type FontTable = readonly FontTableRow[];
+
+/**
+ * A resolved table never travels without the identity of where it came from. ADR-0001 makes that
+ * pairing the thing reproducibility rests on: a client that fell back to the in-repo table ranks a
+ * seed differently from one that fetched the full taxonomy, so a table alone cannot tell a record
+ * what actually answered.
+ */
+export interface ResolvedFontTable {
+	table: FontTable;
+	ref: FontTableRef;
+}
 
 /**
  * `ExpressiveAxisSchema` is the source of these twenty names. #53 closed that enum at the seed's

@@ -1,5 +1,5 @@
 import type { FontTableRef } from '../../core/brand-record';
-import type { FontTable, FontTableRow } from '../../core/font-table';
+import type { FontTable, FontTableRow, ResolvedFontTable } from '../../core/font-table';
 
 import { loadFallbackFontTable } from './load-fallback-table';
 
@@ -17,7 +17,13 @@ const FETCHED_FONT_TABLE_REF: FontTableRef = {
 /**
  * Splits a `tags/all/families.csv` line into fields by hand instead of pulling in a CSV package.
  * The grammar this file needs is small: comma-separated fields, double-quote grouping, and `""`
- * as an escaped quote — not enough to justify a new dependency.
+ * as an escaped quote—not enough to justify a new dependency.
+ *
+ * Deliberately lenient about the two ways a field can be malformed under RFC 4180, because neither
+ * appears upstream and both have a safe landing. A quote part-way through an unquoted field opens
+ * quoting, so `a"b` runs to the next quote or throws; text after a closing quote is appended, so
+ * `"a"b` reads as `ab`. Tightening either would trade a fallback to the in-repo table for a
+ * different fallback to the in-repo table.
  *
  * Reads the whole body as one token stream instead of splitting on `\n` first, because a quoted
  * field is allowed to contain a literal newline; splitting on lines first would cut such a field
@@ -140,27 +146,26 @@ function parseFontTable(csv: string): FontTable {
 	return toFontTable(parseRows(csv));
 }
 
-async function fetchFontTable(): Promise<{ table: FontTable; ref: FontTableRef }> {
+async function fetchFontTable(): Promise<ResolvedFontTable> {
 	try {
 		const response = await fetch(UPSTREAM_URL);
 
-		if (!response.ok) {
-			return await loadFallbackFontTable();
+		if (response.ok) {
+			return { table: parseFontTable(await response.text()), ref: FETCHED_FONT_TABLE_REF };
 		}
-
-		const body = await response.text();
-
-		return { table: parseFontTable(body), ref: FETCHED_FONT_TABLE_REF };
 	} catch {
 		// A blocked CDN, an offline visitor, a CSP that refuses jsDelivr, and a body `parseFontTable`
 		// can't make sense of are all the same case here. The keyless demo has to work with no
 		// network at all, so a failed fetch reaches the fallback table as an ordinary path, not as
 		// an exception the caller has to handle.
-		return await loadFallbackFontTable();
 	}
+
+	// Outside the `try` on purpose. Reached from one place, so a failure of the fallback's own
+	// dynamic import surfaces instead of being caught and retried into the same failure.
+	return loadFallbackFontTable();
 }
 
-let cachedResolution: Promise<{ table: FontTable; ref: FontTableRef }> | undefined;
+let cachedResolution: Promise<ResolvedFontTable> | undefined;
 
 /**
  * Resolves the font table for this session: the fetched upstream taxonomy when that succeeds, the
@@ -172,8 +177,15 @@ let cachedResolution: Promise<{ table: FontTable; ref: FontTableRef }> | undefin
  * Caches the in-flight promise, not just its resolved value, so two callers racing on a cold start
  * share one fetch instead of each starting their own.
  */
-export function resolveFontTable(): Promise<{ table: FontTable; ref: FontTableRef }> {
-	cachedResolution ??= fetchFontTable();
+export function resolveFontTable(): Promise<ResolvedFontTable> {
+	cachedResolution ??= fetchFontTable().catch((cause: unknown) => {
+		// A rejection must not become what the session remembers. `fetchFontTable` already turns a
+		// failed fetch into the fallback table, so a rejection here means the fallback's own chunk
+		// did not load, which is a transient browser condition the next call may not hit. Caching it
+		// would pin one bad moment for the rest of the session.
+		cachedResolution = undefined;
+		throw cause;
+	});
 
 	return cachedResolution;
 }
