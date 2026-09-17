@@ -295,6 +295,18 @@ describe('rankFonts', () => {
 			expect(display[0]).toMatchObject({ provenance: 'invented', family: 'Crack Sans' });
 		});
 
+		// The bypass the exact-name lookup left open: `Crack Sans Thai` has no row of its own, so the
+		// theme check found nothing while the dedupe below still read it as `Crack Sans`.
+		it('drops a themed face the model named under a script-variant spelling', () => {
+			const { body } = pairingOf(
+				seedWith({}, { suggestedPairing: named('Crack Sans Thai', 'body') }),
+				{ mode: 'model-led' },
+			);
+
+			expect(familiesOf(body)).not.toContain('Crack Sans Thai');
+			expect(body.every((candidate) => candidate.provenance === 'derived')).toBe(true);
+		});
+
 		// A family the table never heard of has no tags to read, so nothing can call it themed. That
 		// is the ordinary case for a face the model invented rather than picked.
 		it('keeps a named face absent from the table even on a role that drops themed faces', () => {

@@ -258,25 +258,39 @@ function rankRole(request: RoleRequest): FontCandidate[] {
 		rationale: rationaleFor(entry.tags, seed, category, tone, matched, rankedOn, fellBack),
 	}));
 
-	if (named === undefined) {
-		return derived.slice(0, MAX_PER_ROLE);
-	}
+	return named === undefined
+		? derived.slice(0, MAX_PER_ROLE)
+		: seatNamedCandidate(derived, named, index, excludeThemed);
+}
+
+/**
+ * Puts the face the model named at the head of a role's list, under `model-led`.
+ */
+function seatNamedCandidate(
+	derived: readonly FontCandidate[],
+	named: FontCandidate,
+	index: Map<string, FamilyTags>,
+	excludeThemed: boolean,
+): FontCandidate[] {
+	const canonical = canonicalFamily(named.family);
+
+	// Both lookups have to agree about which family this is. Reading tags at the exact spelling
+	// while deduping at the canonical one let a themed face through: name `Crack Sans Thai` and the
+	// table has no row under that spelling, so nothing could call it Distressed and it set body
+	// copy. Exact first, because a family the table carries describes itself better than its base
+	// does, then the base for a variant the table only knows by its root.
+	const namedTags = index.get(named.family) ?? index.get(canonical);
 
 	// The theme filter is a hard constraint, not a preference, so it does not care who named the
 	// face. A Blackletter or Stencil cut cannot set a paragraph at all, which is a different kind of
 	// statement from one face ranking above another, and `model-led` seats a face rather than
 	// ranking it. On the roles that drop themed families, a named one goes the same way.
 	//
-	// Only a family the table carries can be checked. One the table has never heard of has no tags
-	// to read, so nothing here can call it themed and it stays — that is the ordinary case for a
-	// face the model invented rather than picked.
-	const namedTags = index.get(named.family);
-
-	if (excludeThemed && namedTags !== undefined && isThemed(namedTags)) {
+	// A family neither spelling finds has no tags to read, so `isThemed` says false and it stays.
+	// That is the ordinary case for a face the model invented rather than picked off the table.
+	if (excludeThemed && isThemed(namedTags)) {
 		return derived.slice(0, MAX_PER_ROLE);
 	}
-
-	const canonical = canonicalFamily(named.family);
 
 	// The seed's own entry may arrive marked `derived` with a score, because the model writes that
 	// field itself. Nothing derived it from a table, so it is re-stamped here rather than trusted:
