@@ -152,9 +152,14 @@ const NOTO_COVERAGE_BASES: readonly string[] = ['Noto Sans', 'Noto Serif'];
  * with `Symbols` rather than to fix anything.
  *
  * Known limitation, deliberately left. Un-collapsing these means `Noto Sans Math` and friends can
- * now hold a slot of their own, and a notation face is no one's brand typeface. Nothing in the
- * table marks a face as non-text, #42 asks for no such filter, and inventing one is a judgement
- * about candidacy rather than about collapsing. `Noto Znamenny Musical Notation` shows the limit is
+ * now hold a slot of their own, and a notation face is no one's brand typeface.
+ *
+ * The taxonomy does have a `/Special use/*` namespace, and it does not answer this. 25 families
+ * carry one; only `Noto Sans Symbols` and `Datatype` also carry a structural tag and so reach a
+ * pool at all, and `Datatype` is a real neo-grotesque mono that no such filter should drop. The tag
+ * never touches `Math`, `Mayan Numerals` or `Znamenny`. Excluding non-text faces would mean
+ * inventing a judgement the table does not record, which #42 asks for nowhere, so it stays a
+ * question about candidacy rather than about collapsing. `Noto Znamenny Musical Notation` shows the limit is
  * older than this set: it sits under neither base, so it never collapsed, and it has been reaching
  * the sans pool on its own all along.
  *
