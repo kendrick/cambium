@@ -143,11 +143,16 @@ const NOTO_COVERAGE_BASES: readonly string[] = ['Noto Sans', 'Noto Serif'];
  * That shared tag is exactly why collapsing the script cuts is right, and it is also why these have
  * to be named one at a time.
  *
- * Membership is decided by what the cut is, not by what it currently reaches: a cut belongs here
- * when it varies something other than the writing system. `Duployan` and `Shavian` read like
- * notation and are genuine scripts, so they collapse. `Ottoman Siyaq` and `Indic Siyaq Numbers` are
- * both siyaq numeral notation, so covering one and not the other would be an inconsistency rather
- * than a line.
+ * Membership is decided by what the cut is, not by what it currently reaches. "Is it a writing
+ * system" is the obvious rule and it does not work: Duployan, Shavian and SignWriting are all
+ * Unicode scripts, and only the first two belong on the collapsing side. The line that does hold is
+ * whether the cut sets a language's running text. `Duployan` and `Shavian` do, in shorthand and in
+ * a reformed alphabet, so they collapse the way `Avestan` does. The ten below do not: two are style
+ * cuts, and the rest cover symbols, numerals or notation. `SignWriting` notates gesture rather than
+ * running text, which is why it sits with them despite being a script.
+ *
+ * `Ottoman Siyaq` and `Indic Siyaq Numbers` are both siyaq numeral notation, so covering one and
+ * not the other would have been an inconsistency rather than a line.
  *
  * `Mono` is the one worth reading twice. `Noto Sans Mono` is a monospace design carrying
  * `/Sans/Humanist` and no `/Monospace/Monospace` row—no Noto family carries that tag at all—so
