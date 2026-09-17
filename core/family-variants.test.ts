@@ -44,6 +44,42 @@ describe('canonicalFamily', () => {
 	it('leaves a single-word family unchanged even if that word is a suffix token', () => {
 		expect(canonicalFamily('Thai')).toBe('Thai');
 	});
+
+	// Real names from `tags/all/families.csv`, because the whole point of the SC rule is what the
+	// actual file contains: 31 of the 34 ` SC` families collide with a base, and only the two Noto
+	// ones mean Simplified Chinese.
+	it.each([
+		['Noto Sans SC', 'Noto Sans'],
+		['Noto Serif SC', 'Noto Serif'],
+	])('strips SC from %s, where it is Simplified Chinese', (family, canonical) => {
+		expect(canonicalFamily(family)).toBe(canonical);
+	});
+
+	// The other 29. A small-caps cut cannot set running text, so folding it into its base can hand
+	// back the small-caps face as the body answer and drop the real one.
+	it.each([
+		'Cormorant SC',
+		'Playfair Display SC',
+		'Spectral SC',
+		'Vollkorn SC',
+		'Alegreya SC',
+		'Baskervville SC',
+		'Marcellus SC',
+		'IM Fell English SC',
+	])('leaves %s alone, where SC is small caps', (family) => {
+		expect(canonicalFamily(family)).toBe(family);
+	});
+
+	// The counted evidence for leaving the other CJK suffixes as they are: their only non-Noto
+	// collisions are these two, and both are genuine coverage variants.
+	it.each([
+		['IBM Plex Sans JP', 'IBM Plex Sans'],
+		['IBM Plex Sans KR', 'IBM Plex Sans'],
+		['Noto Sans TC', 'Noto Sans'],
+		['Noto Sans HK', 'Noto Sans'],
+	])('still strips %s', (family, canonical) => {
+		expect(canonicalFamily(family)).toBe(canonical);
+	});
 });
 
 interface Candidate {
@@ -125,6 +161,26 @@ describe('collapseVariants', () => {
 			{ family: 'Noto Sans JP', score: 88 },
 			{ family: 'IBM Plex Sans Thai', score: 95 },
 		]);
+	});
+
+	// The regression in the form it would reach a user: `Cormorant SC` outranks `Cormorant` on tags,
+	// and collapsing them would return the small-caps cut as the body answer with the real face gone.
+	it('keeps a small-caps cut and its base as two answers', () => {
+		const candidates: Candidate[] = [
+			{ family: 'Cormorant SC', score: 95 },
+			{ family: 'Cormorant', score: 70 },
+		];
+
+		expect(collapseVariants(candidates, byFamily)).toEqual(candidates);
+	});
+
+	it('still keeps a Noto script variant and its base to one slot', () => {
+		const candidates: Candidate[] = [
+			{ family: 'Noto Sans SC', score: 95 },
+			{ family: 'Noto Sans', score: 70 },
+		];
+
+		expect(collapseVariants(candidates, byFamily)).toEqual([{ family: 'Noto Sans SC', score: 95 }]);
 	});
 
 	it('returns an empty array over an empty input', () => {
