@@ -32,6 +32,7 @@ const seed = {
 	suggestedPairing: null,
 	typeScaleRatio: null,
 	imageClassifications: null,
+	expressive: null,
 };
 
 const tokenSet = { ...layer, schemes: { light: layer, dark: layer } };

@@ -20,6 +20,7 @@ const seed = {
 	suggestedPairing: null,
 	typeScaleRatio: null,
 	imageClassifications: [{ imageId: 'img-1', detected: 'logo' }],
+	expressive: null,
 };
 
 const version = {
