@@ -100,6 +100,15 @@ function buildContent(images: ReferenceImage[]) {
  * Neither branch below sends `temperature`, `top_p`, or `top_k`. All three are removed on
  * claude-opus-5 and any of them returns a 400. Issue #1 pins temperature to zero "because it is
  * free"—that line predates this model, and this code deliberately does not follow it.
+ *
+ * Neither branch sends a `thinking` key either, so Opus 5 runs its adaptive default, which is
+ * what a vision task wants. Anthropic's structured outputs documentation records no
+ * incompatibility with extended thinking, and the thinking documentation does not exclude
+ * structured outputs, so there is no constraint here to work around. Disabling thinking on Opus 5
+ * would cost something real: it can leak `<thinking>` tags into the visible response, and it can
+ * write a tool call as visible text instead of a `tool_use` block. No live call has confirmed
+ * that structured outputs and adaptive thinking work together on this model. The claim here is
+ * only that nothing documented forbids it.
  */
 export function buildSeedRequestBody(input: SeedRequestInput): Record<string, unknown> {
 	const body: Record<string, unknown> = {
@@ -112,11 +121,10 @@ export function buildSeedRequestBody(input: SeedRequestInput): Record<string, un
 	if (input.outputMode === 'structured') {
 		body.output_config = {
 			format: { type: 'json_schema', schema: SEED_JSON_SCHEMA },
+			// `high` is already the default, stated rather than omitted so that a change to what
+			// the API defaults to cannot silently re-price every seed read.
 			effort: 'high',
 		};
-		// Opus 5 only accepts `thinking: disabled` at effort `high` or below, so the two are
-		// pinned together: raising `effort` past `high` while thinking is disabled is a 400.
-		body.thinking = { type: 'disabled' };
 	} else {
 		body.tools = [
 			{
@@ -126,11 +134,9 @@ export function buildSeedRequestBody(input: SeedRequestInput): Record<string, un
 				strict: true,
 			},
 		];
+		// Forcing the call is the one axis this mode trades away: `tool_choice` of `tool` or `any`
+		// is a 400 on Claude Fable 5.1, so a model swap there costs this branch and not the other.
 		body.tool_choice = { type: 'tool', name: SEED_TOOL_NAME };
-		// `thinking` is left unset rather than `{ type: 'adaptive' }`: Opus 5's default is already
-		// adaptive, and a forced tool choice is the one axis this mode already trades away (a
-		// `tool_choice` of `tool`/`any` is a 400 on Claude Fable 5.1), so it should not also pin
-		// down thinking mode for no reason.
 	}
 
 	// `stream` is deliberately absent: issue #17 puts streaming out of scope for a seed request,

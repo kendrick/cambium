@@ -55,6 +55,16 @@ describe('buildSeedRequestBody', () => {
 		},
 	);
 
+	// Both modes leave Opus 5 on its adaptive default. Nothing documented makes structured outputs
+	// incompatible with extended thinking, and disabling it on this model can leak `<thinking>`
+	// tags into the visible response or turn a tool call into visible text.
+	it.each(['structured', 'forced-tool'] as const)(
+		'sends no thinking key in %s mode',
+		(outputMode) => {
+			expect(bodyFor(outputMode)).not.toHaveProperty('thinking');
+		},
+	);
+
 	it('does not set stream', () => {
 		const body = bodyFor('structured');
 
@@ -79,10 +89,9 @@ describe('buildSeedRequestBody', () => {
 			expect(body).not.toHaveProperty('tool_choice');
 		});
 
-		it('disables thinking, coupled to the pinned high effort', () => {
+		it('pins effort to high', () => {
 			const body = bodyFor('structured');
 
-			expect(body.thinking).toEqual({ type: 'disabled' });
 			expect((body.output_config as { effort: string }).effort).toBe('high');
 		});
 	});
@@ -97,12 +106,6 @@ describe('buildSeedRequestBody', () => {
 			expect(tools[0].strict).toBe(true);
 			expect(body.tool_choice).toEqual({ type: 'tool', name: SEED_TOOL_NAME });
 			expect(body).not.toHaveProperty('output_config');
-		});
-
-		it('leaves thinking unset so Opus 5 runs its adaptive default', () => {
-			const body = bodyFor('forced-tool');
-
-			expect(body).not.toHaveProperty('thinking');
 		});
 	});
 
