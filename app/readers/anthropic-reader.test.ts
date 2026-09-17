@@ -21,9 +21,11 @@ import error429 from './fixtures/error-429-rate-limit.json';
 import error500 from './fixtures/error-500-server.json';
 import error504 from './fixtures/error-504-gateway-timeout.json';
 import error529 from './fixtures/error-529-overloaded.json';
+import forcedToolSuccessThinkingFirst from './fixtures/forced-tool-success-thinking-first.json';
 import forcedToolSuccess from './fixtures/forced-tool-success.json';
 import malformedNoContentBlock from './fixtures/malformed-no-content-block.json';
 import structuredProseNotJson from './fixtures/structured-prose-not-json.json';
+import structuredSuccessThinkingFirst from './fixtures/structured-success-thinking-first.json';
 import structuredSuccess from './fixtures/structured-success.json';
 
 type Fixture = {
@@ -42,6 +44,22 @@ const CONFIGURED_MODEL = 'claude-opus-5-configured';
 const IMAGES: ReferenceImage[] = [
 	{ id: 'img-1', downscaled: 'data:image/webp;base64,AA', originalHash: 'sha256:img-1' },
 ];
+
+/**
+ * By type, never by position. Opus 5 runs adaptive thinking, so a real 200 can lead with a
+ * `thinking` block, and a test reading `content[0]` would assert the reader's behaviour on an
+ * envelope the API does not actually send.
+ */
+function blockOfType(fixture: Fixture, type: string): Record<string, unknown> {
+	const content = (fixture.body as { content: Record<string, unknown>[] }).content;
+	const block = content.find((candidate) => candidate.type === type);
+
+	if (!block) {
+		throw new Error(`fixture has no ${type} block`);
+	}
+
+	return block;
+}
 
 function responseFrom(fixture: Fixture): Response {
 	return new Response(JSON.stringify(fixture.body), {
@@ -125,9 +143,8 @@ afterEach(() => {
 describe('createAnthropicBrandReader success', () => {
 	it('returns the structured text block verbatim, and the core accepts it', async () => {
 		const result = await read(stubFetch(structuredSuccess));
-		const textBlock = structuredSuccess.body.content[0];
 
-		expect(result.raw).toBe(textBlock.text);
+		expect(result.raw).toBe(blockOfType(structuredSuccess, 'text').text);
 		expect(() => JSON.parse(result.raw)).not.toThrow();
 
 		// The claim the whole ticket rests on: what this reader returns is what the core accepts.
@@ -136,9 +153,25 @@ describe('createAnthropicBrandReader success', () => {
 
 	it('serialises the forced tool input, and the core accepts that too', async () => {
 		const result = await read(stubFetch(forcedToolSuccess), 'forced-tool');
-		const toolUse = forcedToolSuccess.body.content[0];
 
-		expect(JSON.parse(result.raw)).toEqual(toolUse.input);
+		expect(JSON.parse(result.raw)).toEqual(blockOfType(forcedToolSuccess, 'tool_use').input);
+		expect(parseSeed(result).ok).toBe(true);
+	});
+
+	// Opus 5 thinks adaptively by default, so a real 200 leads with a `thinking` block. Skipping
+	// past it is the whole reason the normalizer searches by block type instead of taking the
+	// first block, and nothing proved that until these fixtures existed.
+	it.each([
+		{ label: 'structured', fixture: structuredSuccessThinkingFirst, mode: 'structured' as const },
+		{
+			label: 'forced-tool',
+			fixture: forcedToolSuccessThinkingFirst,
+			mode: 'forced-tool' as const,
+		},
+	])('reads past a leading thinking block in $label mode', async ({ fixture, mode }) => {
+		const result = await read(stubFetch(fixture), mode);
+
+		expect((fixture.body as { content: { type: string }[] }).content[0].type).toBe('thinking');
 		expect(parseSeed(result).ok).toBe(true);
 	});
 
@@ -233,6 +266,39 @@ describe('createAnthropicBrandReader failures', () => {
 		expect(error.cause).toBe(cause);
 	});
 
+	// The plan puts every failure in the thrown taxonomy. `buildSeedRequestBody` throws a plain
+	// `Error` for a caller bug, so the reader is what gives it a kind #23 can branch on.
+	it.each([
+		{
+			label: 'an image that is not a base64 data URL',
+			images: [{ id: 'broken', downscaled: 'not-a-data-url', originalHash: 'sha256:broken' }],
+			expected: /broken/,
+		},
+		{ label: 'no images at all', images: [], expected: /at least one reference image/ },
+	])(
+		'turns $label into a typed invalid-request before any request',
+		async ({ images, expected }) => {
+			const fetchStub = stubFetch(structuredSuccess);
+			const error = await rejection(
+				readerWith(fetchStub).read(images, { auth: anthropicAuth(API_KEY) }),
+			);
+
+			expect(error.kind).toBe('invalid-request');
+			expect(error.message).toMatch(expected);
+			expect(fetchStub).not.toHaveBeenCalled();
+		},
+	);
+
+	// #17's taxonomy asks invalid-request to carry the API's message. Buried in the body string it
+	// would make #23 parse JSON to say anything more useful than the status.
+	it('lifts the API message out of the error body', async () => {
+		const error = await rejection(read(stubFetch(error400)));
+		const apiMessage = (error400.body as { error: { message: string } }).error.message;
+
+		expect(error.message).toContain(String(error400.status));
+		expect(error.message).toContain(apiMessage);
+	});
+
 	it.each<{ label: string; auth: { scheme: string } | null }>([
 		{ label: 'no auth at all', auth: null },
 		{ label: 'auth belonging to another reader', auth: { scheme: 'codex-cli' } },
@@ -281,8 +347,20 @@ describe('createAnthropicBrandReader key handling', () => {
 		expect(JSON.stringify(result)).not.toContain(API_KEY);
 	});
 
-	it('keeps the key out of an error that will end up in a bug report', async () => {
-		const error = await rejection(read(stubFetch(error401)));
+	// Every fixture, not just one: the reader now copies the API's own message into `message`, so
+	// the leak surface is every error body the API can send rather than a single representative.
+	it.each([
+		error400,
+		error401,
+		error402,
+		error403,
+		error413,
+		error429,
+		error500,
+		error504,
+		error529,
+	])('keeps the key out of the error raised for HTTP $status', async (fixture) => {
+		const error = await rejection(read(stubFetch(fixture)));
 
 		expect(everythingAnErrorCarries(error)).not.toContain(API_KEY);
 	});

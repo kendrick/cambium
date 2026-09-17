@@ -26,9 +26,10 @@ export type SeedRequestInput = {
 
 /**
  * A seed is a handful of fields, not a document, so the response itself needs little headroom.
- * 16000 is Anthropic's documented default for a non-streaming request and leaves room for the
- * seed's pairing arrays (`suggestedPairing` can hold several ranked candidates per role) without
- * approaching the ceiling where a non-streaming call risks a timeout.
+ * The API documents no default here, so some value has to be picked: 16000 is Anthropic's
+ * recommendation for a non-streaming request, and it leaves room for the seed's pairing arrays
+ * (`suggestedPairing` can hold several ranked candidates per role) without approaching the
+ * ceiling where a non-streaming call risks an HTTP timeout.
  */
 export const SEED_REQUEST_MAX_TOKENS = 16000;
 
@@ -121,8 +122,10 @@ export function buildSeedRequestBody(input: SeedRequestInput): Record<string, un
 	if (input.outputMode === 'structured') {
 		body.output_config = {
 			format: { type: 'json_schema', schema: SEED_JSON_SCHEMA },
-			// `high` is already the default, stated rather than omitted so that a change to what
-			// the API defaults to cannot silently re-price every seed read.
+			// `high` is already the default, stated rather than omitted so that a change to what the
+			// API defaults to cannot silently re-price a structured read. Forced-tool sends no
+			// `output_config` at all and stays exposed to that drift, which is one more thing the
+			// two modes do not share.
 			effort: 'high',
 		};
 	} else {

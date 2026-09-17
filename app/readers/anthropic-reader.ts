@@ -82,8 +82,34 @@ function parseRetryAfter(headers: Headers): number | null {
 }
 
 /**
- * The body is diagnostic on the failure path and the failure path has nowhere to put a second
- * failure, so a body that will not read costs the detail rather than the error.
+ * The API's own message says what was actually wrong with a request, and #17's taxonomy asks
+ * `invalid-request` to carry it. Leaving it inside the JSON body string would make #23 parse the
+ * body to say anything useful, so it is lifted here instead.
+ *
+ * Response text only, never anything from the request. That is what keeps the key out of a message
+ * bound for a log or a bug report.
+ */
+function errorMessage(status: number, body: string | null): string {
+	const fallback = `Anthropic returned HTTP ${status}.`;
+
+	if (body === null) {
+		return fallback;
+	}
+
+	try {
+		const parsed: unknown = JSON.parse(body);
+		const message = isRecord(parsed) && isRecord(parsed.error) ? parsed.error.message : null;
+
+		return typeof message === 'string' && message.length > 0 ? `${fallback} ${message}` : fallback;
+	} catch {
+		return fallback;
+	}
+}
+
+/**
+ * The body is diagnostic on the failure path and the payload on the success path, and neither has
+ * anywhere to put a second failure, so a body that will not read costs the detail rather than the
+ * error. An unreadable success body falls through to `malformed` below, which is what it is.
  */
 async function readBodyText(response: Response): Promise<string | null> {
 	try {
@@ -123,7 +149,22 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Brand
 				);
 			}
 
-			const requestBody = buildSeedRequestBody({ images, model: config.model, outputMode });
+			let requestBody: Record<string, unknown>;
+
+			try {
+				requestBody = buildSeedRequestBody({ images, model: config.model, outputMode });
+			} catch (cause) {
+				// `buildSeedRequestBody` throws a plain `Error` on purpose: a stored image that is not
+				// a base64 data URL is a caller bug, not an API failure, and the pure module has no
+				// business knowing this class. But #23 branches on `kind`, and a bare `Error` reaching
+				// it falls through to whatever it does with the unexpected. Wrapping here gives the
+				// failure a kind without teaching the request builder about the taxonomy.
+				throw new AnthropicReaderError(
+					'invalid-request',
+					cause instanceof Error ? cause.message : String(cause),
+					{ cause },
+				);
+			}
 
 			let response: Response;
 
@@ -134,12 +175,12 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Brand
 						'content-type': 'application/json',
 						'x-api-key': auth.apiKey,
 						'anthropic-version': ANTHROPIC_VERSION,
-						// Unverified. Issue #17 names a "direct browser access header", but no current
-						// public documentation describes one: the TypeScript SDK documents a client-side
-						// `dangerouslyAllowBrowser` option and names no wire header at all. It is sent
-						// because an ignored header costs nothing, and nothing here may assume it is
-						// either required or sufficient. No code path here is conditional on it, and a CORS
-						// failure is still a plain `network` error.
+						// Unverified. Issue #17 names a "direct browser access header". Neither the
+						// TypeScript SDK page nor the Messages API reference names one: the SDK documents a
+						// client-side `dangerouslyAllowBrowser` option instead. This spelling is what the
+						// SDK has historically sent. It goes out because an ignored header costs nothing,
+						// and nothing here treats it as either required or sufficient. No code path is
+						// conditional on it, and a CORS failure is still a plain `network` error.
 						'anthropic-dangerous-direct-browser-access': 'true',
 					},
 					body: JSON.stringify(requestBody),
@@ -156,15 +197,16 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Brand
 
 			if (!response.ok) {
 				const kind = errorKindForStatus(response.status);
+				const body = await readBodyText(response);
 
 				// No automatic retry lives here. Issue #1 rules it out because retrying "spends the
 				// user's money without consent", so a rate limit comes back as a number to show rather
 				// than one to sleep on. The kind gate keeps `retryAfterSeconds` meaning what
 				// `anthropic-errors.ts` promises it means, even if some other status grows the header.
-				throw new AnthropicReaderError(kind, `Anthropic returned HTTP ${response.status}.`, {
+				throw new AnthropicReaderError(kind, errorMessage(response.status, body), {
 					status: response.status,
 					requestId,
-					body: await readBodyText(response),
+					body,
 					retryAfterSeconds: kind === 'rate-limit' ? parseRetryAfter(response.headers) : null,
 				});
 			}
