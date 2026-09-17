@@ -120,15 +120,19 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		});
 
 		// The same isolation has to hold in the other direction: a caller mutating what get handed
-		// back must not reach into the store and change what the next get sees.
+		// back must not reach into the store and change what the next get sees. The snapshot has
+		// to be taken before the mutation and compared on its own terms: a store that hands back
+		// its own internal reference makes `fetched` and a later `get()` result the same object,
+		// so asserting against `record` (or against `fetched` itself) would pass either way.
 		it('is not affected by a caller mutating a record returned from get', async () => {
 			const record = makeRecord();
 			await store.put(record);
 
 			const fetched = await store.get(record.id);
+			const versionsBeforeMutation = fetched ? [...fetched.versions] : [];
 			fetched?.versions.push(makeVersion({ interpretation: 'faithful' }));
 
-			expect(await store.get(record.id)).toEqual(record);
+			expect((await store.get(record.id))?.versions).toEqual(versionsBeforeMutation);
 		});
 
 		// This is the store-level half of "a generation appends a version and leaves earlier
