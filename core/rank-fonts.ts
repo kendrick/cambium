@@ -161,15 +161,17 @@ function placementTag(
  *
  * Three of the four end in the quality axes and they are not the same statement. `craft` is what the
  * caller asked for. `craft-no-coverage` is a pool that was measured against the seed's axes and
- * scored zero on all of them. `craft-no-axes` is a seed that named no axes to measure against, which
- * is the ordinary shape of a keyless extraction rather than an exotic input: #33 fills colours and
- * leaves the rest null, and `core/fixtures/raw-responses/colors-only.json` is already that seed.
+ * scored zero on all of them. `craft-no-signal` is a seed with no axis worth measuring against.
  *
  * The last two have to be separated here rather than downstream, because a score cannot tell them
- * apart. With no axes the weighting loop never runs and every family scores zero, exactly as it does
- * when a pool genuinely carries none of the tags the seed asked for.
+ * apart: both leave every family on zero. Saying the pool carries nothing when the seed asked for
+ * nothing is a claim about the wrong half of the comparison.
+ *
+ * A seed that classifies its type and names no expressive axes is ordinary rather than exotic. #33's
+ * keyless extractor fills what it can read off an image and leaves the rest null, and `expressive`
+ * is a required-but-nullable key precisely so a partial seed can say so.
  */
-type RankingBasis = 'personality' | 'craft' | 'craft-no-coverage' | 'craft-no-axes';
+type RankingBasis = 'personality' | 'craft' | 'craft-no-coverage' | 'craft-no-signal';
 
 function chooseBasis(
 	mode: RankingMode,
@@ -181,9 +183,16 @@ function chooseBasis(
 		return 'craft';
 	}
 
-	// Read the seed, not the scores, for the reason in `RankingBasis` above.
-	if ((expressive?.length ?? 0) === 0) {
-		return 'craft-no-axes';
+	// Total weight rather than a count of entries, and read off the seed rather than off any score.
+	// `ExpressiveScoreSchema` allows a score of 0, so `[{ axis: 'Calm', score: 0 }]` names an axis
+	// and still weights nothing. `expressiveReading` divides by that total, so it returns zero for
+	// every family exactly as an empty list does. Counting entries would send that seed to
+	// `craft-no-coverage` to be told the pool carries nothing, which can be flatly false: the pool
+	// may be full of `/Expressive/Calm`.
+	const weight = (expressive ?? []).reduce((total, axis) => total + axis.score, 0);
+
+	if (weight === 0) {
+		return 'craft-no-signal';
 	}
 
 	// A pool with no expressive coverage ties at zero under personality, and a total tie is the
@@ -198,7 +207,7 @@ function chooseBasis(
 
 function rationaleFor(
 	tags: FamilyTags | undefined,
-	seed: BrandSeed,
+	expressive: BrandSeed['expressive'],
 	category: TypeClassification['category'],
 	tone: TypeClassification['tone'],
 	matched: 'tone' | 'category',
@@ -218,31 +227,34 @@ function rationaleFor(
 				? `Scores ${placement.score} on ${placement.tag}; no family here carries the ${tone} tags, so the whole ${category} category answered.`
 				: `Scores ${placement.score} on ${placement.tag}; the taxonomy has no ${tone} ${category}, so the whole category answered.`;
 
-	if (basis !== 'personality') {
-		const axes = `${scoreOn(tags, SPACING_TAG)} on ${SPACING_TAG} and ${scoreOn(tags, WORDSPACE_TAG)} on ${WORDSPACE_TAG}`;
+	if (basis === 'personality') {
+		const { top } = expressiveReading(tags, expressive);
 
-		// The distinction the tone branch above draws, one level down. A pool measured against real
-		// axes and scoring zero is a different statement from a seed that named no axes to measure
-		// against, and one sentence used to make both.
-		if (basis === 'craft-no-coverage') {
-			return `${placed} Nothing in this pool carries the expressive axes the seed asked for, so the quality axes ranked it: ${axes}.`;
-		}
-
-		if (basis === 'craft-no-axes') {
-			return `${placed} The seed named no expressive characteristics, so the quality axes ranked it: ${axes}.`;
-		}
-
-		return `${placed} Ranked on the quality axes: ${axes}.`;
+		// Reaching here means the seed weighted at least one axis above zero, because `chooseBasis`
+		// routes every other seed to `craft-no-signal` before a score is read. So a missing `top` is
+		// this family carrying no tag on axes the seed really did ask for, which is what this says.
+		return top
+			? `${placed} Ranked on the seed's expressive characteristics, strongest at ${top.score} on ${expressiveTag(top.axis)}.`
+			: `${placed} Ranked on the seed's expressive characteristics, which this family carries no tag for.`;
 	}
 
-	const { top } = expressiveReading(tags, seed.expressive);
+	const axes = `${scoreOn(tags, SPACING_TAG)} on ${SPACING_TAG} and ${scoreOn(tags, WORDSPACE_TAG)} on ${WORDSPACE_TAG}`;
 
-	// Reaching here means the seed named at least one axis, since `chooseBasis` sends a seed that
-	// named none to `craft-no-axes` before any score is read. So a missing `top` is this family
-	// carrying no tag on axes the seed really did ask for, which is what the sentence says.
-	return top
-		? `${placed} Ranked on the seed's expressive characteristics, strongest at ${top.score} on ${expressiveTag(top.axis)}.`
-		: `${placed} Ranked on the seed's expressive characteristics, which this family carries no tag for.`;
+	// Switched rather than chained, so adding a basis is a type error here instead of a sentence that
+	// quietly inherits the wrong explanation. That is the failure this whole union exists to stop.
+	switch (basis) {
+		case 'craft':
+			return `${placed} Ranked on the quality axes: ${axes}.`;
+		case 'craft-no-coverage':
+			return `${placed} Nothing in this pool carries the expressive axes the seed asked for, so the quality axes ranked it: ${axes}.`;
+		case 'craft-no-signal':
+			return `${placed} The seed gives no expressive characteristic any weight, so the quality axes ranked it: ${axes}.`;
+		default: {
+			const unhandled: never = basis;
+
+			throw new Error(`unhandled ranking basis: ${String(unhandled)}`);
+		}
+	}
 }
 
 /** Clamps as well as rounds, because a fetched table can carry a score outside the band the schema accepts. */
@@ -299,7 +311,7 @@ function rankRole(request: RoleRequest): FontCandidate[] {
 		provenance: 'derived',
 		family: entry.family,
 		score: toPercent(entry.value),
-		rationale: rationaleFor(entry.tags, seed, category, tone, matched, basis),
+		rationale: rationaleFor(entry.tags, seed.expressive, category, tone, matched, basis),
 	}));
 
 	return named === undefined
@@ -338,7 +350,9 @@ function seatNamedCandidate(
 
 	// The seed's own entry may arrive marked `derived` with a score, because the model writes that
 	// field itself. Nothing derived it from a table, so it is re-stamped here rather than trusted:
-	// #42 wants a mixed list to stay honest about which entries a ranking placed.
+	// #42 wants a mixed list to stay honest about which entries a ranking placed. This is the one
+	// candidate that names no tag and carries no score, which is #42's `invented` contract winning
+	// over its "family name, a score, and a rationale" line — no table placed this face.
 	const invented: FontCandidate = {
 		provenance: 'invented',
 		family: named.family,
@@ -414,9 +428,8 @@ export function rankFonts(
 				mode: modeFor('body'),
 				// `/Theme/*` marks a face display-only, not body-only: a family tagged Blackletter,
 				// Distressed, or Wacky is a legitimate headline and has no business under a paragraph
-				// of running text. The acceptance criteria in #42 have it the other way round, and the
-				// issue's Proposed Behavior section and the `VT323` row in the curated table are the
-				// two that agree with the code.
+				// of running text. #42's Proposed Behavior, its acceptance criteria and the `VT323` row
+				// in the curated table all say so.
 				excludeThemed: true,
 				named: namedFor('body'),
 			})

@@ -183,8 +183,7 @@ describe('rankFonts', () => {
 		expect(familiesOf(body)).toEqual(['Geo Sans Thai', 'Round Sans', 'Loud Sans']);
 	});
 
-	// The acceptance criteria and the planning doc both say this backwards. A face tagged
-	// Distressed is a display answer that has no business under running text.
+	// A face tagged Distressed is a display answer that has no business under running text.
 	it('drops themed families from body and keeps them in display', () => {
 		const { display, body } = pairingOf(seedWith({}));
 
@@ -354,18 +353,26 @@ describe('rankFonts', () => {
 			expect(display[0]!.rationale).toContain('the whole sans category answered');
 		});
 
-		// A seed that named no axes and a pool that carries none of the ones it named both score zero
-		// everywhere, and they used to share a sentence that was only true of the second. `null` and
-		// `[]` are both real: `expressive` is a required-but-nullable key, `colors-only.json` already
-		// holds null, and #33's keyless extractor produces exactly that shape.
+		// A seed that weighted no axes and a pool that carries none of the ones it did weight both
+		// score zero everywhere, and they used to share a sentence only ever true of the second.
+		// `null` and `[]` are both real shapes: `expressive` is a required-but-nullable key, and a
+		// partial seed says so by leaving it null. Note this needs a seed that classifies its type
+		// and names no axes, not the wholly unclassified seed above, which never gets this far.
+		// `[{ axis: 'Calm', score: 0 }]` is the third shape and the one that reads like a signal until
+		// you total it: the schema allows a zero score, and a seed that weights every axis at zero has
+		// named nothing to rank on. `Geo Sans` carries /Expressive/Calm at 80, so the no-coverage
+		// sentence would be flatly false about this pool.
 		it.each([
 			['null', null],
 			['an empty array', []],
-		])('says the seed named nothing when expressive is %s', (_label, expressive) => {
+			['every axis weighted zero', [{ axis: 'Calm' as const, score: 0 }]],
+		])('says the seed weighted nothing when expressive is %s', (_label, expressive) => {
 			const { display } = pairingOf(seedWith({}, { expressive }));
 
 			for (const candidate of display) {
-				expect(candidate.rationale).toContain('The seed named no expressive characteristics');
+				expect(candidate.rationale).toContain(
+					'The seed gives no expressive characteristic any weight',
+				);
 				expect(candidate.rationale).not.toContain('the expressive axes the seed asked for');
 			}
 		});
@@ -413,6 +420,7 @@ describe('rankFonts', () => {
 	it.each([
 		['null', null],
 		['an empty array', []],
+		['every axis weighted zero', [{ axis: 'Calm' as const, score: 0 }]],
 	])('ranks on the quality axes when expressive is %s', (_label, expressive) => {
 		const { display, body } = pairingOf(seedWith({}, { expressive }));
 
