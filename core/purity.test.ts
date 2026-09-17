@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { BrandSeedSchema } from './brand-seed';
 import { validateDtcg } from './dtcg/validate';
+import { createOklchScaleEngine } from './oklch-scale-engine';
 import { resolveCandidatePool } from './font-table';
 import { parseSeed } from './parse-seed';
 import { rankFonts } from './rank-fonts';
+import { BALANCED } from './scale-engine';
 import { TokenSetSchema } from './token-set';
 
 const ramp = Array.from({ length: 12 }, (_, i) => ({
@@ -87,6 +89,10 @@ const rankableSeed = BrandSeedSchema.parse({
 	},
 });
 
+// `seed` already carries the one brand key colour a scale engine needs, so it needs no widening
+// the way `rankableSeed` did.
+const rampableSeed = BrandSeedSchema.parse(seed);
+
 /**
  * Stage 2 stays free of DOM and browser APIs so it can run server-side unchanged, which the
  * headless generate CLI depends on.
@@ -122,6 +128,7 @@ describe('core purity', () => {
 			() => resolveCandidatePool(fontTable, 'sans', 'geometric').matched === 'tone',
 		],
 		['rankFonts', () => rankFonts(fontTable, rankableSeed).ok],
+		['the OKLCH scale engine', () => createOklchScaleEngine().generate(rampableSeed, BALANCED).ok],
 	])('%s parses a valid value without reaching the network', (_name, parses) => {
 		vi.stubGlobal('fetch', () => {
 			throw new Error('the pure core must not reach the network');

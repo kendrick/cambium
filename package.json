@@ -45,6 +45,7 @@
     "test:bundle": "vitest run --project bundle",
     "dtcg:refresh": "node scripts/refresh-dtcg-schema.mjs",
     "dtcg:build": "node scripts/build-dtcg-validator.mjs",
+    "swatches": "node --import ./scripts/lib/register-ts.mjs scripts/swatches.mjs",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build && pnpm test:bundle"
   },
   "dependencies": {
