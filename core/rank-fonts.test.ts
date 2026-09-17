@@ -385,7 +385,7 @@ describe('rankFonts', () => {
 			expect(display[0]!.rationale).toContain(
 				'Nothing in this pool carries the expressive axes the seed asked for',
 			);
-			expect(display[0]!.rationale).not.toContain('The seed named no expressive characteristics');
+			expect(display[0]!.rationale).not.toContain('gives no expressive characteristic any weight');
 		});
 
 		// Monospace has no tone subdivision whatever the seed's tone, so every mono candidate takes
@@ -415,8 +415,9 @@ describe('rankFonts', () => {
 		expect(familiesOf(display)).toEqual(['Geo Slab', 'Warm Slab', 'Bracket Slab']);
 	});
 
-	// The keyless path: colours only, everything else null. It still has to return ranked faces, and
-	// they have to be ordered by the quality axes rather than left in the table's order.
+	// A seed that classified its type and weighted no axes still has to come back with ranked faces,
+	// ordered by the quality axes rather than left in the table's own order. Not the colours-only
+	// seed, which carries no type classification and is refused before any of this runs.
 	it.each([
 		['null', null],
 		['an empty array', []],

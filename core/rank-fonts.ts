@@ -167,9 +167,11 @@ function placementTag(
  * apart: both leave every family on zero. Saying the pool carries nothing when the seed asked for
  * nothing is a claim about the wrong half of the comparison.
  *
- * A seed that classifies its type and names no expressive axes is ordinary rather than exotic. #33's
- * keyless extractor fills what it can read off an image and leaves the rest null, and `expressive`
- * is a required-but-nullable key precisely so a partial seed can say so.
+ * A seed that classifies its type and weights no axes is an ordinary input rather than an exotic
+ * one. `expressive` is a required-but-nullable key so a partial seed records the gap instead of
+ * hiding it, per the field-shape note on `BrandSeedSchema`, and any model that fills the type
+ * classification while leaving the axes null lands here. It is not the wholly unclassified seed,
+ * which `rankFonts` refuses outright before a basis is ever chosen.
  */
 type RankingBasis = 'personality' | 'craft' | 'craft-no-coverage' | 'craft-no-signal';
 
