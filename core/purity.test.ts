@@ -57,6 +57,7 @@ const record = {
 	versions: [
 		{
 			createdAt: '2026-09-16T12:00:00.000Z',
+			ordinal: 1,
 			seed,
 			tokenSet,
 			provider: 'anthropic',
