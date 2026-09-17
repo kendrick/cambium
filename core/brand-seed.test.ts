@@ -27,6 +27,7 @@ export const colorsOnly = {
 	suggestedPairing: null,
 	typeScaleRatio: null,
 	imageClassifications: null,
+	expressive: null,
 };
 
 describe('KeyColorSchema', () => {
@@ -99,6 +100,8 @@ describe('BrandSeedSchema', () => {
 
 		expect('radiusCharacter' in roundTripped).toBe(true);
 		expect(roundTripped.radiusCharacter).toBeNull();
+		expect('expressive' in roundTripped).toBe(true);
+		expect(roundTripped.expressive).toBeNull();
 	});
 
 	it('rejects a seed that omits a field rather than stating it absent', () => {
@@ -195,6 +198,51 @@ describe('SuggestedPairingSchema ordering', () => {
 		});
 
 		expect(result.success).toBe(true);
+	});
+});
+
+const atAxis = (axis: string, score: number) => ({ axis, score });
+
+describe('ExpressiveSchema', () => {
+	it('accepts axes ranked highest score first', () => {
+		const parsed = BrandSeedSchema.parse({
+			...colorsOnly,
+			expressive: [atAxis('Calm', 88), atAxis('Competent', 75)],
+		});
+
+		expect(parsed.expressive?.[0]?.axis).toBe('Calm');
+	});
+
+	// The scores are documented as ranked, the same convention `suggestedPairing` already
+	// enforces by refinement rather than by trusting the caller to have sorted them.
+	it('rejects axes that do not run highest score first', () => {
+		const result = BrandSeedSchema.safeParse({
+			...colorsOnly,
+			expressive: [atAxis('Calm', 10), atAxis('Competent', 90)],
+		});
+
+		expect(result.success).toBe(false);
+	});
+
+	// The vocabulary is the twenty /Expressive/* tag names, not free text, so a model naming an
+	// adjective outside it fails loudly here instead of silently ranking nothing downstream.
+	it('rejects an axis outside the closed vocabulary', () => {
+		const result = BrandSeedSchema.safeParse({
+			...colorsOnly,
+			expressive: [{ axis: 'serious', score: 90 }],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['expressive', 0, 'axis']);
+	});
+
+	it('rejects an expressive entry carrying a key the schema does not declare', () => {
+		const result = BrandSeedSchema.safeParse({
+			...colorsOnly,
+			expressive: [{ axis: 'Calm', score: 90, confidence: 0.5 }],
+		});
+
+		expect(result.success).toBe(false);
 	});
 });
 

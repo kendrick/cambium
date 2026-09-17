@@ -31,6 +31,7 @@ const seed = {
 	suggestedPairing: null,
 	typeScaleRatio: null,
 	imageClassifications: null,
+	expressive: null,
 };
 
 const record = {

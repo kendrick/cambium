@@ -105,6 +105,52 @@ export const ImageClassificationSchema = z.strictObject({
 });
 
 /**
+ * The twenty `/Expressive/*` names from Google's tag taxonomy. These are ordinary English
+ * adjectives, not the data. The score is the data. Closing the enum means a model returning
+ * `serious` instead of `Competent` fails at this trust boundary instead of silently ranking
+ * nothing downstream. That couples the seed to the upstream taxonomy, but #42's ranking
+ * depends on the same taxonomy regardless of where it is enforced.
+ */
+export const ExpressiveAxisSchema = z.enum([
+	'Active',
+	'Artistic',
+	'Awkward',
+	'Business',
+	'Calm',
+	'Childlike',
+	'Competent',
+	'Cute',
+	'Excited',
+	'Fancy',
+	'Futuristic',
+	'Happy',
+	'Innovative',
+	'Loud',
+	'Playful',
+	'Rugged',
+	'Sincere',
+	'Sophisticated',
+	'Stiff',
+	'Vintage',
+]);
+
+export const ExpressiveScoreSchema = z.strictObject({
+	axis: ExpressiveAxisSchema,
+	score: z.number().min(0).max(100),
+});
+
+/**
+ * Ranked means ordered, the same convention `rankedByScore` enforces for font candidates.
+ * Every entry here carries a score, so unlike that refinement there is no invented/derived
+ * split to filter out first.
+ */
+const rankedByExpressiveScore = z
+	.array(ExpressiveScoreSchema)
+	.refine((axes) => axes.every((axis, i) => i === 0 || axis.score <= axes[i - 1]!.score), {
+		message: 'expressive axes must run highest score first',
+	});
+
+/**
  * Every field is a required key holding a nullable value, never an optional key.
  *
  * A seed can be partial: the keyless extractor fills colours and leaves the rest untouched,
@@ -131,6 +177,7 @@ export const BrandSeedSchema = z.strictObject({
 	suggestedPairing: SuggestedPairingSchema.nullable(),
 	typeScaleRatio: z.number().positive().nullable(),
 	imageClassifications: z.array(ImageClassificationSchema).nullable(),
+	expressive: rankedByExpressiveScore.nullable(),
 });
 
 export type OklchTriple = z.infer<typeof OklchTripleSchema>;
@@ -140,4 +187,6 @@ export type FontCandidate = z.infer<typeof FontCandidateSchema>;
 export type SuggestedPairing = z.infer<typeof SuggestedPairingSchema>;
 export type TypeClassification = z.infer<typeof TypeClassificationSchema>;
 export type ImageClassification = z.infer<typeof ImageClassificationSchema>;
+export type ExpressiveAxis = z.infer<typeof ExpressiveAxisSchema>;
+export type ExpressiveScore = z.infer<typeof ExpressiveScoreSchema>;
 export type BrandSeed = z.infer<typeof BrandSeedSchema>;
