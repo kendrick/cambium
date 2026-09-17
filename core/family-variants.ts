@@ -139,8 +139,14 @@ const NOTO_COVERAGE_BASES: readonly string[] = ['Noto Sans', 'Noto Serif'];
  * The prefix rule above cannot tell a script from anything else in that position, and the structural
  * tag cannot either: counted against the pinned file, 159 of the 160 `Noto Sans` cuts and 40 of the
  * 42 `Noto Serif` cuts carry the same `/Sans/Humanist` or `/Serif/Transitional` tag as their base.
- * That shared tag is exactly why collapsing the script cuts is right, and it is also why eight of
- * the nine below reach a pool and have to be named one at a time.
+ * That shared tag is exactly why collapsing the script cuts is right, and it is also why these have
+ * to be named one at a time.
+ *
+ * Membership is decided by what the cut is, not by what it currently reaches: a cut belongs here
+ * when it varies something other than the writing system. `Duployan` and `Shavian` read like
+ * notation and are genuine scripts, so they collapse. `Ottoman Siyaq` and `Indic Siyaq Numbers` are
+ * both siyaq numeral notation, so covering one and not the other would be an inconsistency rather
+ * than a line.
  *
  * `Mono` is the one worth reading twice. `Noto Sans Mono` is a monospace design carrying
  * `/Sans/Humanist` and no `/Monospace/Monospace` row—no Noto family carries that tag at all—so
@@ -148,8 +154,12 @@ const NOTO_COVERAGE_BASES: readonly string[] = ['Noto Sans', 'Noto Serif'];
  * rather than a mono one. Its `/Quality/Spacing` is 80 against the base's 70, so a craft ranking
  * really does separate them.
  *
- * `Symbols 2` carries no structural tag, so it reaches no pool either way and is here for symmetry
- * with `Symbols` rather than to fix anything.
+ * `Symbols 2` is the one entry that changes nothing today: it carries no structural tag, so it
+ * reaches no pool and cannot fold anywhere. It stays because its sibling `Symbols` does carry
+ * `/Sans/Humanist`, which makes the gap look like an upstream omission rather than a statement, and
+ * because the two failure directions are not symmetric. Keeping an inert entry costs one string;
+ * dropping it means an upstream retag starts folding a symbol font onto `Noto Sans` with no test
+ * going red. Nine of the ten below do work now.
  *
  * Known limitation, deliberately left. Un-collapsing these means `Noto Sans Math` and friends can
  * now hold a slot of their own, and a notation face is no one's brand typeface.
@@ -159,14 +169,20 @@ const NOTO_COVERAGE_BASES: readonly string[] = ['Noto Sans', 'Noto Serif'];
  * pool at all, and `Datatype` is a real neo-grotesque mono that no such filter should drop. The tag
  * never touches `Math`, `Mayan Numerals` or `Znamenny`. Excluding non-text faces would mean
  * inventing a judgement the table does not record, which #42 asks for nowhere, so it stays a
- * question about candidacy rather than about collapsing. `Noto Znamenny Musical Notation` shows the limit is
- * older than this set: it sits under neither base, so it never collapsed, and it has been reaching
- * the sans pool on its own all along.
+ * question about candidacy rather than about collapsing. `Noto Znamenny Musical Notation` shows
+ * the limit is older than this set: it sits under neither base, so it never collapsed, and it has
+ * been reaching the sans pool on its own all along.
  *
  * Every count here is a snapshot of one commit, the SHA held by `UPSTREAM_SHA` in
  * `app/fonts/font-table-provider.ts`, which `core/` cannot import and so cannot name in code. An
  * upstream release shipping another non-script cut under either base folds it onto the base
- * silently and no test goes red. Recount this list when that pin moves.
+ * silently and no test goes red.
+ *
+ * To recount when that pin moves: take every family beginning `Noto Sans ` or `Noto Serif ` that
+ * carries a `/Sans/`, `/Serif/`, `/Slab/` or `/Monospace/` tag, and diff the cut names against this
+ * set. At the pinned commit that yields 171 distinct cuts, and the ten below are the ones that are
+ * not writing systems. `Ottoman Siyaq` was found exactly this way, by re-deriving rather than by
+ * rechecking the names already listed.
  */
 const NOTO_NON_SCRIPT_CUTS: ReadonlySet<string> = new Set([
 	'Display',
@@ -174,6 +190,7 @@ const NOTO_NON_SCRIPT_CUTS: ReadonlySet<string> = new Set([
 	'Math',
 	'Mayan Numerals',
 	'Mono',
+	'Ottoman Siyaq',
 	'SignWriting',
 	'Symbols',
 	'Symbols 2',

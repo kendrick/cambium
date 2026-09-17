@@ -96,6 +96,7 @@ describe('canonicalFamily', () => {
 		'Noto Sans SignWriting',
 		'Noto Sans Mayan Numerals',
 		'Noto Sans Indic Siyaq Numbers',
+		'Noto Serif Ottoman Siyaq',
 		'Noto Sans Tamil Supplement',
 	])('leaves %s alone, where the cut is not script coverage', (family) => {
 		expect(canonicalFamily(family)).toBe(family);
@@ -108,6 +109,10 @@ describe('canonicalFamily', () => {
 		['Noto Sans Tamil', 'Noto Sans'],
 		['Noto Sans Sunuwar', 'Noto Sans'],
 		['Noto Serif Todhri', 'Noto Serif'],
+		// Both read like notation and are real writing systems, which is where the line sits: the set
+		// is about what a cut is, not about how its name sounds.
+		['Noto Sans Duployan', 'Noto Sans'],
+		['Noto Sans Shavian', 'Noto Sans'],
 	])('still collapses the script cut %s', (family, canonical) => {
 		expect(canonicalFamily(family)).toBe(canonical);
 	});
