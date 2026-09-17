@@ -235,8 +235,19 @@ export function createWorkspaceStore({
 	now = () => new Date().toISOString(),
 }: WorkspaceStoreOptions): StoreApi<WorkspaceState> {
 	return createStore<WorkspaceState>()((set, get) => {
-		async function appendVersion(provenance?: CommitProvenance): Promise<BrandRecord> {
-			const startedIn = session;
+		async function appendVersion(
+			provenance: CommitProvenance | undefined,
+			requestedIn: number,
+		): Promise<BrandRecord> {
+			// A queued commit belongs to the workspace that asked for it. `commit` captures the session
+			// synchronously and this body runs a turn later at the earliest, so by now the workspace can
+			// be somewhere else entirely, and appending here would write the commit into whichever
+			// record happens to be open, provenance and all.
+			if (session !== requestedIn) {
+				throw new Error('the workspace moved on before this commit ran, so nothing was written');
+			}
+
+			const selectedIn = selection;
 			const { record, activeOrdinal, draftSeed, preset } = get();
 
 			if (!record) {
@@ -294,10 +305,19 @@ export function createWorkspaceStore({
 			// reinstating this record afterwards would pair it with a newer record's draft and preset:
 			// one workspace showing two records at once. The write itself stands either way, which is
 			// why the finished record still goes back to the caller.
-			if (session === startedIn) {
-				// The draft and the derived tokens already say what was just written, so a commit moves
-				// the record and the active version forward and nothing else.
-				set({ record: next, activeOrdinal: version.ordinal });
+			if (session === requestedIn) {
+				// Taking the record is always right, because it is the one just written. Moving the active
+				// version is not: re-pointing the view stays inside the session, so it can land mid-write,
+				// and overriding it would leave the workspace naming the new version while showing the
+				// seed and preset of the version the user actually chose.
+				const reselected = selection !== selectedIn;
+
+				// A partial `set` rather than `workspaceFor`, which every other path here uses. That helper
+				// rebuilds the draft from a version, and `editSeed` can land mid-write, so rebuilding
+				// would throw away an edit the user made while the write was in flight. The draft and
+				// the derived tokens already say what was written, so a commit nobody navigated away
+				// from moves the record and the active version and nothing else.
+				set(reselected ? { record: next } : { record: next, activeOrdinal: version.ordinal });
 			}
 
 			return next;
@@ -318,15 +338,25 @@ export function createWorkspaceStore({
 		let queue: Promise<unknown> = Promise.resolve();
 
 		/**
-		 * Counts how many times the workspace has been pointed somewhere, so a commit can tell whether
-		 * it is still finishing the session it began in.
+		 * Two counters answering two questions a finished commit has to ask.
 		 *
-		 * The record itself cannot answer that. `RecordStore` hands back a fresh object graph on every
-		 * read, so a caller reloading the same record mid-commit looks like a different record, while
-		 * closing and reopening the same object looks like never having left. Counting the moves is
-		 * exact where comparing the records is wrong in both directions.
+		 * `session` is which record is open, and only `open` and `close` move it. A commit that comes
+		 * back to a different record must not be adopted at all. The record itself cannot answer this:
+		 * `RecordStore` hands back a fresh object graph on every read, so a caller reloading the same
+		 * record mid-commit looks like a different record, while closing and reopening the same object
+		 * looks like never having left. Counting the moves is exact where comparing records is wrong in
+		 * both directions.
+		 *
+		 * `selection` is which version the workspace is pointed at, moved by `selectVersion` and
+		 * `discardEdits`, which both re-point the view without leaving the record. A commit that comes
+		 * back to a different version of the same record still belongs to that record, so the write is
+		 * taken and the user's choice of version is left alone.
+		 *
+		 * `editSeed` deliberately moves neither. Editing on top of a version that was just committed is
+		 * the ordinary state, not a conflict, so that commit still moves the workspace forward.
 		 */
 		let session = 0;
+		let selection = 0;
 
 		return {
 			record: null,
@@ -357,6 +387,7 @@ export function createWorkspaceStore({
 					throw new Error(`no version with ordinal ${ordinal} in the open record`);
 				}
 
+				selection += 1;
 				set({ activeOrdinal: ordinal, ...workspaceFor(engine, version) });
 			},
 
@@ -381,14 +412,20 @@ export function createWorkspaceStore({
 				// workspace, which is the state `open` leaves it in. Returning early on a null active
 				// version instead would strand every edit made before the first commit, which is the
 				// one stretch where a user has no way back.
+				selection += 1;
 				set(workspaceFor(engine, record && versionAt(record, activeOrdinal)));
 			},
 
 			commit(provenance) {
+				// Captured here rather than at the queue's turn, which is already too late: `open` and
+				// `close` run in between, and a commit that read the session then would follow the
+				// workspace instead of the request that created it.
+				const requestedIn = session;
+
 				// Both arms run the commit: a rejected one must not wedge every commit behind it.
 				const run = queue.then(
-					() => appendVersion(provenance),
-					() => appendVersion(provenance),
+					() => appendVersion(provenance, requestedIn),
+					() => appendVersion(provenance, requestedIn),
 				);
 
 				// Swallowed for the queue's own bookkeeping only. `run` still rejects for the caller.

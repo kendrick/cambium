@@ -165,8 +165,8 @@ function openWorkspace(
  * thing worth protecting is the import graph itself, and nothing else in the suite can see it:
  * `pnpm test:bundle` measures a real build, the landing route is a Server Component, so the engine
  * runs at build time, reaches no client chunk, and the budget stays green whatever this store
- * imports. It stops being green the first time a client component reaches the store, which is #8,
- * #9 or #10 rather than today, and by then the regression is months old.
+ * imports. It stops being green the first time a client component reaches the store, which is #24,
+ * the workspace shell, rather than today, and by then the regression is months old.
  *
  * Replace it the moment an import-boundary lint rule can say the same thing. The `engine` docblock
  * in `workspace-store.ts` carries the measured numbers.
@@ -493,6 +493,106 @@ describe('the workspace store', () => {
 
 		expect(store.getState().record).toBe(record);
 		expect(store.getState().activeOrdinal).toBe(1);
+	});
+
+	it('refuses a commit whose workspace was replaced before it ran', async () => {
+		const { store, recordStore } = openWorkspace();
+		const second = { ...makeRecord([makeVersion({ seed: seedWith(50) })]), id: OTHER_RECORD_ID };
+
+		// `commit` queues, so nothing has read the workspace yet when this `open` lands synchronously.
+		// A commit that followed the workspace would append to whichever record arrived last.
+		const pending = store.getState().commit();
+
+		store.getState().open(second);
+
+		await expect(pending).rejects.toThrow(/moved on/);
+		expect(recordStore.puts).toHaveLength(0);
+		expect(store.getState().record).toBe(second);
+	});
+
+	it('keeps a version selected mid-write, and still takes the record', async () => {
+		const { store, writeInFlight, releaseWrite } = gatedWorkspace();
+		const record = makeRecord([
+			makeVersion({ seed: seedWith(10), interpretation: 'faithful' }),
+			makeVersion({ createdAt: '2026-02-01T00:00:00.000Z', ordinal: 2, seed: seedWith(20) }),
+		]);
+
+		store.getState().open(record);
+
+		const pending = store.getState().commit();
+
+		// Selecting a version is not leaving the record, so the write is still this workspace's to take.
+		// Moving the active version on top of the selection is what would leave the workspace naming one
+		// version and showing another's seed.
+		await writeInFlight;
+		store.getState().selectVersion(1);
+		releaseWrite();
+
+		await pending;
+
+		const state = store.getState();
+
+		expect(state.activeOrdinal).toBe(1);
+		expect(state.draftSeed).toEqual(seedWith(10));
+		expect(state.preset).toBe('faithful');
+		expect(state.record?.versions).toHaveLength(3);
+	});
+
+	it('keeps a reselected version even when the ordinal did not change', async () => {
+		const { store, writeInFlight, releaseWrite } = gatedWorkspace();
+
+		store.getState().open(makeRecord());
+		store.getState().editSeed({ keyColors: seedWith(99).keyColors });
+
+		const pending = store.getState().commit(PROVENANCE);
+
+		// Reselecting the version already active still re-points the view: it throws the edit away and
+		// puts the committed version's own seed back on screen. Comparing ordinals cannot see that.
+		await writeInFlight;
+		store.getState().selectVersion(1);
+		releaseWrite();
+
+		await pending;
+
+		expect(store.getState().activeOrdinal).toBe(1);
+		expect(store.getState().draftSeed).toEqual(seedWith(259.8));
+	});
+
+	it('keeps a discard that lands while a commit is in flight', async () => {
+		const { store, writeInFlight, releaseWrite } = gatedWorkspace();
+
+		store.getState().open(makeRecord());
+		store.getState().editSeed({ keyColors: seedWith(99).keyColors });
+
+		const pending = store.getState().commit(PROVENANCE);
+
+		await writeInFlight;
+		store.getState().discardEdits();
+		releaseWrite();
+
+		await pending;
+
+		expect(store.getState().activeOrdinal).toBe(1);
+		expect(store.getState().draftSeed).toEqual(seedWith(259.8));
+	});
+
+	it('still moves forward when the edit lands while a commit is in flight', async () => {
+		const { store, writeInFlight, releaseWrite } = gatedWorkspace();
+
+		store.getState().open(makeRecord());
+
+		const pending = store.getState().commit();
+
+		// Editing on top of the version being written is the ordinary state rather than a conflict, so
+		// this commit still moves the workspace forward. The guard above must not catch it too.
+		await writeInFlight;
+		store.getState().editSeed({ keyColors: seedWith(77).keyColors });
+		releaseWrite();
+
+		await pending;
+
+		expect(store.getState().activeOrdinal).toBe(2);
+		expect(store.getState().draftSeed).toEqual(seedWith(77));
 	});
 
 	it('closes a record without touching storage', () => {
