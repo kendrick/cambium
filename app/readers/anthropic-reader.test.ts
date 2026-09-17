@@ -92,20 +92,34 @@ async function rejection(promise: Promise<unknown>): Promise<AnthropicReaderErro
 }
 
 /**
- * Every test drives the injected `fetch`, so nothing here should ever touch the global. Stubbing
- * it to throw is what turns "the suite makes no live call" into something the suite enforces
- * rather than something each new test has to remember. `core/purity.test.ts` guards the core the
- * same way, and for the same reason: `fetch` is a live global under Node, so its absence cannot
- * be asserted the way `document`'s can.
+ * Every test drives the injected `fetch`, so nothing here should ever reach the global. Standing
+ * in for it turns "the suite makes no live call" into something the suite enforces rather than
+ * something each new test has to remember. `fetch` is a live global under Node, so its absence
+ * cannot be asserted the way `document`'s can in `core/purity.test.ts`; this is the substitute.
+ *
+ * The check is an assertion afterwards rather than a throw at call time, which matters here and
+ * not in the core. The reader wraps anything `fetch` throws as a `network` error, so a guard that
+ * threw would arrive disguised as a connection failure, and a test asserting only `kind` and
+ * `status` would pass having quietly used the global.
  */
+const globalFetch = vi.fn<typeof globalThis.fetch>();
+
 beforeEach(() => {
-	vi.stubGlobal('fetch', () => {
-		throw new Error('the reader suite must not reach the network');
-	});
+	vi.stubGlobal('fetch', globalFetch);
 });
 
 afterEach(() => {
+	const reachedTheGlobal = globalFetch.mock.calls.length > 0;
+
+	globalFetch.mockClear();
 	vi.unstubAllGlobals();
+
+	// Thrown rather than asserted, because oxlint's vitest/no-standalone-expect refuses an
+	// `expect` outside a test block. A hook that throws fails the case the same way and says the
+	// same thing.
+	if (reachedTheGlobal) {
+		throw new Error('this test used the global fetch; pass a stub through the reader config');
+	}
 });
 
 describe('createAnthropicBrandReader success', () => {
