@@ -5,6 +5,7 @@ import { BrandSeedSchema } from './brand-seed';
 import { validateDtcg } from './dtcg/validate';
 import { resolveCandidatePool } from './font-table';
 import { parseSeed } from './parse-seed';
+import { rankFonts } from './rank-fonts';
 import { TokenSetSchema } from './token-set';
 
 const ramp = Array.from({ length: 12 }, (_, i) => ({
@@ -75,6 +76,17 @@ const record = {
 
 const fontTable = [{ family: 'Geo Sans', tag: '/Sans/Geometric', score: 100 }];
 
+// The `seed` above classifies no type, and a seed with none is the one input `rankFonts` refuses.
+const rankableSeed = BrandSeedSchema.parse({
+	...seed,
+	typeClassification: {
+		category: 'sans',
+		tone: 'geometric',
+		xHeight: 'medium',
+		displayDiffersFromBody: true,
+	},
+});
+
 /**
  * Stage 2 stays free of DOM and browser APIs so it can run server-side unchanged, which the
  * headless generate CLI depends on.
@@ -109,6 +121,7 @@ describe('core purity', () => {
 			'resolveCandidatePool',
 			() => resolveCandidatePool(fontTable, 'sans', 'geometric').matched === 'tone',
 		],
+		['rankFonts', () => rankFonts(fontTable, rankableSeed).ok],
 	])('%s parses a valid value without reaching the network', (_name, parses) => {
 		vi.stubGlobal('fetch', () => {
 			throw new Error('the pure core must not reach the network');
