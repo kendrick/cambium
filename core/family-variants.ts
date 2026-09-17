@@ -124,7 +124,7 @@ const SIMPLIFIED_CHINESE_FAMILY_PREFIX = 'Noto ';
  * Listing its scripts in `VARIANT_SUFFIXES` does not scale. Noto spans roughly 190 of them against
  * the 66 tokens that list carries, and counted against the pinned file the shortfall left 94
  * `Noto Sans` cuts standing as their own family in the `/Sans/Humanist` and `/Sans/Rounded` pool
- * alone — enough for one typeface to take two of a role's three slots under a different name each
+ * alone—enough for one typeface to take two of a role's three slots under a different name each
  * time. Matching the prefix collapses all 199 of them and needs no list of scripts at all.
  *
  * Only these two bases. The other nine Noto families are separate designs rather than cuts of
@@ -139,11 +139,11 @@ const NOTO_COVERAGE_BASES: readonly string[] = ['Noto Sans', 'Noto Serif'];
  * The prefix rule above cannot tell a script from anything else in that position, and the structural
  * tag cannot either: counted against the pinned file, 159 of the 160 `Noto Sans` cuts and 40 of the
  * 42 `Noto Serif` cuts carry the same `/Sans/Humanist` or `/Serif/Transitional` tag as their base.
- * That shared tag is exactly why collapsing the script cuts is right, and it is also why these nine
- * reach a pool and have to be named one at a time.
+ * That shared tag is exactly why collapsing the script cuts is right, and it is also why eight of
+ * the nine below reach a pool and have to be named one at a time.
  *
  * `Mono` is the one worth reading twice. `Noto Sans Mono` is a monospace design carrying
- * `/Sans/Humanist` and no `/Monospace/Monospace` row — no Noto family carries that tag at all — so
+ * `/Sans/Humanist` and no `/Monospace/Monospace` row—no Noto family carries that tag at all—so
  * it never reaches the mono pool and folding it onto `Noto Sans` costs a distinct sans answer
  * rather than a mono one. Its `/Quality/Spacing` is 80 against the base's 70, so a craft ranking
  * really does separate them.
@@ -157,6 +157,11 @@ const NOTO_COVERAGE_BASES: readonly string[] = ['Noto Sans', 'Noto Serif'];
  * about candidacy rather than about collapsing. `Noto Znamenny Musical Notation` shows the limit is
  * older than this set: it sits under neither base, so it never collapsed, and it has been reaching
  * the sans pool on its own all along.
+ *
+ * Every count here is a snapshot of one commit, the SHA held by `UPSTREAM_SHA` in
+ * `app/fonts/font-table-provider.ts`, which `core/` cannot import and so cannot name in code. An
+ * upstream release shipping another non-script cut under either base folds it onto the base
+ * silently and no test goes red. Recount this list when that pin moves.
  */
 const NOTO_NON_SCRIPT_CUTS: ReadonlySet<string> = new Set([
 	'Display',

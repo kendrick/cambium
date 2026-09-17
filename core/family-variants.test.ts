@@ -83,10 +83,9 @@ describe('canonicalFamily', () => {
 		expect(canonicalFamily(family)).toBe(canonical);
 	});
 
-	// The cuts that vary something other than coverage. Every one of these carries the same
-	// structural tag as its base, so the tag cannot tell them apart and each has to be named.
-	// `Noto Sans Mono` is the sharp one: a monospace design tagged `/Sans/Humanist` with no
-	// `/Monospace/Monospace` row, so folding it onto the base loses a distinct sans answer.
+	// The cuts that vary something other than coverage, mirroring `NOTO_NON_SCRIPT_CUTS`. That
+	// docblock carries why each one is here and the counts behind it; they are not repeated, so a
+	// recount changes one place.
 	it.each([
 		'Noto Sans Mono',
 		'Noto Sans Display',
@@ -113,10 +112,10 @@ describe('canonicalFamily', () => {
 		expect(canonicalFamily(family)).toBe(canonical);
 	});
 
-	// Not under either base, so the prefix rule never reached it. Pinned because it is the standing
-	// example of the limitation recorded on `NOTO_NON_SCRIPT_CUTS`: a notation face nothing marks as
-	// non-text, reaching the sans pool on its own.
-	it('leaves Noto Znamenny Musical Notation alone, having never collapsed it', () => {
+	// The prefix rule's boundary: `Noto ` alone is not enough to reach it, only `Noto Sans ` and
+	// `Noto Serif `. This asserts that boundary and nothing about candidacy, which is a separate
+	// question and a separate module.
+	it('does not reach a Noto family sitting under neither base', () => {
 		expect(canonicalFamily('Noto Znamenny Musical Notation')).toBe(
 			'Noto Znamenny Musical Notation',
 		);

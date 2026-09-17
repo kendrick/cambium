@@ -102,7 +102,7 @@ function parseRows(csv: string): string[][] {
  * Turns parsed CSV rows into a `FontTable`. Rows with a populated axis-position column (the
  * second field, e.g. `wght@900`) score one variable-font instance rather than the family as a
  * whole, and keeping them would give one family two scores for one tag with no rule for which
- * wins — so only the default instance, the rows where that column is empty, survives.
+ * wins—so only the default instance, the rows where that column is empty, survives.
  *
  * `tag` is copied through untouched rather than checked against `TagName`. That union is
  * Cambium's own curated subset (see `core/font-table.ts`), and narrowing here would silently drop
@@ -171,7 +171,7 @@ let cachedResolution: Promise<ResolvedFontTable> | undefined;
  * Resolves the font table for this session: the fetched upstream taxonomy when that succeeds, the
  * in-repo fallback otherwise. Callers get the table beside a `FontTableRef` naming which one
  * answered, because a client that fell back ranks a seed differently from one that fetched the
- * full taxonomy — ADR-0001 makes that recorded identity the thing that keeps "the same seed always
+ * full taxonomy—ADR-0001 makes that recorded identity the thing that keeps "the same seed always
  * produces the same tokens" true across the boundary between them.
  *
  * Caches the in-flight promise, not just its resolved value, so two callers racing on a cold start

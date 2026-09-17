@@ -354,7 +354,7 @@ function seatNamedCandidate(
 	// field itself. Nothing derived it from a table, so it is re-stamped here rather than trusted:
 	// #42 wants a mixed list to stay honest about which entries a ranking placed. This is the one
 	// candidate that names no tag and carries no score, which is #42's `invented` contract winning
-	// over its "family name, a score, and a rationale" line — no table placed this face.
+	// over its "family name, a score, and a rationale" line—no table placed this face.
 	const invented: FontCandidate = {
 		provenance: 'invented',
 		family: named.family,
