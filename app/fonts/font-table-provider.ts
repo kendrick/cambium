@@ -178,14 +178,25 @@ let cachedResolution: Promise<ResolvedFontTable> | undefined;
  * share one fetch instead of each starting their own.
  */
 export function resolveFontTable(): Promise<ResolvedFontTable> {
-	cachedResolution ??= fetchFontTable().catch((cause: unknown) => {
-		// A rejection must not become what the session remembers. `fetchFontTable` already turns a
-		// failed fetch into the fallback table, so a rejection here means the fallback's own chunk
-		// did not load, which is a transient browser condition the next call may not hit. Caching it
-		// would pin one bad moment for the rest of the session.
-		cachedResolution = undefined;
-		throw cause;
-	});
+	if (cachedResolution === undefined) {
+		const resolution: Promise<ResolvedFontTable> = fetchFontTable().catch((cause: unknown) => {
+			// A rejection must not become what the session remembers. `fetchFontTable` already turns a
+			// failed fetch into the fallback table, so a rejection here means the fallback's own chunk
+			// did not load, which is a transient browser condition the next call may not hit. Caching
+			// it would pin one bad moment for the rest of the session.
+			//
+			// Clears this resolution and no other. Nothing can replace it while it is pending except
+			// `resetFontTableCacheForTests`, and an unconditional clear would then throw away the
+			// newer resolution that a caller after the reset is already waiting on.
+			if (cachedResolution === resolution) {
+				cachedResolution = undefined;
+			}
+
+			throw cause;
+		});
+
+		cachedResolution = resolution;
+	}
 
 	return cachedResolution;
 }

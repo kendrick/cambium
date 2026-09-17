@@ -20,19 +20,29 @@ function errorResponse(status: number): Response {
 }
 
 /**
- * Lets one test make the fallback's own dynamic import fail. Every other test runs the real module,
- * so the fallback assertions below still compare against the real curated rows.
+ * Lets a test make the fallback's own dynamic import fail, standing in for a chunk that did not
+ * load. Every call beyond `failures` runs the real module, so the fallback assertions below still
+ * compare against the real curated rows.
+ *
+ * A count rather than a flag, because the tests that need this have a resolution in flight when
+ * they set it. A flag would be read whenever the pending fetch happened to settle, which is a
+ * different moment from the one the test meant.
  */
-const fallback = vi.hoisted(() => ({ fail: false }));
+const fallback = vi.hoisted(() => ({ failures: 0 }));
 
 vi.mock('./load-fallback-table', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('./load-fallback-table')>();
 
 	return {
-		loadFallbackFontTable: () =>
-			fallback.fail
-				? Promise.reject(new Error('chunk load failed'))
-				: actual.loadFallbackFontTable(),
+		loadFallbackFontTable: () => {
+			if (fallback.failures > 0) {
+				fallback.failures -= 1;
+
+				return Promise.reject(new Error('chunk load failed'));
+			}
+
+			return actual.loadFallbackFontTable();
+		},
 	};
 });
 
@@ -41,7 +51,7 @@ vi.mock('./load-fallback-table', async (importOriginal) => {
 // way. Each test below stubs its own over the top of this.
 beforeEach(() => {
 	resetFontTableCacheForTests();
-	fallback.fail = false;
+	fallback.failures = 0;
 	vi.stubGlobal('fetch', () => {
 		throw new Error('the test suite must not reach the network');
 	});
@@ -148,15 +158,35 @@ describe('resolveFontTable', () => {
 	// fallback itself must not: that is a chunk that did not load, and remembering the rejection
 	// would pin one bad moment for the rest of the session.
 	it('forgets a rejection so a later call can still resolve', async () => {
-		fallback.fail = true;
+		fallback.failures = 1;
 		vi.stubGlobal('fetch', vi.fn<() => Promise<Response>>().mockResolvedValue(errorResponse(500)));
 
 		await expect(resolveFontTable()).rejects.toThrow('chunk load failed');
 
-		fallback.fail = false;
-
 		const { ref } = await resolveFontTable();
 
 		expect(ref).toEqual(FALLBACK_FONT_TABLE_REF);
+	});
+
+	// A reset can land while a resolution is still in flight, and the loser's own rejection must not
+	// take the winner with it. The fetch count is what tells the two apart: a third call here means
+	// the first resolution wiped a cache entry that was no longer its own.
+	it('clears only its own resolution when a reset lands mid-flight', async () => {
+		const fetchMock = vi.fn<() => Promise<Response>>().mockResolvedValue(errorResponse(500));
+		vi.stubGlobal('fetch', fetchMock);
+
+		// Only the first trip to the fallback fails, so the doomed resolution rejects and the one
+		// installed after the reset does not.
+		fallback.failures = 1;
+		const doomed = resolveFontTable();
+
+		resetFontTableCacheForTests();
+		const survivor = resolveFontTable();
+
+		await expect(doomed).rejects.toThrow('chunk load failed');
+		await survivor;
+		await resolveFontTable();
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 });
