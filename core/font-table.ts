@@ -70,9 +70,8 @@ export type TagName =
  * - 60: present and legible in the design, not the first thing you would say about it.
  * - 40: a weak reading. Defensible, arguable.
  *
- * 50, 70, and 90 carry a face that sits between two rungs. They are the ordinary case rather than
- * the exception, and about half the authored rows land on one. Anything below 40 is a missing row
- * rather than a low score.
+ * 50, 70, and 90 carry a face that sits between two rungs, and they are the ordinary case rather
+ * than the exception. Anything below 40 is a missing row rather than a low score.
  *
  * Tens rather than every integer, because no test can prove a row was not copied from upstream:
  * the file is not here, and fetching it inside a test would break the offline rule. A ten-point

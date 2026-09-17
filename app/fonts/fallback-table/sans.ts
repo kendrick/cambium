@@ -1,9 +1,9 @@
 import type { AuthoredRow } from '../../../core/font-table';
 
 /**
- * Quota: 22 families, the largest share of the table's fifty-eight. Sans is the only category where all
- * three tones have tags of their own, so it is the only one that has to answer three pairs on
- * tone alone.
+ * Quota: 22 families, the largest share of the table's fifty-eight. Sans is the only category
+ * where all three tones have tags of their own, so it is the only one that has to answer three
+ * pairs on tone alone.
  *
  * Tone floor: four families each under `/Sans/Geometric` or `/Sans/Superellipse`, under
  * `/Sans/Humanist` or `/Sans/Rounded`, and under `/Sans/Grotesque` or `/Sans/Neo Grotesque`. The

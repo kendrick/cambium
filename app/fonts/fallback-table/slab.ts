@@ -3,9 +3,9 @@ import type { AuthoredRow } from '../../../core/font-table';
 /**
  * Quota: 10 families.
  *
- * Tone floor: three families under `/Slab/Geometric` and three under `/Slab/Humanist`. A seed asking
- * for a grotesque slab falls back to every `/Slab/*` row in this file, `/Slab/Clarendon` included,
- * so that pair is covered as soon as the other two are.
+ * Tone floor: three families under `/Slab/Geometric` and three under `/Slab/Humanist`. A seed
+ * asking for a grotesque slab falls back to every `/Slab/*` row in this file, `/Slab/Clarendon`
+ * included, so that pair is covered as soon as the other two are.
  *
  * At least one family here also carries a `/Theme/*` tag. The table owes #42's
  * display-versus-body filter four of them, asserted table-wide in `fallback-table.test.ts`, and

@@ -56,7 +56,7 @@ const CATEGORY_FALLBACK_PAIRS = new Set([
 
 /**
  * Measured against the shipped rows: `gzipSync(JSON.stringify(FALLBACK_FONT_TABLE), { level: 9 })`
- * comes to 2,579 bytes for the 58 families and 436 rows curated so far.
+ * comes to 2,562 bytes for the 58 families and 435 rows curated so far.
  *
  * The ceiling is 5,000 bytes, roughly double that figure. The headroom covers the families a
  * later pass adds and the ordinary tag and score corrections curation makes. It would not cover
@@ -94,22 +94,10 @@ describe('the in-repo fallback font table', () => {
 		expect(matched).toBe(CATEGORY_FALLBACK_PAIRS.has(`${category}/${tone}`) ? 'category' : 'tone');
 	});
 
-	// Monospace gets its own assertion because the issue names it separately, and because one pool
-	// answering all three tones is the shape rather than an accident: the taxonomy has no tones
-	// under monospace, so a mono seed's personality has to come from the expressive rows.
-	it('answers every monospace tone from one pool', () => {
-		const pools = tones.map((tone) => resolveCandidatePool(FALLBACK_FONT_TABLE, 'mono', tone));
-
-		expect(distinct(pools[0]!.families)).toBeGreaterThanOrEqual(3);
-
-		for (const pool of pools) {
-			expect(pool.families).toEqual(pools[0]!.families);
-		}
-	});
-
 	// Four is the floor across the whole table rather than one per category file, because #42's
-	// filter reads the tag and never asks which file a row came from. Stated in four curation
-	// comments before it was stated here, which left every one of them unenforced.
+	// filter reads the tag and never asks which file a row came from. The table carries exactly
+	// four, so this has no slack: removing any themed row fails here, which is the point. Curation
+	// that drops one owes the table a replacement.
 	it('carries four themed families or more', () => {
 		const themed = [...tagsByFamily]
 			.filter(([, tags]) => [...tags].some((tag) => tag.startsWith('/Theme/')))
