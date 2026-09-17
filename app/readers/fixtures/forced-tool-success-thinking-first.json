@@ -54,7 +54,7 @@
 		"stop_sequence": null,
 		"usage": {
 			"input_tokens": 1180,
-			"output_tokens": 96
+			"output_tokens": 742
 		}
 	}
 }

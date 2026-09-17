@@ -24,7 +24,7 @@
 		"stop_sequence": null,
 		"usage": {
 			"input_tokens": 1420,
-			"output_tokens": 312
+			"output_tokens": 968
 		}
 	}
 }

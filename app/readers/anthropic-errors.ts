@@ -31,8 +31,11 @@ export type AnthropicReaderErrorDetails = {
  * room for one: every reader returns it, and a failure shape belongs to the reader that failed.
  *
  * Nothing here may hold an API key. `message` and `body` both reach the user and may end up in a
- * log or a bug report, so a caller building one of these passes the response body, never the
- * request it sent.
+ * log or a bug report. `body` is the response's, always. `message` is the reader's own wording,
+ * plus the API's message where the response carried one, plus, on the one local failure that has
+ * no response at all, the id of the reference image that could not be encoded. An image id is a
+ * record key rather than anything the user typed, so the rule that matters holds: nothing a
+ * credential could have been pasted into is ever copied in here.
  */
 export class AnthropicReaderError extends Error {
 	readonly kind: AnthropicReaderErrorKind;

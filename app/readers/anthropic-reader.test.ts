@@ -199,7 +199,7 @@ describe('createAnthropicBrandReader success', () => {
 	it('resolves when the text block holds prose, leaving not-json to the core', async () => {
 		const result = await read(stubFetch(structuredProseNotJson));
 
-		expect(result.raw).toBe(structuredProseNotJson.body.content[0].text);
+		expect(result.raw).toBe(blockOfType(structuredProseNotJson, 'text').text);
 
 		const parsed = parseSeed(result);
 
@@ -285,6 +285,8 @@ describe('createAnthropicBrandReader failures', () => {
 
 			expect(error.kind).toBe('invalid-request');
 			expect(error.message).toMatch(expected);
+			// The builder's own `Error` survives as `cause`, the way a rejecting `fetch` does.
+			expect(error.cause).toBeInstanceOf(Error);
 			expect(fetchStub).not.toHaveBeenCalled();
 		},
 	);
@@ -347,20 +349,10 @@ describe('createAnthropicBrandReader key handling', () => {
 		expect(JSON.stringify(result)).not.toContain(API_KEY);
 	});
 
-	// Every fixture, not just one: the reader now copies the API's own message into `message`, so
-	// the leak surface is every error body the API can send rather than a single representative.
-	it.each([
-		error400,
-		error401,
-		error402,
-		error403,
-		error413,
-		error429,
-		error500,
-		error504,
-		error529,
-	])('keeps the key out of the error raised for HTTP $status', async (fixture) => {
-		const error = await rejection(read(stubFetch(fixture)));
+	// 400 rather than any other status: it is the one whose body text now reaches `message` as
+	// well as `body`, so it exercises the copy rather than only the fields that were always there.
+	it('keeps the key out of an error that will end up in a bug report', async () => {
+		const error = await rejection(read(stubFetch(error400)));
 
 		expect(everythingAnErrorCarries(error)).not.toContain(API_KEY);
 	});
