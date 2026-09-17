@@ -275,6 +275,22 @@ interface RoleRequest {
 	named: FontCandidate | undefined;
 }
 
+/**
+ * Known limitation, deliberately left. Some faces that reach a pool are nobody's brand typeface:
+ * `Noto Sans Math`, `Noto Sans Mayan Numerals`, `Noto Znamenny Musical Notation`. They carry a
+ * structural tag like any text face, `NOTO_NON_SCRIPT_CUTS` in `core/family-variants.ts` stops them
+ * folding onto a base, and so they can hold a slot of their own.
+ *
+ * The table does not answer this. Its `/Special use/*` namespace looks like the filter and is not:
+ * 25 families carry one, only `Noto Sans Symbols` and `Datatype` also carry a structural tag and so
+ * reach a pool at all, `Datatype` is a real neo-grotesque mono no filter should drop, and the tag
+ * never touches `Math`, `Mayan Numerals` or `Znamenny`.
+ *
+ * Excluding non-text faces would therefore mean inventing a judgement the table does not record,
+ * and #42 asks for no such filter: its criteria condition candidacy on tags and provenance, never
+ * on a face being text. Written down rather than implied, as #42 asks for this layer's known
+ * failures. A filter, if one is ever wanted, belongs here beside the themed exclusion.
+ */
 function rankRole(request: RoleRequest): FontCandidate[] {
 	const { table, index, seed, category, tone, mode, excludeThemed, named } = request;
 	const { families, matched } = resolveCandidatePool(table, category, tone);

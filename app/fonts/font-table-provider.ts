@@ -7,6 +7,24 @@ import { loadFallbackFontTable } from './load-fallback-table';
 // the same file for only 300 seconds. ADR-0001 pins the SHA rather than tracking `main` so this
 // URL keeps serving the same bytes indefinitely, not just for the life of one session.
 const UPSTREAM_SHA = 'ead515ad8b1a6723071ddf7c33f8b35dcf1c97e1';
+
+/*
+ * Moving this pin invalidates a hand-derived list in the pure core. `NOTO_NON_SCRIPT_CUTS` in
+ * `core/family-variants.ts` names the `Noto Sans` and `Noto Serif` cuts that are not writing
+ * systems, so that the prefix rule above them does not fold a symbol or notation face onto its
+ * base. Nothing derives it at runtime and no test can, because ADR-0001 keeps the file out of the
+ * repo, so it goes stale silently.
+ *
+ * To rebuild it from `tags/all/families.csv` at the new SHA: take every family whose name begins
+ * `Noto Sans ` or `Noto Serif ` and which carries a `/Sans/`, `/Serif/`, `/Slab/` or
+ * `/Monospace/` tag, strip the base prefix, and diff those cut names against the set. At this pin
+ * that is 171 cuts. Judge each new name on whether it is a writing system: `Duployan` and `Shavian`
+ * are, `Ottoman Siyaq` is not.
+ *
+ * The filter reads the structural tag, so it can only ever surface nine of the ten entries.
+ * `Symbols 2` carries no structural tag and will not appear, and nor would any future untagged
+ * non-script cut. That is the one gap this procedure cannot close.
+ */
 const UPSTREAM_URL = `https://cdn.jsdelivr.net/gh/google/fonts@${UPSTREAM_SHA}/tags/all/families.csv`;
 
 const FETCHED_FONT_TABLE_REF: FontTableRef = {

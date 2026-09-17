@@ -84,8 +84,8 @@ const VARIANT_SUFFIXES: readonly string[] = [
  * substrings avoids that.
  */
 // `map` already returned a fresh array, so this sort mutates nothing anyone else can see.
-// `toSorted` would satisfy the rule directly, but it is ES2023 and tsconfig targets ES2022 —
-// the same trade lib/bundle-size.ts makes.
+// `toSorted` would satisfy the rule directly, but it is ES2023 and tsconfig targets ES2022, the
+// same trade lib/bundle-size.ts makes.
 const SORTED_VARIANT_SUFFIXES: readonly string[][] = [...VARIANT_SUFFIXES]
 	.map((suffix) => suffix.split(' '))
 	// oxlint-disable-next-line unicorn/no-array-sort
@@ -125,7 +125,8 @@ const SIMPLIFIED_CHINESE_FAMILY_PREFIX = 'Noto ';
  * the 66 tokens that list carries, and counted against the pinned file the shortfall left 94
  * `Noto Sans` cuts standing as their own family in the `/Sans/Humanist` and `/Sans/Rounded` pool
  * alone—enough for one typeface to take two of a role's three slots under a different name each
- * time. Matching the prefix collapses all 199 of them and needs no list of scripts at all.
+ * time. Matching the prefix needs no list of scripts at all: of the 202 cuts under the two bases it
+ * collapses 191, leaving only the ten `NOTO_NON_SCRIPT_CUTS` names below.
  *
  * Only these two bases. The other nine Noto families are separate designs rather than cuts of
  * these, `Noto Kufi Arabic` and `Noto Nastaliq Urdu` among them, and they keep their own slot.
@@ -155,34 +156,18 @@ const NOTO_COVERAGE_BASES: readonly string[] = ['Noto Sans', 'Noto Serif'];
  * really does separate them.
  *
  * `Symbols 2` is the one entry that changes nothing today: it carries no structural tag, so it
- * reaches no pool and cannot fold anywhere. It stays because its sibling `Symbols` does carry
- * `/Sans/Humanist`, which makes the gap look like an upstream omission rather than a statement, and
- * because the two failure directions are not symmetric. Keeping an inert entry costs one string;
- * dropping it means an upstream retag starts folding a symbol font onto `Noto Sans` with no test
- * going red. Nine of the ten below do work now.
+ * reaches no pool and cannot fold anywhere. Nine of the ten do work now. It stays because its
+ * sibling `Symbols` does carry `/Sans/Humanist`, which makes the gap look like an upstream omission
+ * rather than a deliberate statement, and because one string costs nothing while the retag that
+ * would make it matter needs no further action from anyone.
  *
- * Known limitation, deliberately left. Un-collapsing these means `Noto Sans Math` and friends can
- * now hold a slot of their own, and a notation face is no one's brand typeface.
+ * Not collapsing these leaves them free to hold a candidate slot, which is a separate question and
+ * recorded where it is decided, on `rankRole` in `core/rank-fonts.ts`.
  *
- * The taxonomy does have a `/Special use/*` namespace, and it does not answer this. 25 families
- * carry one; only `Noto Sans Symbols` and `Datatype` also carry a structural tag and so reach a
- * pool at all, and `Datatype` is a real neo-grotesque mono that no such filter should drop. The tag
- * never touches `Math`, `Mayan Numerals` or `Znamenny`. Excluding non-text faces would mean
- * inventing a judgement the table does not record, which #42 asks for nowhere, so it stays a
- * question about candidacy rather than about collapsing. `Noto Znamenny Musical Notation` shows
- * the limit is older than this set: it sits under neither base, so it never collapsed, and it has
- * been reaching the sans pool on its own all along.
- *
- * Every count here is a snapshot of one commit, the SHA held by `UPSTREAM_SHA` in
- * `app/fonts/font-table-provider.ts`, which `core/` cannot import and so cannot name in code. An
- * upstream release shipping another non-script cut under either base folds it onto the base
- * silently and no test goes red.
- *
- * To recount when that pin moves: take every family beginning `Noto Sans ` or `Noto Serif ` that
- * carries a `/Sans/`, `/Serif/`, `/Slab/` or `/Monospace/` tag, and diff the cut names against this
- * set. At the pinned commit that yields 171 distinct cuts, and the ten below are the ones that are
- * not writing systems. `Ottoman Siyaq` was found exactly this way, by re-deriving rather than by
- * rechecking the names already listed.
+ * Every count here is a snapshot of one commit, and `UPSTREAM_SHA` in
+ * `app/fonts/font-table-provider.ts` holds the pin they were taken at. That file carries the
+ * procedure for rebuilding this set when the pin moves; `core/` cannot import it, so it cannot
+ * point at it in code.
  */
 const NOTO_NON_SCRIPT_CUTS: ReadonlySet<string> = new Set([
 	'Display',
