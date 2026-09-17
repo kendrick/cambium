@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/brand-record';
@@ -123,10 +125,30 @@ function openWorkspace(
 	return { store, recordStore, engine };
 }
 
+/**
+ * A deliberate exception to `docs/agents/testing.md`'s rule that a test asserts behaviour at a seam
+ * and survives a rewrite. This one reads source text, so it does neither. It is here because the
+ * thing worth protecting is the import graph itself, and nothing else in the suite can see it:
+ * `pnpm test:bundle` measures a real build, the landing route is a Server Component, so the engine
+ * runs at build time, reaches no client chunk, and the budget stays green whatever this store
+ * imports. It stops being green the first time a client component reaches the store, which is #8,
+ * #9 or #10 rather than today, and by then the regression is months old.
+ *
+ * Replace it the moment an import-boundary lint rule can say the same thing. The `engine` docblock
+ * in `workspace-store.ts` carries the measured numbers.
+ */
+describe('the workspace store\u2019s import graph', () => {
+	it('names the ScaleEngine type and never a concrete engine', async () => {
+		const source = await readFile(new URL('workspace-store.ts', import.meta.url), 'utf8');
+
+		expect(source).not.toMatch(/from '[^']*oklch-scale-engine'/);
+	});
+});
+
 describe('the workspace store', () => {
 	// Says only what it can: the whole suite runs under `environment: 'node'`, so this asserts the
 	// store drives to completion where a browser never existed. `zustand/vanilla` is what makes that
-	// true — the React entry point would have pulled in `useSyncExternalStore`.
+	// true—the React entry point would have pulled in `useSyncExternalStore`.
 	it('runs where no browser global exists', () => {
 		expect(typeof document).toBe('undefined');
 		expect(typeof window).toBe('undefined');
@@ -230,7 +252,7 @@ describe('the workspace store', () => {
 		store.getState().editSeed({ keyColors: seedWith(30).keyColors });
 		store.getState().selectPreset('expressive');
 
-		const next = await store.getState().commit();
+		const next = await store.getState().commit(PROVENANCE);
 
 		expect(next.versions).toHaveLength(2);
 		expect(next.versions[0]).toEqual(before.versions[0]);
@@ -280,6 +302,55 @@ describe('the workspace store', () => {
 		});
 	});
 
+	it('refuses to credit the active version\u2019s model with a seed somebody edited', async () => {
+		const { store, recordStore } = openWorkspace();
+
+		store.getState().editSeed({ keyColors: seedWith(30).keyColors });
+
+		await expect(store.getState().commit()).rejects.toThrow(/provenance/);
+		expect(recordStore.puts).toHaveLength(0);
+	});
+
+	it('counts a hole in an array as an edit rather than a match', async () => {
+		const classified: BrandSeed = {
+			...seedWith(259.8),
+			imageClassifications: [{ imageId: 'img-1', detected: 'logo' }],
+		};
+		const { store, recordStore } = openWorkspace(makeRecord([makeVersion({ seed: classified })]));
+
+		// A walk built on `Array.prototype.every` skips the hole, calls the two seeds equal, and lets
+		// this edit keep the model's name.
+		const holed: BrandSeed['imageClassifications'] = [];
+		holed.length = 1;
+
+		store.getState().editSeed({ imageClassifications: holed });
+
+		await expect(store.getState().commit()).rejects.toThrow(/provenance/);
+		expect(recordStore.puts).toHaveLength(0);
+	});
+
+	it('commits an edited seed once the caller says where it came from', async () => {
+		const { store } = openWorkspace();
+
+		store.getState().editSeed({ keyColors: seedWith(30).keyColors });
+
+		const next = await store.getState().commit(PROVENANCE);
+
+		expect(next.versions[1]).toMatchObject({ seed: seedWith(30), ...PROVENANCE });
+	});
+
+	it('carries provenance forward again once an edit is undone', async () => {
+		const { store } = openWorkspace();
+
+		// Structural, not referential: a seed edited back to what the model said is still the model's.
+		store.getState().editSeed({ keyColors: seedWith(30).keyColors });
+		store.getState().editSeed({ keyColors: seedWith(259.8).keyColors });
+
+		const next = await store.getState().commit();
+
+		expect(next.versions[1]).toMatchObject({ model: 'claude-opus-5', rawResponse: null });
+	});
+
 	it('takes provenance from the caller when a model call produced the version', async () => {
 		const { store } = openWorkspace(makeRecord([]));
 
@@ -299,7 +370,10 @@ describe('the workspace store', () => {
 	});
 
 	it('refuses to commit with no record open', async () => {
-		const store = createWorkspaceStore({ recordStore: createInMemoryRecordStore() });
+		const store = createWorkspaceStore({
+			recordStore: createInMemoryRecordStore(),
+			engine: createOklchScaleEngine(),
+		});
 
 		await expect(store.getState().commit(PROVENANCE)).rejects.toThrow(/no record is open/);
 	});
@@ -349,6 +423,7 @@ describe('the workspace store', () => {
 		};
 		const store = createWorkspaceStore({
 			recordStore: full,
+			engine: createOklchScaleEngine(),
 			now: () => '2026-06-01T12:00:00.000Z',
 		});
 
