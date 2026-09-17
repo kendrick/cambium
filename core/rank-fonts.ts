@@ -84,6 +84,19 @@ function scoreOn(tags: FamilyTags | undefined, tag: string): number {
 	return tags?.get(tag) ?? 0;
 }
 
+/**
+ * A family's tags, read at its exact spelling first and at its canonical base second.
+ *
+ * Both readings have to agree about which family this is. Reading tags at the exact spelling while
+ * deduping at the canonical one lets a themed face through: name `Crack Sans Thai`, and the table
+ * carries no row under that spelling, so nothing can call it Distressed and it sets body copy.
+ * Exact first, because a family the table carries describes itself better than its base does, then
+ * the base for a variant the table only knows by its root.
+ */
+function tagsFor(family: string, index: Map<string, FamilyTags>): FamilyTags | undefined {
+	return index.get(family) ?? index.get(canonicalFamily(family));
+}
+
 function isThemed(tags: FamilyTags | undefined): boolean {
 	return [...(tags?.keys() ?? [])].some((tag) => tag.startsWith(THEME_PREFIX));
 }
@@ -323,7 +336,15 @@ function rankRole(request: RoleRequest): FontCandidate[] {
 	// Collapsing before the sort would pick a family's representative by table position rather than
 	// by rank, and slicing before it would let `IBM Plex Sans` and `IBM Plex Sans Thai` spend two of
 	// the three slots saying the same thing.
-	const collapsed = collapseVariants(sorted, (entry) => entry.family);
+	//
+	// The tags go in because the second collapsing rule cannot work without them: `Cascadia Code`
+	// beside `Cascadia Mono` and `Roboto` beside `Roboto Mono` look alike as names and want opposite
+	// answers.
+	const collapsed = collapseVariants(
+		sorted,
+		(entry) => entry.family,
+		(entry) => entry.tags?.keys(),
+	);
 
 	const derived: FontCandidate[] = collapsed.map((entry) => ({
 		provenance: 'derived',
@@ -346,14 +367,7 @@ function seatNamedCandidate(
 	index: Map<string, FamilyTags>,
 	excludeThemed: boolean,
 ): FontCandidate[] {
-	const canonical = canonicalFamily(named.family);
-
-	// Both lookups have to agree about which family this is. Reading tags at the exact spelling
-	// while deduping at the canonical one let a themed face through: name `Crack Sans Thai` and the
-	// table has no row under that spelling, so nothing could call it Distressed and it set body
-	// copy. Exact first, because a family the table carries describes itself better than its base
-	// does, then the base for a variant the table only knows by its root.
-	const namedTags = index.get(named.family) ?? index.get(canonical);
+	const namedTags = tagsFor(named.family, index);
 
 	// The theme filter is a hard constraint, not a preference, so it does not care who named the
 	// face. A Blackletter or Stencil cut cannot set a paragraph at all, which is a different kind of
@@ -378,11 +392,15 @@ function seatNamedCandidate(
 		rationale: 'Named by the model rather than ranked from the table, so it carries no score.',
 	};
 
-	return [
-		invented,
-		// The model's pick and a script variant of it are one answer, the same way two variants are.
-		...derived.filter((candidate) => canonicalFamily(candidate.family) !== canonical),
-	].slice(0, MAX_PER_ROLE);
+	// Seated at the head and then collapsed, rather than filtered by canonical name: the model's
+	// pick and a script variant of it are one answer, and so are its pick and another cut of the
+	// same drawing. Running the same function the ranking runs is what keeps the two lists agreeing
+	// about what counts as one family.
+	return collapseVariants(
+		[invented, ...derived],
+		(candidate) => candidate.family,
+		(candidate) => tagsFor(candidate.family, index)?.keys(),
+	).slice(0, MAX_PER_ROLE);
 }
 
 /**

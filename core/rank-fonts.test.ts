@@ -87,6 +87,25 @@ const table: FontTable = [
 	{ family: 'Slim Mono', tag: '/Expressive/Calm', score: 50 },
 ];
 
+/**
+ * A second table for the cut-variant rule #61 added. Separate from the one above so the families
+ * that exercise it cannot shift any other expectation: `Fixed Code` and `Fixed Mono` are one
+ * drawing cut twice, and `Slim Mono` is the unrelated face the role should still reach.
+ */
+const cutTable: FontTable = [
+	{ family: 'Fixed Code', tag: '/Monospace/Monospace', score: 100 },
+	{ family: 'Fixed Code', tag: '/Quality/Spacing', score: 100 },
+	{ family: 'Fixed Code', tag: '/Quality/Wordspace', score: 100 },
+
+	{ family: 'Fixed Mono', tag: '/Monospace/Monospace', score: 90 },
+	{ family: 'Fixed Mono', tag: '/Quality/Spacing', score: 60 },
+	{ family: 'Fixed Mono', tag: '/Quality/Wordspace', score: 60 },
+
+	{ family: 'Slim Mono', tag: '/Monospace/Monospace', score: 80 },
+	{ family: 'Slim Mono', tag: '/Quality/Spacing', score: 80 },
+	{ family: 'Slim Mono', tag: '/Quality/Wordspace', score: 80 },
+];
+
 const CALM_SEED: ExpressiveScore[] = [
 	{ axis: 'Calm', score: 90 },
 	{ axis: 'Competent', score: 30 },
@@ -218,6 +237,15 @@ describe('rankFonts', () => {
 		expect(geoSans(mono)).toHaveLength(0);
 	});
 
+	// One family cannot take two of a role's slots under two script names, per #42, and #61 says the
+	// same of one drawing cut twice. `Fixed Code` is `Fixed Mono` with a typographic feature switched
+	// on, so the role answers with it and the unrelated `Slim Mono`.
+	it('keeps a cut variant pair to one slot in a role', () => {
+		const result = rankFonts(cutTable, seedWith({ category: 'mono' }));
+
+		expect(familiesOf(result.pairing!.mono)).toEqual(['Fixed Code', 'Slim Mono']);
+	});
+
 	// The bug this pins: the group used to inherit the bare base's score and place in the order, so
 	// `Geo Sans` at 40/40 replaced `Geo Sans Thai` at 100/100 and sank to the bottom of body.
 	it('ranks a variant group where its strongest member ranked', () => {
@@ -315,6 +343,19 @@ describe('rankFonts', () => {
 			);
 
 			expect(body[0]).toMatchObject({ provenance: 'invented', family: 'Invented Face' });
+		});
+
+		// The model's pick and another cut of the same drawing are one answer, the same way its pick
+		// and a script variant of it are. The derived `Fixed Code` gives up its slot rather than
+		// handing the role the same face twice.
+		it('drops a derived cut variant of the face the model named', () => {
+			const result = rankFonts(
+				cutTable,
+				seedWith({ category: 'mono' }, { suggestedPairing: named('Fixed Mono', 'mono') }),
+				{ mode: 'model-led' },
+			);
+
+			expect(familiesOf(result.pairing!.mono)).toEqual(['Fixed Mono', 'Slim Mono']);
 		});
 
 		it('falls through to personality for a role the model named nothing for', () => {

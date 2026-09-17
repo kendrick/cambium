@@ -253,3 +253,198 @@ describe('collapseVariants', () => {
 		expect(collapseVariants([], byFamily)).toEqual([]);
 	});
 });
+
+interface TaggedCandidate extends Candidate {
+	tags: string[];
+}
+
+const taggedFamily = (candidate: TaggedCandidate) => candidate.family;
+const taggedTags = (candidate: TaggedCandidate) => candidate.tags;
+
+const MONO = ['/Monospace/Monospace', '/Quality/Spacing'];
+const SLAB = ['/Slab/Humanist', '/Quality/Spacing'];
+const GEOMETRIC_SANS = ['/Sans/Geometric', '/Quality/Spacing'];
+const NEO_GROTESQUE_SANS = ['/Sans/Neo Grotesque', '/Quality/Spacing'];
+const HUMANIST_SANS = ['/Sans/Humanist', '/Quality/Spacing'];
+
+/**
+ * The cut rule, which #61 specifies. Real Google Fonts names throughout, because which families
+ * upstream actually publishes is the whole argument for where the line sits.
+ */
+describe('collapseVariants over cut variants', () => {
+	// Optical size. One design cut for a rendering size, and Google publishes the two separately so
+	// a reader picks by size rather than by taste.
+	it('keeps Slabo 13px and Slabo 27px to one slot', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Slabo 27px', score: 95, tags: SLAB },
+			{ family: 'Slabo 13px', score: 70, tags: SLAB },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual([
+			{ family: 'Slabo 27px', score: 95, tags: SLAB },
+		]);
+	});
+
+	// Feature set. `Cascadia Code` is `Cascadia Mono` with programming ligatures switched on, and
+	// neither is the base: the group has to form without one.
+	it('keeps Cascadia Code and Cascadia Mono to one slot', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Cascadia Code', score: 90, tags: MONO },
+			{ family: 'Cascadia Mono', score: 80, tags: MONO },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual([
+			{ family: 'Cascadia Code', score: 90, tags: MONO },
+		]);
+	});
+
+	// The same shape one family over, so the rule is not reading `Cascadia` in particular.
+	it('keeps Fira Code and Fira Mono to one slot while sparing Fira Sans', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Fira Code', score: 90, tags: MONO },
+			{ family: 'Fira Mono', score: 85, tags: MONO },
+			{ family: 'Fira Sans', score: 80, tags: HUMANIST_SANS },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual([
+			{ family: 'Fira Code', score: 90, tags: MONO },
+			{ family: 'Fira Sans', score: 80, tags: HUMANIST_SANS },
+		]);
+	});
+
+	// Whichever member won the ranking keeps its own name and score, matching what the script rule
+	// already does. The ranker sorts before calling, so the first member of a group is its best.
+	it('returns the higher-ranked member of a cut group with its own score', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Cascadia Mono', score: 95, tags: MONO },
+			{ family: 'Cascadia Code', score: 60, tags: MONO },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual([
+			{ family: 'Cascadia Mono', score: 95, tags: MONO },
+		]);
+	});
+
+	// Width. `Roboto Condensed` is a distinct voice a brand may want on purpose, which is the case
+	// the whole rule is shaped around: a name-only reading cannot tell it from `Cascadia Mono`.
+	it('keeps Roboto and Roboto Condensed as two candidates', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Roboto', score: 100, tags: NEO_GROTESQUE_SANS },
+			{ family: 'Roboto Condensed', score: 90, tags: NEO_GROTESQUE_SANS },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual(candidates);
+	});
+
+	// `Mono` is a cut token, so only the structural tags separate these two. Upstream tags `Roboto`
+	// a sans and `Roboto Mono` a monospace, which is the whole signal.
+	it('keeps Roboto and Roboto Mono as two candidates even with tags in hand', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Roboto', score: 100, tags: NEO_GROTESQUE_SANS },
+			{ family: 'Roboto Mono', score: 90, tags: MONO },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual(candidates);
+	});
+
+	// The decision #61 asks to be made either way: `Google Sans Flex` is a variable-axis superset of
+	// the same drawing, so it collapses. `CUT_SUFFIXES` carries why `Flex` is in and `Condensed` is
+	// not.
+	it('keeps Google Sans and Google Sans Flex to one slot', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Google Sans Flex', score: 95, tags: GEOMETRIC_SANS },
+			{ family: 'Google Sans', score: 90, tags: GEOMETRIC_SANS },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual([
+			{ family: 'Google Sans Flex', score: 95, tags: GEOMETRIC_SANS },
+		]);
+	});
+
+	// Three real families under one base, and the structural tags have to split them two ways:
+	// `Google Sans Code` is the monospace cut, so it is a different answer rather than the same one
+	// with more axes.
+	it('folds Google Sans Flex onto Google Sans while sparing Google Sans Code', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Google Sans', score: 95, tags: GEOMETRIC_SANS },
+			{ family: 'Google Sans Flex', score: 90, tags: GEOMETRIC_SANS },
+			{ family: 'Google Sans Code', score: 85, tags: MONO },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual([
+			{ family: 'Google Sans', score: 95, tags: GEOMETRIC_SANS },
+			{ family: 'Google Sans Code', score: 85, tags: MONO },
+		]);
+	});
+
+	// `canonicalFamily` already refused this pair on purpose, and the cut rule must not reopen it.
+	// Upstream tags `Noto Sans Mono` `/Sans/Humanist` like its base, so the structural tags agree and
+	// the Noto guard is the only thing holding them apart.
+	it('keeps Noto Sans and Noto Sans Mono as two candidates', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Noto Sans', score: 90, tags: HUMANIST_SANS },
+			{ family: 'Noto Sans Mono', score: 80, tags: HUMANIST_SANS },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual(candidates);
+	});
+
+	// Two monospace designs that share neither a drawing nor a base name.
+	it('keeps two unrelated mono families apart', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'JetBrains Mono', score: 90, tags: MONO },
+			{ family: 'Space Mono', score: 80, tags: MONO },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual(candidates);
+	});
+
+	// A cut token has to leave a base behind, the same guard `canonicalFamily` applies to its own
+	// suffixes. Without it every single-word cut name would strip to nothing and match every other.
+	it('keeps single-word families that are nothing but a cut token', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Mono', score: 90, tags: MONO },
+			{ family: 'Code', score: 80, tags: MONO },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual(candidates);
+	});
+
+	// A family the table carries no structural row for cannot be shown to be the same kind of face
+	// as anything, so the rule declines rather than guessing.
+	it('leaves a cut pair alone when one member carries no structural tag', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Cascadia Code', score: 90, tags: MONO },
+			{ family: 'Cascadia Mono', score: 80, tags: ['/Quality/Spacing'] },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual(candidates);
+	});
+
+	// The accessor is optional, and without it the cut rule has nothing to read. A caller that knows
+	// names and no tags gets the script rule alone.
+	it('cannot fire without the tag accessor', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Cascadia Code', score: 90, tags: MONO },
+			{ family: 'Cascadia Mono', score: 80, tags: MONO },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily)).toEqual(candidates);
+	});
+
+	// Both rules over one list. `Noto Sans JP` folds onto `Noto Sans` by script, `Cascadia Mono`
+	// onto `Cascadia Code` by cut, and the output stays in the input's order.
+	it('applies the script rule and the cut rule over one list', () => {
+		const candidates: TaggedCandidate[] = [
+			{ family: 'Cascadia Code', score: 95, tags: MONO },
+			{ family: 'Noto Sans', score: 90, tags: HUMANIST_SANS },
+			{ family: 'Cascadia Mono', score: 85, tags: MONO },
+			{ family: 'Noto Sans JP', score: 80, tags: HUMANIST_SANS },
+		];
+
+		expect(collapseVariants(candidates, taggedFamily, taggedTags)).toEqual([
+			{ family: 'Cascadia Code', score: 95, tags: MONO },
+			{ family: 'Noto Sans', score: 90, tags: HUMANIST_SANS },
+		]);
+	});
+});
