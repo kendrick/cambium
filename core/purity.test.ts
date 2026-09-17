@@ -8,6 +8,7 @@ import { resolveCandidatePool } from './font-table';
 import { parseSeed } from './parse-seed';
 import { rankFonts } from './rank-fonts';
 import { BALANCED } from './scale-engine';
+import { buildTokenSet } from './semantic-layer';
 import { TokenSetSchema } from './token-set';
 
 const ramp = Array.from({ length: 12 }, (_, i) => ({
@@ -129,6 +130,14 @@ describe('core purity', () => {
 		],
 		['rankFonts', () => rankFonts(fontTable, rankableSeed).ok],
 		['the OKLCH scale engine', () => createOklchScaleEngine().generate(rampableSeed, BALANCED).ok],
+		[
+			'the semantic layer',
+			() => {
+				const generated = createOklchScaleEngine().generate(rampableSeed, BALANCED);
+
+				return generated.ok && TokenSetSchema.safeParse(buildTokenSet(generated.schemes)).success;
+			},
+		],
 	])('%s parses a valid value without reaching the network', (_name, parses) => {
 		vi.stubGlobal('fetch', () => {
 			throw new Error('the pure core must not reach the network');
