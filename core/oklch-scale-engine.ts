@@ -54,8 +54,28 @@ const CHROMA_FRACTION = {
 	dark: [0.077, 0.103, 0.263, 0.393, 0.437, 0.484, 0.528, 0.64, 1, 0.959, 0.732, 0.295],
 } as const;
 
-/** Step 10 is step 9 nudged one notch further from the page, which is what a hover state is. */
+/**
+ * Step 10 is step 9 nudged one notch further from the page, which is what a hover state is. The
+ * sizes are the median gap between Radix's own steps 9 and 10, measured per scheme: its light
+ * scales close by 0.027 and its dark ones open by 0.039.
+ */
 const STEP_10_OFFSET = { light: -0.027, dark: 0.039 } as const;
+
+/**
+ * Where the hover state sits, given where the brand already is.
+ *
+ * A brand at the end of the lightness range has nowhere further from the page to go. A black brand
+ * cannot hover blacker, so it hovers lighter, which is what every real design system does with a
+ * black button. Without the flip the offset walks lightness out of 0 through 1 and the ramp stops
+ * parsing, and a black brand is an ordinary thing for a brand to be.
+ */
+function hoverLightness(anchorLightness: number, scheme: SchemeName): number {
+	const away = anchorLightness + STEP_10_OFFSET[scheme];
+
+	if (away >= 0 && away <= 1) return away;
+
+	return anchorLightness - STEP_10_OFFSET[scheme];
+}
 
 /**
  * Neutral is the one ramp with no anchor colour to place, because a seed states it as a temperature
@@ -158,7 +178,7 @@ function buildRamp(
 
 		if (role.step === BRAND_STEP) return fitToSrgbGamut(anchor);
 		if (role.anchoredToSeed) {
-			return fitToSrgbGamut({ l: anchor.l + STEP_10_OFFSET[scheme], c: chroma, h: anchor.h });
+			return fitToSrgbGamut({ l: hoverLightness(anchor.l, scheme), c: chroma, h: anchor.h });
 		}
 
 		return fitToSrgbGamut({ l: lightness[index]!, c: chroma, h: anchor.h });
@@ -198,7 +218,7 @@ function pickKeyColor(keyColors: readonly KeyColor[], role: KeyColor['proposedRo
  * How far a derived accent has to stay from the brand and from every status hue. Below about this,
  * two ramps stop reading as two ramps.
  */
-const MIN_ACCENT_SEPARATION = 25;
+export const MIN_ACCENT_SEPARATION = 25;
 
 /**
  * The nearest hue to `preferred` that is not crowding a hue already spoken for.
@@ -255,7 +275,9 @@ function neutralAnchor(seed: BrandSeed, brand: Oklch, params: InterpretationPara
 	return (scheme: SchemeName): Oklch => ({
 		l: NEUTRAL_ANCHOR_LIGHTNESS[scheme],
 		// A neutral carries a trace of the brand rather than none at all, which is what stops a warm
-		// brand sitting on a page of dead grey.
+		// brand sitting on a page of dead grey. A stated temperature overrides the tinting parameter
+		// outright rather than scaling it: the seed observed that temperature in the image, and a
+		// preset knob has no business overruling evidence.
 		c: stated ? stated.chroma : brand.c * params.neutralTinting * NEUTRAL_CHROMA_CEILING,
 		h: stated ? stated.hue : brand.h,
 	});

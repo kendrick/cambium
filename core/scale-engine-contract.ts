@@ -108,23 +108,32 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 		// Step 11 reaches back to step 8 rather than to step 10. Steps 9 and 10 float with the
 		// seed, and a separation measured against a floating step says nothing.
 		it.each(SEEDS)('moves the right way by a visible amount for %s', (_label, brand) => {
+			const violations: string[] = [];
+
 			for (const { scheme, name, ramp } of eachRamp(generate(brand).schemes)) {
 				const direction = scheme === 'light' ? -1 : 1;
 
 				for (const role of STEP_ROLES) {
 					if (role.separationFrom === null) continue;
 
-					const current = ramp[role.step - 1]!;
-					const against = ramp[role.separationFrom - 1]!;
-					const delta = current.l - against.l;
+					const delta = ramp[role.step - 1]!.l - ramp[role.separationFrom - 1]!.l;
 					const where = `${scheme} ${name} step ${role.step} vs ${role.separationFrom}`;
 
-					expect(Math.sign(delta), `${where}: ${delta.toFixed(4)}`).toBe(direction);
-					expect(Math.abs(delta), `${where}: ${Math.abs(delta).toFixed(4)}`).toBeGreaterThanOrEqual(
-						role.minLightnessSeparation,
-					);
+					// An anchored step is told which way to move by the seed, not by the curve, so only
+					// the distance is asked of it. A black brand cannot hover blacker, and a hover that
+					// turns back toward the page is the right answer there rather than a ramp that walks
+					// its lightness out of range trying to obey a direction.
+					if (!role.anchoredToSeed && Math.sign(delta) !== direction) {
+						violations.push(`${where}: moved ${delta.toFixed(4)}, wanted sign ${direction}`);
+					}
+
+					if (Math.abs(delta) < role.minLightnessSeparation) {
+						violations.push(`${where}: separated by only ${Math.abs(delta).toFixed(4)}`);
+					}
 				}
 			}
+
+			expect(violations).toEqual([]);
 		});
 
 		// The carve-out above is only safe if the anchored pair really is the sole exception. If an

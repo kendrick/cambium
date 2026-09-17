@@ -29,9 +29,5 @@ declare module 'culori/fn' {
 	export function useMode(mode: Mode): (color: string | CuloriColor) => CuloriColor | undefined;
 	export function converter(mode: string): (color: string | CuloriColor) => CuloriColor | undefined;
 	export function inGamut(mode: string): (color: string | CuloriColor) => boolean;
-	export function toGamut(
-		destination: string,
-		mode?: string,
-	): (color: string | CuloriColor) => CuloriColor;
 	export function wcagContrast(a: string | CuloriColor, b: string | CuloriColor): number;
 }
