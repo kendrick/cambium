@@ -22,14 +22,32 @@ function apcaOf(color, background) {
  * comparable to the only number Radix actually commits to. It is also the background
  * `core/step-roles.ts` states every floor against, so the same measurement doubles as the
  * evaluation harness's pass/fail check when `stepRole` is supplied.
+ *
+ * `wcag` and `failsContrast` are measured from `hex`, the same 8-bit sRGB string the cell paints,
+ * not from `oklch`'s full-precision channels. `core/oklch-scale-engine.ts`'s FLOOR_MARGIN only
+ * cushions six-decimal rounding; a step solved just inside that margin can still round to a hex
+ * pair that has already dropped below the floor, and this is a harness whose entire job is
+ * judging the colour a person actually sees. `exactWcag` keeps the full-precision figure around
+ * only to flag the steps where quantization changed the verdict (see `straddlesFloor` below).
  */
 function measureStep(step, color, background, stepRole) {
 	const oklch = readOklch(color);
-	const wcag = contrastFromOklch(oklch, readOklch(background));
+	const hex = formatHex(color);
+	const backgroundHex = formatHex(background);
+	const exactWcag = contrastFromOklch(oklch, readOklch(background));
+	const wcag = contrastFromOklch(readOklch(hex), readOklch(backgroundHex));
+
+	const floor = stepRole?.minWcagVsStep2 ?? null;
+	const failsContrast = floor != null && wcag < floor;
+	// A step whose full-precision colour and whose rendered hex disagree about the floor is fragile
+	// in a way no amount of looking at this one swatch reveals: the next release of culori, or a
+	// different rounding path, could tip it either way. Surfacing that is worth more than silently
+	// filing it under "fails" or "passes".
+	const straddlesFloor = floor != null && exactWcag < floor !== failsContrast;
 
 	return {
 		step,
-		hex: formatHex(color),
+		hex,
 		l: oklch.l,
 		c: oklch.c,
 		h: oklch.h,
@@ -37,7 +55,8 @@ function measureStep(step, color, background, stepRole) {
 		apca: apcaOf(color, background),
 		inSrgb: isInSrgb(oklch),
 		role: stepRole?.role ?? null,
-		failsContrast: stepRole?.minWcagVsStep2 != null && wcag < stepRole.minWcagVsStep2,
+		failsContrast,
+		straddlesFloor,
 	};
 }
 
@@ -74,7 +93,16 @@ function renderCell(step) {
 	const h = step.h.toFixed(1);
 	const gamut = step.inSrgb ? '' : ' <span class="warn">!</span>';
 	const fail = step.failsContrast ? ' <span class="warn">fails floor</span>' : '';
-	const cellClass = step.failsContrast ? 'cell fail' : 'cell';
+	const straddle = step.straddlesFloor
+		? ' <span class="straddle-mark">quantization-sensitive</span>'
+		: '';
+	const cellClass = [
+		'cell',
+		step.failsContrast ? 'fail' : '',
+		step.straddlesFloor ? 'straddle' : '',
+	]
+		.filter(Boolean)
+		.join(' ');
 
 	return `<div class="${cellClass}" style="background:${step.hex};color:${cellText(step)}">
 		<b>${step.step}</b>
@@ -82,6 +110,7 @@ function renderCell(step) {
 		<span>${l} / ${c} / ${h}</span>
 		<span>${step.wcag.toFixed(2)}:1${gamut}${fail}</span>
 		<span>Lc ${Math.round(step.apca)}</span>
+		${straddle}
 	</div>`;
 }
 
@@ -110,8 +139,10 @@ const STYLE = `
 		gap:1px; font-size:10px; overflow:hidden; }
 	.cell b { font-size:11px; }
 	.cell .role { opacity:0.75; }
+	.cell.straddle { outline:2px dashed #e8b339; outline-offset:-4px; }
 	.cell.fail { outline:2px solid #ff5c5c; outline-offset:-2px; }
 	.warn { color:#ff5c5c; font-weight:700; }
+	.straddle-mark { color:#e8b339; font-weight:700; }
 	@media (max-width:900px) { .cell span { display:none; } }
 `;
 
@@ -125,8 +156,12 @@ export function renderSwatchPage(groups, title = 'Cambium ramp swatches') {
 <title>${title}</title><style>${STYLE}</style></head>
 <body><h1>${title}</h1>
 <p class="note">Each cell shows its step, its OKLCH lightness, chroma and hue, and WCAG contrast
-against its own ramp's step 2, then APCA Lc against the same background. A red exclamation marks a
-color outside the sRGB gamut. WCAG is the gate; the Lc figure is advisory and never decides a
+against its own ramp's step 2, then APCA Lc against the same background. WCAG is measured from the
+same 8-bit hex colour the cell paints, not the full-precision value the engine solved for, so the
+number describes what you're looking at. A red exclamation marks a color outside the sRGB gamut. A
+dashed amber outline or "quantization-sensitive" label marks a step where that 8-bit rounding
+changed the floor verdict from what full-precision math gives; a solid red outline marks a step
+that misses its floor regardless. WCAG is the gate; the Lc figure is advisory and never decides a
 pass.</p>
 ${groups.map(renderGroup).join('')}
 </body></html>`;
