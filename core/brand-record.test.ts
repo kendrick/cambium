@@ -53,6 +53,29 @@ describe('BrandRecordSchema', () => {
 		expect(parsed.images[0]?.originalHash).toBe('sha256:abc');
 	});
 
+	/**
+	 * The record the version bump exists for. A pre-#7 archive holds a colour-only token set, and
+	 * without the bump it claims a version matching the current format and then dies on a list of
+	 * Zod issues rather than on the loud mismatch `SCHEMA_VERSION` is there to raise.
+	 */
+	it('rejects a token set from before the non-colour categories landed', () => {
+		const ramp = Array.from({ length: 12 }, (_, i) => ({
+			step: i + 1,
+			l: 0.05 + i * 0.08,
+			c: 0.05,
+			h: 259.8,
+		}));
+		const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' } };
+		const colourOnly = { ...layer, schemes: { light: layer, dark: layer } };
+
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			versions: [{ ...version, tokenSet: colourOnly }],
+		});
+
+		expect(result.success).toBe(false);
+	});
+
 	it('rejects a schemaVersion it does not know', () => {
 		const result = BrandRecordSchema.safeParse({ ...record, schemaVersion: SCHEMA_VERSION + 1 });
 

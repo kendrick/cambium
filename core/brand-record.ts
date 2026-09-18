@@ -7,12 +7,19 @@ import { TokenSetSchema } from './token-set';
  * Bumped whenever a stored record's shape changes. Parsing rejects anything else, because
  * the export archive is the only migration path and it only works if a mismatch is loud.
  *
- * This bump folds in two shape changes that landed on separate branches, each independently
- * bumping from 2 to 3: #19's `ordinal` field on `BrandVersionSchema`, and #53's `expressive`
- * field on `BrandSeedSchema`. Merging both at 3 would leave a record stamped 3 ambiguous
- * about which shape it actually holds, so the merge moves the number to 4 instead.
+ * 4 folded in two shape changes that landed on separate branches, each independently bumping from
+ * 2 to 3: #19's `ordinal` field on `BrandVersionSchema`, and #53's `expressive` field on
+ * `BrandSeedSchema`. Merging both at 3 would leave a record stamped 3 ambiguous about which shape
+ * it actually holds, so that merge moved the number to 4 instead.
+ *
+ * 5 is #7's nine non-colour categories on `TokenSetSchema`, all required. A stored record's
+ * `tokenSet` is the shape that changed, so a version-4 archive holding a colour-only token set now
+ * fails eleven fields inside `BrandRecordSchema.parse`, the nine categories plus a shadow scale in
+ * each of the two schemes. Without this bump that record claims a version
+ * matching the current format and then dies on a Zod issue list, instead of reaching the loud
+ * mismatch this number exists to trigger.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * Only the downscaled image actually sent to the model is stored, plus a hash of the
