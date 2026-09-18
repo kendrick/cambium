@@ -4,6 +4,7 @@ import {
 	describeRejectedBytes,
 	fitWithin,
 	ImageEncodeError,
+	MAX_ENCODED_BASE64_BYTES,
 	MAX_EDGE_PX,
 	prepareReferenceImage,
 	sniffImageType,
@@ -489,6 +490,54 @@ describe('prepareReferenceImage', () => {
 			name: 'ImageEncodeError',
 			kind: 'image-encode-failed',
 		});
+	});
+
+	/**
+	 * Issue #22 says downscaling makes an oversized upload "structurally impossible", and the pixel
+	 * cap alone does not. A small image carrying megabytes of ancillary chunks is inside the cap, so
+	 * it used to take the passthrough branch untouched and land in storage whole.
+	 */
+	it('re-encodes a within-cap file that is too big to store rather than passing it through', async () => {
+		const fat = new Blob([bytes(PNG_HEAD), new Uint8Array(4_000_000)], { type: 'image/png' });
+		let encodeCalls = 0;
+		const codec = fakeCodec({
+			async decode() {
+				return { width: 400, height: 300, close() {} };
+			},
+			async encode() {
+				encodeCalls += 1;
+
+				return encodedWebp();
+			},
+		});
+
+		const result = await prepareReferenceImage(fat, codec);
+
+		expect(encodeCalls).toBe(1);
+		expect(result.kind).toBe('prepared');
+		if (result.kind !== 'prepared') return;
+		expect(result.prepared.mediaType).toBe('image/webp');
+	});
+
+	// The backstop, for pixels alone that still will not fit. Reported in base64 bytes, the unit
+	// every documented API limit is stated in.
+	it('refuses an image still over the ceiling once it holds nothing but pixels', async () => {
+		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
+		const codec = fakeCodec({
+			async decode() {
+				return { width: 4000, height: 3000, close() {} };
+			},
+			async encode() {
+				return new Blob([bytes(WEBP_HEAD), new Uint8Array(6_000_000)], { type: 'image/webp' });
+			},
+		});
+
+		const result = await prepareReferenceImage(file, codec);
+
+		expect(result.kind).toBe('too-large');
+		if (result.kind !== 'too-large') return;
+		expect(result.oversized.limit).toBe(MAX_ENCODED_BASE64_BYTES);
+		expect(result.oversized.bytes).toBeGreaterThan(MAX_ENCODED_BASE64_BYTES);
 	});
 
 	it('closes every bitmap the codec hands out', async () => {

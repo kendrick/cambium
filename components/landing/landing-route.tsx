@@ -118,7 +118,7 @@ export function LandingRoute() {
 			try {
 				// Dynamic for the same reason the save path is: the store imports `BrandRecordSchema`, and
 				// zod costs more than the first-load budget has to give. See ADR-0002.
-				const { createIndexedDbRecordStore } =
+				const { createIndexedDbRecordStore, closeIndexedDbRecordStore } =
 					await import('../../app/storage/indexed-db-record-store');
 				const store = await createIndexedDbRecordStore();
 
@@ -136,6 +136,10 @@ export function LandingRoute() {
 					// `unreadable` would put "it is still in this browser" in front of somebody on no
 					// evidence, which is the original bug inverted rather than fixed.
 					result = isSchemaRejection(error) ? { kind: 'unreadable' } : { kind: 'unavailable' };
+				} finally {
+					// A read holds a connection open for as long as the tab lives otherwise, which is what
+					// turns the missing `blocked` handler from a rare hang into a likely one.
+					closeIndexedDbRecordStore(store);
 				}
 			} catch {
 				result = { kind: 'unavailable' };
@@ -212,11 +216,14 @@ export function LandingRoute() {
 				Saved. {count} stored in this browser under{' '}
 				<code className="bg-muted rounded px-1 py-0.5 text-xs">{recordId}</code>.
 			</p>
-			{/* Says what was dropped at the moment the user could otherwise assume everything was kept.
-			    #77 adds the fields; until it lands, silence here would be the bad surprise. */}
+			{/* States what this build can keep rather than what this visit lost. Asserting a loss was
+			    wrong whenever every tag was left on Automatic and the brand site was blank, which is the
+			    common case: it claimed something had gone when nothing had. The route cannot tell those
+			    apart on a reload either, because the form's state is gone by then. #77 adds the fields;
+			    until it lands, saying nothing at all would still be the worse surprise. */}
 			<p className="text-muted-foreground text-sm">
-				The images are stored. Their type tags and the brand site are not kept yet, so those went
-				when the form closed.
+				The images are stored. Image tags and the brand site are not stored yet, so they do not
+				outlive this page.
 			</p>
 			<p className="text-muted-foreground text-sm">
 				Nothing has been generated from them yet. That takes an API key and a model call, and the

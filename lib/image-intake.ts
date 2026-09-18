@@ -43,15 +43,49 @@ export const SNIFF_BYTES = 12;
 /**
  * The long edge a reference image is downscaled to before it is stored.
  *
- * The research notes' own snippet uses 1024; this diverges on purpose. 1568 is the Messages
- * API's long-edge ceiling, so it is the largest size that costs nothing extra in tokens — the
- * API resizes to its own tile grid on arrival regardless, and a UI screenshot is one of the
- * three input kinds issue #22 names where legible text is the whole signal a downscale can't
- * afford to blur away.
+ * This is a cost choice, not an API ceiling, and an earlier version of this comment had that
+ * backwards. Every model identifier in this repo is `claude-opus-5`, which the vision documentation
+ * puts on the high-resolution tier: long edge up to 2576 px and up to 4784 visual tokens. 1568 is
+ * the standard tier's ceiling, for models this project does not use. So the real ceiling here is
+ * 2576, and holding to 1568 buys a smaller bill by discarding resolution rather than costing
+ * nothing, which is the opposite of what this comment used to claim.
+ *
+ * 1568 stays because the consumer reads a brand rather than transcribing it. Colour, type
+ * character, radius and shadow all survive it, and the alternative is roughly three times the
+ * visual tokens per image on a key the user is paying for.
+ *
+ * What it costs is worth stating plainly: the discarded detail is gone for good, because only a
+ * sha256 of the original is kept. Raising this to 2576 is a one-line change if a screenshot's fine
+ * text ever turns out to matter more than the bill.
+ *
+ * The research notes' snippet uses 1024, and this still diverges from that on purpose. A UI
+ * screenshot is one of the three input kinds issue #22 names, and legible structure is the signal
+ * there.
  */
 export const MAX_EDGE_PX = 1568;
 
 export const WEBP_QUALITY = 0.85;
+
+/**
+ * The most base64 one stored image may run to.
+ *
+ * Issue #22 says downscaling makes an oversized upload "structurally impossible", and the pixel cap
+ * alone does not deliver that. A 400x300 PNG is inside the cap and can still carry megabytes of
+ * ancillary chunks, so it took the passthrough branch untouched and was stored whole.
+ *
+ * 5 MB is the strictest of the three documented per-image limits: the Claude API direct allows
+ * 10 MB of base64 per image, Bedrock and Vertex allow 5 MB, and a request allows 32 MB in total.
+ * Taking the strictest keeps a stored record portable across all three, and nothing this module
+ * produces comes near it once an image has actually been re-encoded.
+ *
+ * Exceeding it is not a picker-level refusal first. Re-encoding drops ancillary data along with
+ * everything else that is not pixels, so an image that is only fat is fixed rather than turned
+ * away; the refusal below is the backstop for an image that is still too large afterwards.
+ */
+export const MAX_ENCODED_BASE64_BYTES = 5_000_000;
+
+/** base64 costs four bytes per three, so a blob this size or smaller encodes inside the budget. */
+const MAX_STORED_BYTES = Math.floor((MAX_ENCODED_BASE64_BYTES * 3) / 4);
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const JPEG_SIGNATURE = [0xff, 0xd8, 0xff];
@@ -227,8 +261,20 @@ export type PreparedImage = {
 };
 
 export type IntakeResult =
-	| { kind: 'prepared'; prepared: PreparedImage; rejected?: never }
-	| { kind: 'unsupported'; prepared?: never; rejected: { detected: string | null } };
+	| { kind: 'prepared'; prepared: PreparedImage; rejected?: never; oversized?: never }
+	| {
+			kind: 'unsupported';
+			prepared?: never;
+			rejected: { detected: string | null };
+			oversized?: never;
+	  }
+	| {
+			kind: 'too-large';
+			prepared?: never;
+			rejected?: never;
+			/** Both in base64 bytes, which is the unit every documented API limit is stated in. */
+			oversized: { bytes: number; limit: number };
+	  };
 
 /**
  * `btoa` over a binary string, built in chunks. `String.fromCharCode(...bytes)` spread over a
@@ -289,6 +335,11 @@ async function sniffStoredType(stored: Blob): Promise<AcceptedImageType> {
 	return sniffed;
 }
 
+/** What `bytes` of binary costs once base64 has padded it to a multiple of four. */
+function base64Length(bytes: number): number {
+	return Math.ceil(bytes / 3) * 4;
+}
+
 /** Decodes only to read a size, so the bitmap is closed before the caller ever sees it. */
 async function decodeSize(
 	codec: ImageCodec,
@@ -342,8 +393,23 @@ export async function prepareReferenceImage(
 	// media type unchanged. This is more than an optimisation — `app/readers/local-extract.ts`
 	// samples flat logo regions pixel by pixel to recover a brand colour, and a lossy WebP
 	// re-encode would shift exactly the colour that step is asked to read back.
-	const passthrough = fitted.width === probe.width && fitted.height === probe.height;
+	// Inside the pixel cap is not the same as small enough to store. Ancillary PNG chunks carry
+	// arbitrary bytes, so a 400x300 file can be megabytes and would otherwise pass through whole.
+	// Re-encoding keeps the pixels and drops everything else, which fixes that case rather than
+	// refusing it.
+	const withinPixelCap = fitted.width === probe.width && fitted.height === probe.height;
+	const passthrough = withinPixelCap && file.size <= MAX_STORED_BYTES;
 	const stored = passthrough ? file : await codec.encode(file, fitted);
+
+	// The backstop, for an image that is still too large once it holds nothing but pixels. Nothing
+	// this module produces has reached it, and it is here so the limit is enforced rather than
+	// assumed.
+	if (stored.size > MAX_STORED_BYTES) {
+		return {
+			kind: 'too-large',
+			oversized: { bytes: base64Length(stored.size), limit: MAX_ENCODED_BASE64_BYTES },
+		};
+	}
 
 	// Both branches take the type off the bytes being stored, never off the type the encoder was
 	// asked for. `convertToBlob` falls back to PNG wherever the UA cannot encode what it was handed,

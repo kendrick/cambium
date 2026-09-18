@@ -100,6 +100,10 @@ const FAILED_DECODE_BUDGET = MAX_REFERENCE_IMAGES;
  */
 const MAX_SPELLED_OUT_REJECTIONS = 3;
 
+function mB(bytes: number): string {
+	return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}
+
 function kB(bytes: number): string {
 	return `${Math.round(bytes / 1000)} kB`;
 }
@@ -212,7 +216,21 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 					continue;
 				}
 
+				if (result.kind === 'too-large') {
+					rejected.push(
+						`${file.name} is too big to store at ${mB(result.oversized.bytes)}, against a ${mB(result.oversized.limit)} ceiling.`,
+					);
+					continue;
+				}
+
 				accepted.push({ name: file.name, tag: DEFAULT_IMAGE_TAG, prepared: result.prepared });
+
+				// Reset, because the notice says "in a row" and a counter that only ever climbs cannot
+				// support that. Left unreset it also dropped usable files with slots free: broken, good,
+				// broken, good, broken, good spent the budget on failures that were never consecutive and
+				// skipped the last good one. Total decodes stay bounded either way, at
+				// `(room + 1) * FAILED_DECODE_BUDGET`, because each reset costs a slot and slots run out.
+				failedDecodes = 0;
 			}
 
 			if (accepted.length > 0) setPicked((current) => [...current, ...accepted]);
@@ -282,7 +300,11 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 			// pull zod in at module scope, which `app/state/workspace-store.ts` measures at 93 kB against
 			// the 24 kB of first-load headroom ADR-0002 reserves. `pnpm test:bundle` is what actually
 			// holds this; the comment only says why.
-			const [{ SCHEMA_VERSION }, { createIndexedDbRecordStore }, storage] = await Promise.all([
+			const [
+				{ SCHEMA_VERSION },
+				{ createIndexedDbRecordStore, closeIndexedDbRecordStore },
+				storage,
+			] = await Promise.all([
 				import('../../core/brand-record'),
 				import('../../app/storage/indexed-db-record-store'),
 				import('../../app/storage/storage-estimate'),
@@ -298,10 +320,19 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 
 			const store = await createIndexedDbRecordStore();
 
-			// The resolved value is ignored rather than assumed absent: #67 changes `put` to resolve with
-			// the record as stored. Nothing here writes twice, so there is nothing to carry forward.
-			await store.put(record);
-			savedId = record.id;
+			try {
+				// The resolved value is ignored rather than assumed absent: #67 changes `put` to resolve
+				// with the record as stored. Nothing here writes twice, so there is nothing to carry
+				// forward.
+				await store.put(record);
+				savedId = record.id;
+			} finally {
+				// Closed on every path. A connection left open is what makes an upgrade elsewhere block
+				// instead of proceeding, and `openDB` has no `blocked` handler, so the tab that blocks
+				// waits forever rather than failing. That gap is filed; leaking connections into it is
+				// this route's own contribution and costs nothing to stop.
+				closeIndexedDbRecordStore(store);
+			}
 
 			// `storage-estimate.ts` assigns this call to "the flow that saves a brand for the first
 			// time", which is this one, and warns it must not take the save down with it. Firefox answers
@@ -332,6 +363,13 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 	return (
 		<form
 			className="flex w-full flex-col gap-6"
+			// The brand site field is `type="url"` for the keyboard it summons on a phone, and native
+			// constraint validation then refused to submit the form over it. That field is optional, is
+			// never fetched, and is not even stored yet, so a typo in it was blocking the one thing this
+			// route exists to do: "acme.com" is how people write a domain, and it left the images
+			// unsaved with no message at all, because `save` never ran. Validation this form actually
+			// relies on is the submit button's own disabled state.
+			noValidate
 			onSubmit={(event) => {
 				event.preventDefault();
 				void save();
