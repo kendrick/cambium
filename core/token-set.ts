@@ -78,11 +78,28 @@ export const TokenProvenanceSchema = z.discriminatedUnion('provenance', [
 ]);
 
 /**
- * Strict, so the namespace is the only spelling. DTCG reserves `$extensions` for vendor data keyed
- * by a namespace; a payload filed under anyone else's key, or written as bare keys beside the
- * value, is a token this pipeline cannot read back and `core/strictness.test.ts` holds that line.
+ * Loose, and the one object in this file that is.
+ *
+ * DTCG section 5.2.3: "Tools that process design token files MUST preserve any extension data they
+ * do not themselves understand." `docs/research/oss-landscape.md:578` records it and adds that the
+ * requirement is preserve rather than ignore, and that a round trip must not drop foreign keys.
+ *
+ * Strict fails that MUST as surely as Zod's default stripping does. This file argues against
+ * stripping because it loses data without a word, which is the preserve argument stated correctly,
+ * and then rejecting a foreign namespace refuses the same data more loudly. Dropping and rejecting
+ * are two ways of not preserving, and one token carrying another tool's namespace would have taken
+ * the whole set down.
+ *
+ * Two different things were conflated here. A Cambium payload misfiled, whether as bare
+ * `provenance` and `rationale` keys beside the value or under a near-miss spelling, is still a
+ * parse error: `com.cambium` is required, and every shape around this one is still strict. Another
+ * tool's namespace is not ours to judge, so it parses and comes back untouched.
+ *
+ * `core/provenance.test.ts` proves that preservation through `JSON.stringify` and through
+ * `structuredClone` rather than asserting it, because `structuredClone` is the path an IndexedDB
+ * write actually takes.
  */
-export const TokenExtensionsSchema = z.strictObject({
+export const TokenExtensionsSchema = z.looseObject({
 	[CAMBIUM_NAMESPACE]: TokenProvenanceSchema,
 });
 
@@ -508,6 +525,11 @@ function checkMirroredLayers(
  * in-memory assertion and then vanish on the way to disk. The payload has a declared slot now, so
  * what strictness still guards is the spelling — anything else is a parse error naming the file to
  * widen rather than a gap in the archive.
+ *
+ * `TokenExtensionsSchema` is the one deliberate exception and its own docblock says why: DTCG
+ * requires a tool to preserve extension data it does not understand, and refusing a foreign
+ * namespace fails that requirement the same way silently dropping one would. Strictness here
+ * protects data Cambium wrote; looseness there protects data somebody else wrote.
  *
  * The nine non-colour categories are siblings of the colour layers rather than one `nonColor`
  * block, because an export adapter asks for a category by name and reads `tokenSet.radius`, and

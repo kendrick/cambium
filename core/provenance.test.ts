@@ -66,6 +66,13 @@ function countPayloads(json: string): number {
 	return json.match(/com\.cambium/g)?.length ?? 0;
 }
 
+/** A foreign namespace as stored bytes, which is what "preserved unchanged" has to mean. */
+function foreignBytes(token: unknown): string {
+	return JSON.stringify(
+		(token as { $extensions: Record<string, unknown> }).$extensions['com.someothertool'],
+	);
+}
+
 /** Reads the payload off a token, failing loudly rather than asserting against `undefined`. */
 function payloadOf(token: { $extensions: TokenExtensions } | undefined) {
 	if (!token) throw new Error('nothing at that token path');
@@ -193,6 +200,65 @@ describe('token provenance', () => {
 		expect(TokenSetSchema.safeParse(round).success).toBe(true);
 		expect(countPayloads(serialized)).toBeGreaterThan(0);
 		expect(countPayloads(JSON.stringify(round))).toBe(countPayloads(serialized));
+	});
+
+	/**
+	 * DTCG section 5.2.3: "Tools that process design token files MUST preserve any extension data
+	 * they do not themselves understand." `docs/research/oss-landscape.md:578` records it, and adds
+	 * that a round trip must not drop foreign keys.
+	 *
+	 * Byte-identical rather than deep-equal, and through both serializations. `JSON.stringify` is
+	 * what an export archive goes through; `structuredClone` is what an IndexedDB write goes
+	 * through, and it is the one no earlier round-trip test touched. A foreign namespace holding a
+	 * nested object, an array and a null is the shape most likely to lose something quietly on
+	 * either path.
+	 */
+	it('preserves a namespace it does not understand through both round trips', () => {
+		const foreign = {
+			note: 'hand-authored by another tool',
+			weights: [1, 2, 3],
+			nested: { deep: true, absent: null },
+		};
+		const set = tokenSetFor(STATED_SEED);
+		const step = {
+			...set.primitives.brand![0]!,
+			$extensions: { ...set.primitives.brand![0]!.$extensions, 'com.someothertool': foreign },
+		};
+		const layer = {
+			...set.schemes.light,
+			primitives: { ...set.primitives, brand: [step, ...set.primitives.brand!.slice(1)] },
+		};
+		const withForeign = { ...set, ...layer, schemes: { light: layer, dark: layer } };
+
+		const parsed = TokenSetSchema.parse(withForeign);
+
+		// Parsing alone drops it if the schema is strict about the namespace, so this is the
+		// assertion the old shape could not have passed at all.
+		expect(foreignBytes(parsed.primitives.brand![0]!)).toBe(JSON.stringify(foreign));
+		expect(
+			foreignBytes(TokenSetSchema.parse(JSON.parse(JSON.stringify(parsed))).primitives.brand![0]!),
+		).toBe(JSON.stringify(foreign));
+		expect(foreignBytes(TokenSetSchema.parse(structuredClone(parsed)).primitives.brand![0]!)).toBe(
+			JSON.stringify(foreign),
+		);
+	});
+
+	/** Our own payload still has to be there and still has to be well formed beside a foreign one. */
+	it('still requires its own namespace when a foreign one sits beside it', () => {
+		const set = tokenSetFor(STATED_SEED);
+		const step = {
+			...set.primitives.brand![0]!,
+			$extensions: { 'com.someothertool': { note: 'only theirs' } },
+		};
+		const layer = {
+			...set.schemes.light,
+			primitives: { ...set.primitives, brand: [step, ...set.primitives.brand!.slice(1)] },
+		};
+
+		expect(
+			TokenSetSchema.safeParse({ ...set, ...layer, schemes: { light: layer, dark: layer } })
+				.success,
+		).toBe(false);
 	});
 
 	/** The export archive is the only migration path, so the payload has to clear the record too. */
