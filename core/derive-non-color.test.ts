@@ -4,10 +4,11 @@ import { type BrandSeed, BrandSeedSchema } from './brand-seed';
 import { deriveNonColor } from './derive-non-color';
 import { compositeOver, isInSrgb } from './oklch';
 import { createOklchScaleEngine } from './oklch-scale-engine';
+import { CAMBIUM_NAMESPACE, invented } from './provenance';
 import { resolveScheme } from './resolve-scheme';
 import { BALANCED, type SchemeName } from './scale-engine';
 import { MIN_RENDERED_DARKENING, MIN_VISIBLE_SURFACE_LIGHTNESS } from './shadow-scale';
-import type { ColorScheme } from './token-set';
+import type { ColorScheme, SemanticEntry, TokenExtensions } from './token-set';
 
 const BLANK = {
 	keyColors: null,
@@ -44,12 +45,24 @@ function colorSchemesFor(seed: BrandSeed): Record<SchemeName, ColorScheme> {
 	if (!result.ok)
 		throw new Error(`the scale engine rejected the fixture seed: ${result.error.kind}`);
 
-	const semantic = { background: 'neutral.1', foreground: 'neutral.12' };
+	const semantic = {
+		background: fixtureAlias('neutral.1'),
+		foreground: fixtureAlias('neutral.12'),
+	};
 
 	return {
 		light: { primitives: result.schemes.light, semantic },
 		dark: { primitives: result.schemes.dark, semantic },
 	};
+}
+
+/**
+ * `SemanticEntrySchema` requires `$extensions` now, same as every other token. This module reads
+ * only `background`'s colour, so the fixture's own provenance is unexamined and `invented` says
+ * that plainly rather than dressing up a rationale nothing here checks.
+ */
+function fixtureAlias(alias: string): SemanticEntry {
+	return { alias, $extensions: invented('Fixture alias, chosen for the test rather than a seed') };
 }
 
 const crisp = seedWith(
@@ -104,6 +117,35 @@ describe('deriveNonColor', () => {
 		}
 		expect(shadow.light.source).toBe('derived');
 		expect(shadow.dark.source).toBe('derived');
+	});
+
+	/**
+	 * The classification rule from #9's decision 4: `source: 'system'` already means no seed field
+	 * reached the category, so every leaf in the five system categories comes back `invented` with
+	 * a null `seedField`, and the rationale is per category rather than per leaf. This checks only
+	 * the five system categories' own leaves; radius, typography and tracking tag themselves and are
+	 * a peer module's assertions to make.
+	 */
+	it('tags every system leaf invented, with no seed field, one rationale per category', () => {
+		const { spacing, opacity, motion, focusRing, zIndex } = derive(crisp);
+
+		const leavesByCategory: Record<(typeof SYSTEM)[number], { $extensions: TokenExtensions }[]> = {
+			spacing: Object.values(spacing.values),
+			opacity: Object.values(opacity.values),
+			motion: [...Object.values(motion.values.duration), ...Object.values(motion.values.easing)],
+			focusRing: [focusRing.values.width, focusRing.values.offset],
+			zIndex: Object.values(zIndex.values),
+		};
+
+		for (const leaves of Object.values(leavesByCategory)) {
+			expect(leaves.length).toBeGreaterThan(0);
+
+			const payloads = leaves.map((leaf) => leaf.$extensions[CAMBIUM_NAMESPACE]);
+
+			expect(payloads.every((p) => p.provenance === 'invented' && p.seedField === null)).toBe(true);
+			// One rationale per category, not one per leaf: every leaf in a category shares it.
+			expect(new Set(payloads.map((p) => p.rationale)).size).toBe(1);
+		}
 	});
 
 	// The acceptance criterion, read off the values. Two seeds that disagree about every
@@ -250,7 +292,7 @@ describe('deriveNonColor', () => {
 	it('throws rather than tinting from nothing when a scheme declares no background', () => {
 		const schemes = colorSchemesFor(crisp);
 		const withoutBackground = {
-			light: { ...schemes.light, semantic: { foreground: 'neutral.12' } },
+			light: { ...schemes.light, semantic: { foreground: fixtureAlias('neutral.12') } },
 			dark: schemes.dark,
 		};
 

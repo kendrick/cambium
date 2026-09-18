@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { CAMBIUM_NAMESPACE } from './provenance';
 import { radiusScale } from './radius-scale';
 
 /**
@@ -93,5 +94,33 @@ describe('radiusScale', () => {
 
 	it('produces the same scale from the same character', () => {
 		expect(radiusScale(soft)).toEqual(radiusScale({ base: 16, progression: 'soft' }));
+	});
+
+	/**
+	 * `character` is the module's only argument, so whether it was stated is a fact this function
+	 * can see without learning anything new. `source` stays `derived` either way — it says the
+	 * category itself came from a category-level derivation, not whether this particular call had
+	 * a stated field to work from — so the split has to be read off the per-step payload instead.
+	 */
+	it('tags every step derived on radiusCharacter when the seed stated one', () => {
+		const { values } = radiusScale(soft);
+
+		STEPS.forEach((step) => {
+			expect(values[step]!.$extensions[CAMBIUM_NAMESPACE]).toMatchObject({
+				provenance: 'derived',
+				seedField: 'radiusCharacter',
+			});
+		});
+	});
+
+	it('tags every step invented with a null seed field when the seed measured no character', () => {
+		const { values } = radiusScale(null);
+
+		STEPS.forEach((step) => {
+			expect(values[step]!.$extensions[CAMBIUM_NAMESPACE]).toMatchObject({
+				provenance: 'invented',
+				seedField: null,
+			});
+		});
 	});
 });

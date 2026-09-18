@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import { BrandSeedSchema } from './brand-seed';
 import { contrastFromOklch, hueDistance, isInSrgb } from './oklch';
-import { RampSchema } from './token-set';
+import { CAMBIUM_NAMESPACE } from './provenance';
+import { type Ramp, RampSchema, type RampStep } from './token-set';
 import {
 	createOklchScaleEngine,
 	MIN_ACCENT_SEPARATION,
 	OKLCH_SCALE_ENGINE_ID,
 } from './oklch-scale-engine';
-import { BALANCED, RAMP_NAMES, SCHEME_NAMES } from './scale-engine';
+import { BALANCED, RAMP_NAMES, type RampName, SCHEME_NAMES } from './scale-engine';
 import { testScaleEngineContract } from './scale-engine-contract';
 
 describe('createOklchScaleEngine', () => {
@@ -227,5 +228,113 @@ describe('createOklchScaleEngine across the hue circle', () => {
 		});
 
 		expect(crowded).toEqual([]);
+	});
+});
+
+const payload = (step: RampStep) => step.$extensions[CAMBIUM_NAMESPACE];
+
+/** `provenance:seedField` per step, so a payload landing on the wrong step fails on position. */
+const trace = (ramp: Ramp) =>
+	ramp.map((step) => `${payload(step).provenance}:${payload(step).seedField}`);
+
+const everyStep = (label: string) => Array.from({ length: 12 }, () => label);
+
+const anchoredTrace = everyStep('derived:keyColors').map((label, index) =>
+	index === 8 ? 'observed:keyColors' : label,
+);
+
+const STATUS_RAMPS = ['danger', 'warning', 'success', 'info'] as const;
+
+const ACCENT_IN_SEED = {
+	keyColors: [
+		{
+			oklch: [0.6231, 0.188, 259.8],
+			proposedRole: 'brand',
+			sourceImageId: 'img-1',
+			sourceRegion: null,
+		},
+		{ oklch: [0.62, 0.19, 30], proposedRole: 'accent', sourceImageId: 'img-1', sourceRegion: null },
+	],
+};
+
+/**
+ * Provenance per ramp, because the classification is not a property of the ramp's name.
+ *
+ * Six of the seven ramps swing between classifications on what the seed stated, and the fixture
+ * seed above states one key colour and nothing else. So every ramp that swings is run from both
+ * sides here: the seed that informs it and the seed that leaves it to the engine. Run from one side
+ * only, a rule keyed on the ramp's name passes and ships a keyless read whose invented colours
+ * claim a seed field.
+ */
+describe('createOklchScaleEngine provenance', () => {
+	// Both schemes, every time. Dark is generated on its own pass through the same builder, so a
+	// payload threaded into one and dropped from the other is a live failure mode rather than a
+	// theoretical one.
+	const tracesOf = (name: RampName, overrides = {}, params = BALANCED) =>
+		SCHEME_NAMES.map((scheme) => trace(generate(overrides, params).schemes[scheme][name]));
+
+	it('observes the brand key colour at step 9 and derives the other eleven from it', () => {
+		expect(tracesOf('brand')).toEqual([anchoredTrace, anchoredTrace]);
+	});
+
+	it('observes an accent the seed placed, exactly as it does the brand colour', () => {
+		expect(tracesOf('accent', ACCENT_IN_SEED)).toEqual([anchoredTrace, anchoredTrace]);
+	});
+
+	// The rotation is the engine's own choice of hue, so no field of the seed can be named for it.
+	// This is the case a name-keyed rule gets wrong, and it is the common one: a keyless read
+	// proposes a brand colour and nothing else.
+	it('invents a rotated accent, because no seed field named a second colour', () => {
+		const invented = everyStep('invented:null');
+
+		expect(tracesOf('accent')).toEqual([invented, invented]);
+	});
+
+	// Derived across all twelve, never observed. The stated temperature sets hue and chroma; step
+	// 9's lightness still comes from the engine's own anchor, so no step is a colour the seed placed.
+	it('derives every neutral step from a stated temperature without observing one', () => {
+		const derived = everyStep('derived:neutralTemperature');
+
+		expect(tracesOf('neutral', { neutralTemperature: { hue: 40, chroma: 0.02 } })).toEqual([
+			derived,
+			derived,
+		]);
+	});
+
+	it('invents the neutral ramp when the seed states no temperature', () => {
+		const invented = everyStep('invented:null');
+
+		expect(tracesOf('neutral')).toEqual([invented, invented]);
+	});
+
+	// Under Balanced `harmonization` is 0 and the status hues are Cambium's constants, untouched by
+	// the seed. Claiming `keyColors` there would be pointing at evidence that never reached the value.
+	it.each(STATUS_RAMPS)('invents %s while harmonisation leaves its hue alone', (name) => {
+		const invented = everyStep('invented:null');
+
+		expect(tracesOf(name, {}, { ...BALANCED, harmonization: 0 })).toEqual([invented, invented]);
+	});
+
+	it.each(STATUS_RAMPS)('derives %s once harmonisation pulls its hue toward the brand', (name) => {
+		const derived = everyStep('derived:keyColors');
+
+		expect(tracesOf(name, {}, { ...BALANCED, harmonization: 0.5 })).toEqual([derived, derived]);
+	});
+
+	// The wording is per step and the classification is per ramp, which is exactly the seam an
+	// off-by-one slips through: a rationale describing step 8 sitting on step 9 reads as provenance
+	// and traces to the wrong value.
+	it('gives every step a rationale naming the step it sits on', () => {
+		const { schemes } = generate(ACCENT_IN_SEED, { ...BALANCED, harmonization: 0.5 });
+
+		const mislabelled = SCHEME_NAMES.flatMap((scheme) =>
+			RAMP_NAMES.flatMap((name) =>
+				schemes[scheme][name]
+					.filter((step) => !new RegExp(`^Step ${step.step}\\b`).test(payload(step).rationale))
+					.map((step) => `${scheme} ${name} step ${step.step}: ${payload(step).rationale}`),
+			),
+		);
+
+		expect(mislabelled).toEqual([]);
 	});
 });

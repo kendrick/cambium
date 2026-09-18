@@ -1,5 +1,6 @@
 import type { BrandSeed } from './brand-seed';
 import type { Oklch } from './oklch';
+import { invented } from './provenance';
 import { radiusScale } from './radius-scale';
 import type { SchemeName } from './scale-engine';
 import { resolveScheme } from './resolve-scheme';
@@ -7,9 +8,14 @@ import { shadowScale } from './shadow-scale';
 import { systemConstants } from './system-constants';
 import type {
 	ColorScheme,
+	CubicBezierValue,
+	DimensionValue,
+	DurationValue,
 	RadiusScale,
 	ShadowScale,
+	SignedDimensionValue,
 	SystemConstants,
+	TokenExtensions,
 	TrackingScale,
 	Typography,
 } from './token-set';
@@ -51,7 +57,90 @@ export function deriveNonColor(
 			light: shadowScale(surfaceOf(schemes.light, 'light'), seed.shadowCharacter),
 			dark: shadowScale(surfaceOf(schemes.dark, 'dark'), seed.shadowCharacter),
 		},
-		...systemConstants(),
+		...tagSystemConstants(systemConstants()),
+	};
+}
+
+/**
+ * One rationale per category rather than one per token. `source: 'system'` on the category is
+ * already the proof that no seed field reached anything inside it, so tagging leaf by leaf would
+ * restate the same fact forty times with forty chances to word it differently. Radius, typography,
+ * tracking and shadow tag their own leaves in their own modules, each against a seed field that
+ * varies per token; nothing here decides for them.
+ */
+const SPACING_RATIONALE =
+	'An evenly stepped scale invented for the prototype; no seed field speaks to spacing';
+const OPACITY_RATIONALE =
+	"Disabled and ring are vendored from components/ui/button.tsx's opacity classes; muted and overlay are stated defaults nobody has measured";
+const MOTION_RATIONALE =
+	'Durations and easings are invented interaction defaults, not read from any seed field';
+const FOCUS_RING_RATIONALE =
+	"Width is vendored from components/ui/button.tsx's focus ring; offset is 0 because that component sets no ring offset";
+const ZINDEX_RATIONALE =
+	'An invented layering default assigned by role, not read from any seed field';
+
+/** Attaches `$extensions` to a `{ value, unit }` leaf, invented because the category is `system`. */
+function tagValueUnit<T extends { value: number; unit: string }>(
+	leaf: T,
+	rationale: string,
+): T & { $extensions: TokenExtensions } {
+	return { ...leaf, $extensions: invented(rationale) };
+}
+
+/** Attaches `$extensions` to a bare number or tuple, wrapping it the way `scalarToken` does in the schema. */
+function tagScalar<T>(value: T, rationale: string): { value: T; $extensions: TokenExtensions } {
+	return { value, $extensions: invented(rationale) };
+}
+
+function tagRecord<T, U>(record: Record<string, T>, tag: (leaf: T) => U): Record<string, U> {
+	return Object.fromEntries(Object.entries(record).map(([key, leaf]) => [key, tag(leaf)]));
+}
+
+/**
+ * The one pass that turns `systemConstants()`'s plain statement of the five categories into the
+ * tagged shape `TokenSetSchema` requires. Every leaf becomes `invented` with a null `seedField`:
+ * that is what `source: 'system'` already means, so this is the single place that fact turns into
+ * forty payloads rather than forty hand-written literals inside `system-constants.ts`.
+ */
+function tagSystemConstants(raw: {
+	spacing: { source: 'system'; values: Record<string, DimensionValue> };
+	opacity: { source: 'system'; values: Record<string, number> };
+	motion: {
+		source: 'system';
+		values: { duration: Record<string, DurationValue>; easing: Record<string, CubicBezierValue> };
+	};
+	focusRing: { source: 'system'; values: { width: DimensionValue; offset: SignedDimensionValue } };
+	zIndex: { source: 'system'; values: Record<string, number> };
+}): SystemConstants {
+	return {
+		spacing: {
+			source: 'system',
+			values: tagRecord(raw.spacing.values, (leaf) => tagValueUnit(leaf, SPACING_RATIONALE)),
+		},
+		opacity: {
+			source: 'system',
+			values: tagRecord(raw.opacity.values, (leaf) => tagScalar(leaf, OPACITY_RATIONALE)),
+		},
+		motion: {
+			source: 'system',
+			values: {
+				duration: tagRecord(raw.motion.values.duration, (leaf) =>
+					tagValueUnit(leaf, MOTION_RATIONALE),
+				),
+				easing: tagRecord(raw.motion.values.easing, (leaf) => tagScalar(leaf, MOTION_RATIONALE)),
+			},
+		},
+		focusRing: {
+			source: 'system',
+			values: {
+				width: tagValueUnit(raw.focusRing.values.width, FOCUS_RING_RATIONALE),
+				offset: tagValueUnit(raw.focusRing.values.offset, FOCUS_RING_RATIONALE),
+			},
+		},
+		zIndex: {
+			source: 'system',
+			values: tagRecord(raw.zIndex.values, (leaf) => tagScalar(leaf, ZINDEX_RATIONALE)),
+		},
 	};
 }
 

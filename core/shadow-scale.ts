@@ -1,5 +1,6 @@
 import type { BrandSeed } from './brand-seed';
 import { fitToSrgbGamut, type Oklch } from './oklch';
+import { derived, invented } from './provenance';
 import type { Shadow, ShadowScale } from './token-set';
 
 const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
@@ -113,6 +114,21 @@ export function shadowScale(surface: Oklch, character: BrandSeed['shadowCharacte
 	const diffusion = diffusionFor(character?.spread);
 	const darkness = 1 - surface.l;
 
+	// A shadow is one DTCG composite token, so it gets one provenance value rather than five. Its
+	// colour is genuinely tinted from the resolved surface every time, but its geometry and
+	// diffusion only trace to the seed when `shadowCharacter` was stated — when it is null they fall
+	// back to the module constants above. Provenance follows the governing field, so a null
+	// character makes the whole token `invented`, and the rationale is where the surviving tint gets
+	// recorded rather than lost.
+	const extensions = character
+		? derived(
+				'shadowCharacter',
+				'Geometry and diffusion follow the seed while colour still tints from the resolved page surface',
+			)
+		: invented(
+				'Geometry and diffusion fall back to defaults but colour still tints from the resolved page surface',
+			);
+
 	// Hue is meaningless at zero chroma, and `core/oklch.ts` canonicalises it to 0 there, so a
 	// genuinely achromatic page would otherwise hand back a red-tinted shadow. An interpretation
 	// preset that leaves the neutral ramp untinted is the case that reaches this.
@@ -140,6 +156,7 @@ export function shadowScale(surface: Oklch, character: BrandSeed['shadowCharacte
 					offsetY: px(base.offsetY),
 					blur: px(base.blur * diffusion * (1 + DARK_BLUR_GAIN * darkness)),
 					spread: px(base.spread),
+					$extensions: extensions,
 				},
 			];
 		}),

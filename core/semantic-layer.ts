@@ -1,9 +1,18 @@
 import type { BrandSeed } from './brand-seed';
 import { deriveNonColor } from './derive-non-color';
 import { contrastFromOklch } from './oklch';
+import { CAMBIUM_NAMESPACE, derived, invented, observed } from './provenance';
 import type { RampSet, SchemeName } from './scale-engine';
 import { type ContrastingPair, type SemanticAlias, SEMANTIC_MAP } from './semantic-map';
-import { type ColorScheme, stepForAlias, type TokenSet } from './token-set';
+import { STEP_ROLES } from './step-roles';
+import {
+	type ColorScheme,
+	type RampStep,
+	type SemanticEntry,
+	stepForAlias,
+	type TokenExtensions,
+	type TokenSet,
+} from './token-set';
 
 /**
  * One map, both schemes, resolved down to one alias per token per scheme.
@@ -55,32 +64,97 @@ export function buildTokenSet(schemes: Record<SchemeName, RampSet>, seed: BrandS
  * #6 lists as a non-goal. Nothing here moves a colour, and it cannot rescue a brand at mid
  * lightness, whose ramp holds no step that clears AA against its own step 9.
  */
-function semanticFor(ramps: RampSet): Record<string, string> {
-	const semantic: Record<string, string> = {};
+function semanticFor(ramps: RampSet): Record<string, SemanticEntry> {
+	const semantic: Record<string, SemanticEntry> = {};
 
 	for (const [token, assignment] of Object.entries(SEMANTIC_MAP)) {
 		semantic[token] =
-			typeof assignment === 'string' ? assignment : higherContrast(ramps, assignment);
+			typeof assignment === 'string' ? fixedEntry(ramps, assignment) : pairEntry(ramps, assignment);
 	}
 
 	return semantic;
 }
 
-function higherContrast(ramps: RampSet, pair: ContrastingPair): SemanticAlias {
-	const fill = stepForAlias(ramps, pair.on);
+/**
+ * A semantic token inherits the provenance of the step it resolves to, because the value a
+ * stylesheet reads through `--primary` *is* that step's value.
+ *
+ * Tagging the whole layer `derived` would be cheaper and wrong twice over. It would claim a seed
+ * field for `destructive`, whose danger ramp is invented outright under a keyless read, and it
+ * would report `primary` as computed when step 9 is the brand colour placed straight out of the
+ * seed. `SEMANTIC_MAP` is a constant no seed informs, so the step is the only place left to read
+ * an answer from.
+ *
+ * This writes its own rationale rather than copying the step's. The step's records how the curve
+ * reached that colour, and the only thing the alias assignment adds is why this token reached for
+ * that step.
+ */
+function inherit(step: RampStep, rationale: string): TokenExtensions {
+	const payload = step.$extensions[CAMBIUM_NAMESPACE];
 
-	if (!fill)
-		throw new Error(`contrasting pair measures against ${pair.on}, which resolves to nothing`);
+	if (payload.provenance === 'observed') return observed(payload.seedField, rationale);
+	if (payload.provenance === 'derived') return derived(payload.seedField, rationale);
+
+	return invented(rationale);
+}
+
+function fixedEntry(ramps: RampSet, alias: SemanticAlias): SemanticEntry {
+	const step = resolve(ramps, alias, `semantic layer aliases ${alias}`);
+
+	return { alias, $extensions: inherit(step, `Takes ${describe(alias, step)}`) };
+}
+
+/**
+ * The rationale names the losing candidate and the fill because nothing else records them. The two
+ * schemes resolve one declaration to different steps, so a reader holding the dark layer alone sees
+ * a plain alias with no sign that anything was measured.
+ */
+function pairEntry(ramps: RampSet, pair: ContrastingPair): SemanticEntry {
+	const { alias, step, beat } = higherContrast(ramps, pair);
+
+	return {
+		alias,
+		$extensions: inherit(
+			step,
+			`Takes ${describe(alias, step)}, which out-contrasts ${beat} on the ${pair.on} fill`,
+		),
+	};
+}
+
+/** `brand.9, the brand ramp's solid fill, the brand colour itself`—where the colour came from and what the step is for. */
+function describe(alias: SemanticAlias, step: RampStep): string {
+	const ramp = alias.slice(0, alias.lastIndexOf('.'));
+
+	// Searched rather than indexed. `RampSchema` pins a ramp to steps 1 through 12 in order, and
+	// nothing pins `STEP_ROLES` to the same order; the `!` holds because the table declares all
+	// twelve steps a `RampStep` can carry.
+	return `${alias}, the ${ramp} ramp's ${STEP_ROLES.find((role) => role.step === step.step)!.role}`;
+}
+
+function higherContrast(
+	ramps: RampSet,
+	pair: ContrastingPair,
+): { alias: SemanticAlias; step: RampStep; beat: SemanticAlias } {
+	const fill = resolve(ramps, pair.on, `contrasting pair measures against ${pair.on}`);
 
 	const [first, second] = pair.candidates;
 	const scored = [first, second].map((alias) => {
-		const step = stepForAlias(ramps, alias);
+		const step = resolve(ramps, alias, `contrasting pair offers ${alias}`);
 
-		if (!step) throw new Error(`contrasting pair offers ${alias}, which resolves to nothing`);
-
-		return { alias, contrast: contrastFromOklch(step, fill) };
+		return { alias, step, contrast: contrastFromOklch(step, fill) };
 	});
 
 	// Ties keep the first candidate, so the same ramps always produce the same token set.
-	return scored[1]!.contrast > scored[0]!.contrast ? scored[1]!.alias : scored[0]!.alias;
+	const won = scored[1]!.contrast > scored[0]!.contrast ? 1 : 0;
+
+	return { ...scored[won]!, beat: scored[1 - won]!.alias };
+}
+
+/** `subject` names who asked, so a dangling alias reports which declaration reached for it. */
+function resolve(ramps: RampSet, alias: string, subject: string): RampStep {
+	const step = stepForAlias(ramps, alias);
+
+	if (!step) throw new Error(`${subject}, which resolves to nothing`);
+
+	return step;
 }

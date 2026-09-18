@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { compositeOver, isInSrgb, type Oklch } from './oklch';
+import { CAMBIUM_NAMESPACE } from './provenance';
 import { MIN_RENDERED_DARKENING, MIN_VISIBLE_SURFACE_LIGHTNESS, shadowScale } from './shadow-scale';
 
 const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
@@ -185,6 +186,41 @@ describe('shadowScale', () => {
 	});
 
 	/**
+	 * A shadow is one DTCG composite token, so it carries exactly one `$extensions` payload, filed
+	 * on the shadow itself rather than on each of its four geometry parts — five payloads on one
+	 * token would make the count wrong wherever a consumer walks the set. `shadowCharacter` stated
+	 * is the row where geometry and diffusion genuinely trace to the seed, so the whole token reads
+	 * `derived`.
+	 */
+	it('carries one derived payload on the shadow, and none on its four dimensions', () => {
+		const shadow = shadowScale(PAGE_LIGHT, tinted).values.md!;
+		const payload = shadow.$extensions[CAMBIUM_NAMESPACE];
+
+		expect(payload.provenance).toBe('derived');
+		expect(payload.seedField).toBe('shadowCharacter');
+
+		for (const dimension of [shadow.offsetX, shadow.offsetY, shadow.blur, shadow.spread]) {
+			expect(dimension).not.toHaveProperty('$extensions');
+		}
+	});
+
+	/**
+	 * #9 decision 4's uncomfortable row: a null `shadowCharacter` still lets the tint come from the
+	 * resolved page surface, but geometry and diffusion fall back to the module constants above.
+	 * One token gets one provenance value, and the rule that generalises across the plan follows the
+	 * governing seed field rather than the colour — so a null character makes the whole shadow
+	 * `invented`, and the rationale is where the surviving tint gets written down.
+	 */
+	it('falls back to invented when the seed measured no shadow character, and records the surviving tint', () => {
+		const shadow = shadowScale(PAGE_LIGHT, null).values.md!;
+		const payload = shadow.$extensions[CAMBIUM_NAMESPACE];
+
+		expect(payload.provenance).toBe('invented');
+		expect(payload.seedField).toBeNull();
+		expect(payload.rationale.toLowerCase()).toContain('surface');
+	});
+
+	/**
 	 * The floor under the guarantee, pinned from this end. Whether the generated dark page clears it
 	 * is `core/derive-non-color.test.ts`'s half.
 	 *
@@ -265,6 +301,10 @@ describe('shadowScale', () => {
 	 * itself the day one of those files is renamed, and it has to be kept in step with every module
 	 * that ever learns about colour. Naming what is allowed fails on any new import at all, which
 	 * is the moment worth stopping at.
+	 *
+	 * `./provenance` joined the list once #9 required a payload on the shadow token: it hands back
+	 * a plain `$extensions` object built from `SeedField` and never touches a ramp or a scheme, so
+	 * admitting it does not reopen the door this test exists to keep shut.
 	 */
 	it('imports only what cannot reach a colour', () => {
 		const source = readFileSync(new URL('./shadow-scale.ts', import.meta.url), 'utf8');
@@ -275,6 +315,8 @@ describe('shadowScale', () => {
 		].map((m) => m[1]!);
 
 		expect(specifiers).not.toHaveLength(0);
-		expect(new Set(specifiers)).toEqual(new Set(['./brand-seed', './oklch', './token-set']));
+		expect(new Set(specifiers)).toEqual(
+			new Set(['./brand-seed', './oklch', './provenance', './token-set']),
+		);
 	});
 });

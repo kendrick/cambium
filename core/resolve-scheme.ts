@@ -24,11 +24,13 @@ import { type ColorScheme, stepForAlias } from './token-set';
 export function resolveScheme(scheme: ColorScheme): Record<string, Oklch> {
 	const resolved: Record<string, Oklch> = {};
 
-	for (const [token, alias] of Object.entries(scheme.semantic)) {
-		const step = stepForAlias(scheme.primitives, alias);
+	for (const [token, entry] of Object.entries(scheme.semantic)) {
+		const step = stepForAlias(scheme.primitives, entry.alias);
 
 		if (!step) {
-			throw new Error(`semantic token "${token}" aliases ${alias}, which resolves to nothing`);
+			throw new Error(
+				`semantic token "${token}" aliases ${entry.alias}, which resolves to nothing`,
+			);
 		}
 
 		resolved[token] = { l: step.l, c: step.c, h: step.h };

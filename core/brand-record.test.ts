@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
+import { derived } from './provenance';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
+
+/** Reused wherever this file needs a token to carry provenance and nothing about which. */
+const extensions = derived('keyColors', 'exercises a schema bound rather than a real derivation');
 
 const seed = {
 	keyColors: [
@@ -64,8 +68,12 @@ describe('BrandRecordSchema', () => {
 			l: 0.05 + i * 0.08,
 			c: 0.05,
 			h: 259.8,
+			$extensions: extensions,
 		}));
-		const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' } };
+		const layer = {
+			primitives: { brand: ramp },
+			semantic: { border: { alias: 'brand.6', $extensions: extensions } },
+		};
 		const colourOnly = { ...layer, schemes: { light: layer, dark: layer } };
 
 		const result = BrandRecordSchema.safeParse({
@@ -165,11 +173,16 @@ describe('BrandRecordSchema integrity', () => {
 			l: 0.05 + i * 0.08,
 			c: 0.05,
 			h: 259.8,
+			$extensions: extensions,
 		}));
 		// The token set has to be valid on its own, or the rejection below stops being about the
 		// missing seed and starts being about a shape `TokenSetSchema` would reject anyway.
 		const shadow = SHADOW_FIXTURE;
-		const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' }, shadow };
+		const layer = {
+			primitives: { brand: ramp },
+			semantic: { border: { alias: 'brand.6', $extensions: extensions } },
+			shadow,
+		};
 		const orphaned = {
 			...version,
 			seed: null,
