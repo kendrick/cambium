@@ -137,10 +137,37 @@ describe('deriveNonColor', () => {
 			const { color } = deriveNonColor(crisp, schemes).shadow[scheme].values.md!;
 
 			expect(color.h).toBeCloseTo(background.h, 6);
-			expect(color.c).toBeGreaterThan(0.01);
+			expect(color.c).toBeGreaterThan(0);
 			expect(color.l).toBeLessThan(background.l);
 		},
 	);
+
+	/**
+	 * The chroma floor belongs to the light scheme alone, and stating it per scheme is what keeps
+	 * this honest. A shadow on a light page sits near lightness 0.15, where sRGB has room for the
+	 * full tint. A dark page puts it near 0.028, where the most any hue can hold is about 0.011 and
+	 * hue 200 only reaches 0.005. Asserting one floor across both schemes passes or fails on which
+	 * hue the fixture seed happens to carry.
+	 */
+	it('carries a tint anyone can see in the light scheme', () => {
+		expect(derive(crisp).shadow.light.values.md!.color.c).toBeGreaterThan(0.01);
+	});
+
+	/**
+	 * What makes a shadow a shadow, measured on the assembled set rather than on a synthetic
+	 * surface. Two earlier versions of this derivation shipped a shadow nobody could see: one
+	 * declared a chroma no display could show, and the next fixed that by lifting the shadow until
+	 * it was barely darker than the page. Every assertion was about the declared colour, so neither
+	 * failed anything.
+	 */
+	it.each(['light', 'dark'] as const)('renders visibly darker than the %s page', (scheme) => {
+		const schemes = colorSchemesFor(crisp);
+		const background = resolveScheme(schemes[scheme]).background!;
+		const { color } = deriveNonColor(crisp, schemes).shadow[scheme].values.md!;
+		const rendered = background.l * (1 - color.alpha) + color.l * color.alpha;
+
+		expect(background.l - rendered).toBeGreaterThan(0.02);
+	});
 
 	/**
 	 * The hue half, proved by moving it. Two seeds a long way apart on the circle have to produce

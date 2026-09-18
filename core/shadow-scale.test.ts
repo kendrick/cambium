@@ -74,6 +74,41 @@ describe('shadowScale', () => {
 	});
 
 	/**
+	 * The tint is a ceiling, not a promise, and a dark page is where that shows. A shadow there sits
+	 * near lightness 0.028 and sRGB holds about 0.0048 of chroma that far down, so the tint all but
+	 * disappears. Lifting the lightness until 0.02 fits is the tempting fix and it is the wrong one:
+	 * the shadow would stop being darker than the page, which the next test is about.
+	 */
+	it('gives up the tint rather than the darkness on a dark page', () => {
+		const dark = shadowScale(PAGE_DARK, tinted).values.md!.color;
+		const light = shadowScale({ ...PAGE_LIGHT, h: PAGE_DARK.h }, tinted).values.md!.color;
+
+		expect(dark.c).toBeGreaterThan(0);
+		expect(dark.c).toBeLessThan(light.c / 1.5);
+		expect(dark.h).toBeCloseTo(PAGE_DARK.h, 6);
+	});
+
+	/**
+	 * What makes a shadow a shadow, and the assertion both earlier versions of this module were
+	 * missing. The first shipped a tint no display could show; the second fixed that by lifting the
+	 * shadow's lightness until it was barely darker than the page it fell on. Neither failed a test,
+	 * because every assertion was about the declared colour rather than about what lands on screen.
+	 *
+	 * So this composites the shadow over its own surface at its own opacity and measures what is
+	 * left. The `md` step is the middle of the scale; a floor it clears is one the steps above it
+	 * clear by more.
+	 */
+	it.each([
+		['a light page', PAGE_LIGHT],
+		['a dark page', PAGE_DARK],
+	])('renders visibly darker than %s', (_name, surface) => {
+		const { color } = shadowScale(surface, tinted).values.md!;
+		const rendered = surface.l * (1 - color.alpha) + color.l * color.alpha;
+
+		expect(surface.l - rendered).toBeGreaterThan(0.02);
+	});
+
+	/**
 	 * Hue is meaningless at zero chroma and `core/oklch.ts` canonicalises it to 0 there, so tinting
 	 * from a genuinely achromatic page would paint every shadow red. An interpretation preset that
 	 * leaves the neutral ramp untinted is what reaches this.
@@ -171,8 +206,8 @@ describe('shadowScale', () => {
 	 * `core/derive-non-color.ts` owns the single read-only lookup that resolves it. An import added
 	 * here would compile, pass every test above, and quietly undo the split.
 	 *
-	 * Reads the module's import specifiers rather than its whole source, so the docblock stays free
-	 * to name the modules it is explaining its distance from.
+	 * Matches import statements at the start of a line rather than anywhere in the source, so the
+	 * docblock stays free to name the modules it is explaining its distance from.
 	 *
 	 * An allowlist rather than a list of the three forbidden modules. Naming what is banned disarms
 	 * itself the day one of those files is renamed, and it has to be kept in step with every module
@@ -181,7 +216,10 @@ describe('shadowScale', () => {
 	 */
 	it('imports only what cannot reach a colour', () => {
 		const source = readFileSync(new URL('./shadow-scale.ts', import.meta.url), 'utf8');
-		const specifiers = [...source.matchAll(/(?:from|import)\s*\(?\s*'([^']+)'/g)].map((m) => m[1]!);
+		const specifiers = [
+			...source.matchAll(/^\s*(?:import|export)\s[^'\n]*from\s*'([^']+)'/gm),
+			...source.matchAll(/^\s*import\s*\(\s*'([^']+)'/gm),
+		].map((m) => m[1]!);
 
 		expect(specifiers).not.toHaveLength(0);
 		expect(new Set(specifiers)).toEqual(new Set(['./brand-seed', './oklch', './token-set']));

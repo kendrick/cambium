@@ -1,5 +1,5 @@
 import type { BrandSeed } from './brand-seed';
-import type { Oklch } from './oklch';
+import { fitToSrgbGamut, type Oklch } from './oklch';
 import type { Shadow, ShadowScale } from './token-set';
 
 const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
@@ -15,32 +15,14 @@ const BASE = [
 
 /**
  * How much of the surface's lightness a shadow keeps. A shadow is the surface with the light taken
- * out of it, which is also what keeps a light and a dark page's shadows apart in lightness as well
- * as in opacity.
+ * out of it, and being visibly darker than the page is the whole of what makes it read as a shadow,
+ * so this is the one number that cannot be traded away for anything else.
  */
 const SHADOW_LIGHTNESS = 0.15;
 
 /**
- * The floor under that, and it is a gamut constraint rather than a taste one.
- *
- * A dark page resolves `neutral.1` near lightness 0.188, so the fraction above puts its shadow at
- * 0.028, and sRGB holds almost no chroma that far down. `SHADOW_CHROMA` would be silently clamped
- * past by the display, which is the invisible-tint bug again wearing a number that looks right in
- * the token file.
- *
- * Hue 200 binds at every lightness, and swept in two-degree steps it reaches 0.0170 at lightness
- * 0.10, 0.0204 at 0.12, and 0.0238 at 0.14. So 0.14 is the lowest floor that clears 0.02 at every
- * hue with room to spare, and a shadow there still sits under a dark page's own lightness.
- *
- * The cost is worth stating: a dark page is already near this floor, so the two schemes' shadow
- * colours end up close together and what really separates them is opacity and blur. #7 records
- * that. Clamping chroma to the gamut instead would keep the colours far apart and put the dark
- * scheme back on a tint of 0.0048, which is the black this derivation exists to avoid.
- */
-const SHADOW_MIN_LIGHTNESS = 0.14;
-
-/**
- * The chroma a tinted shadow carries, stated rather than read off the surface.
+ * The chroma a tinted shadow carries where the gamut has room for it, stated rather than read off
+ * the surface.
  *
  * Reading it off the surface is the obvious implementation and it produces black. `background`
  * aliases `neutral.1`, and a page background is near-achromatic by design: measured across seven
@@ -50,6 +32,11 @@ const SHADOW_MIN_LIGHTNESS = 0.14;
  *
  * So the surface supplies the hue, which it carries faithfully, and the depth of the tint is a
  * constant. Subtle on purpose: a shadow that announces its colour stops reading as a shadow.
+ *
+ * It is a ceiling rather than a promise. sRGB holds almost no chroma near black, so a shadow on a
+ * dark page reaches only about 0.0048 of it and comes out near-black. That is the honest answer
+ * rather than a shortfall: lifting its lightness until 0.02 fits would leave the shadow barely
+ * darker than the page it falls on, which is not a shadow. #7 records the trade.
  */
 const SHADOW_CHROMA = 0.02;
 
@@ -82,11 +69,12 @@ export function shadowScale(surface: Oklch, character: BrandSeed['shadowCharacte
 	// preset that leaves the neutral ramp untinted is the case that reaches this.
 	const tinted = (character?.tintFromSurface ?? true) && surface.c > 0;
 
-	const color = {
-		l: Math.max(SHADOW_MIN_LIGHTNESS, surface.l * SHADOW_LIGHTNESS),
-		c: tinted ? SHADOW_CHROMA : 0,
-		h: tinted ? surface.h : 0,
-	};
+	const l = surface.l * SHADOW_LIGHTNESS;
+
+	// Clamped to what sRGB can actually show at this lightness and hue, rather than declared and
+	// left for the display to clamp past. A token file stating a chroma nothing can render is the
+	// same invisible tint as one stating no chroma, minus the chance of anyone noticing.
+	const color = tinted ? fitToSrgbGamut({ l, c: SHADOW_CHROMA, h: surface.h }) : { l, c: 0, h: 0 };
 
 	const values = Object.fromEntries(
 		STEPS.map((step, i): [string, Shadow] => {
