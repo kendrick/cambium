@@ -14,7 +14,7 @@
  * Not a `.test.ts` file, because the Vitest include glob would run it and it holds no tests.
  */
 
-/** Shadow is the one non-colour category a scheme carries, so it is spread into both halves. */
+/** Spread into both scheme halves as well as the top level; `token-set.ts` records why. */
 export const SHADOW_FIXTURE = {
 	source: 'derived',
 	values: {

@@ -145,7 +145,7 @@ function systemCategory<T extends z.ZodType>(values: T) {
 	return z.strictObject({ source: z.literal('system'), values });
 }
 
-/** A category that parsed clean while holding nothing reaches an adapter as a category with no tokens in it. */
+/** A category that parses clean while holding nothing reaches an adapter with no tokens in it. */
 function nonEmptyRecord<T extends z.ZodType>(value: T, label: string) {
 	return z
 		.record(z.string().min(1), value)
@@ -166,7 +166,7 @@ export const DurationSchema = z.strictObject({
 	unit: z.literal('ms'),
 });
 
-/** DTCG's `cubicBezier` type. The two x coordinates are progress in time, so CSS rejects them outside 0 to 1. */
+/** DTCG's `cubicBezier` type. The x coordinates are progress in time, so CSS rejects them outside 0 to 1. */
 export const CubicBezierSchema = z.tuple([
 	z.number().min(0).max(1),
 	z.number(),
@@ -227,9 +227,9 @@ export const MotionScaleSchema = systemCategory(
 );
 
 /**
- * `focusRing` rather than `ring`. `SEMANTIC_MAP.ring` is already `brand.11`, a colour that reaches a
- * stylesheet as `--ring`, and a constant sharing that name flattens to the same variable and
- * overwrites it with a width. No adapter writing a flat variable list would report the collision.
+ * `focusRing` rather than `ring`. `SEMANTIC_MAP.ring` is already `brand.11`, a colour that
+ * reaches a stylesheet as `--ring`, and a constant sharing that name flattens to the same
+ * variable and overwrites it with a width. No adapter writing a flat list reports the collision.
  */
 export const FocusRingSchema = systemCategory(
 	z.strictObject({ width: DimensionSchema, offset: DimensionSchema }),
@@ -312,7 +312,7 @@ export type MotionScale = z.infer<typeof MotionScaleSchema>;
 export type FocusRing = z.infer<typeof FocusRingSchema>;
 export type ZIndexScale = z.infer<typeof ZIndexScaleSchema>;
 
-/** The five categories #7 emits without consulting the seed, which `systemConstants` returns whole. */
+/** The five categories #7 emits without consulting the seed, returned whole by `systemConstants`. */
 export type SystemConstants = {
 	spacing: SpacingScale;
 	opacity: OpacityScale;
