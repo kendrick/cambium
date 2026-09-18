@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { createOklchScaleEngine } from '../core/oklch-scale-engine.ts';
-import { BALANCED, RAMP_NAMES, SCHEME_NAMES } from '../core/scale-engine.ts';
+import { RAMP_NAMES, SCHEME_NAMES } from '../core/scale-engine.ts';
 import { STEP_ROLES } from '../core/step-roles.ts';
+import { EngineError, loadSchemes } from './lib/cli.mjs';
+import { SeedLoadError } from './lib/seed.mjs';
 import { measureRamp, renderSwatchPage } from './lib/swatches.mjs';
-import { loadSeed, SeedLoadError } from './lib/seed.mjs';
 
 const OUT_DIR = new URL('../swatches/', import.meta.url);
 
@@ -16,47 +16,35 @@ const NOTE =
 // short of the `{ mode, l, c, h }` shape culori actually wants.
 const asCulori = (step) => ({ mode: 'oklch', l: step.l, c: step.c, h: step.h });
 
-function fail(message) {
-	console.error(message);
-	process.exitCode = 1;
-}
-
 const [, , seedPath] = process.argv;
 
 if (!seedPath) {
-	fail('usage: evaluate <seed-file.json>');
+	console.error('usage: evaluate <seed-file.json>');
+	process.exitCode = 1;
 } else {
-	let seed;
-
 	try {
-		seed = await loadSeed(seedPath);
+		const schemes = await loadSchemes(seedPath);
+
+		const groups = SCHEME_NAMES.map((scheme) => ({
+			title: `${scheme} scheme`,
+			note: NOTE,
+			rows: RAMP_NAMES.map((rampName) => ({
+				label: rampName,
+				steps: measureRamp(schemes[scheme][rampName].map(asCulori), STEP_ROLES),
+			})),
+		}));
+
+		await mkdir(OUT_DIR, { recursive: true });
+		await writeFile(
+			new URL('seed.html', OUT_DIR),
+			renderSwatchPage(groups, 'Cambium seed evaluation'),
+		);
+
+		console.log('Wrote swatches/seed.html');
 	} catch (error) {
-		if (!(error instanceof SeedLoadError)) throw error;
-		fail(error.message);
-	}
+		if (!(error instanceof SeedLoadError) && !(error instanceof EngineError)) throw error;
 
-	if (seed) {
-		const result = createOklchScaleEngine().generate(seed, BALANCED);
-
-		if (!result.ok) {
-			fail(`scale engine rejected the seed: ${result.error.kind}`);
-		} else {
-			const groups = SCHEME_NAMES.map((scheme) => ({
-				title: `${scheme} scheme`,
-				note: NOTE,
-				rows: RAMP_NAMES.map((rampName) => ({
-					label: rampName,
-					steps: measureRamp(result.schemes[scheme][rampName].map(asCulori), STEP_ROLES),
-				})),
-			}));
-
-			await mkdir(OUT_DIR, { recursive: true });
-			await writeFile(
-				new URL('seed.html', OUT_DIR),
-				renderSwatchPage(groups, 'Cambium seed evaluation'),
-			);
-
-			console.log('Wrote swatches/seed.html');
-		}
+		console.error(error.message);
+		process.exitCode = 1;
 	}
 }

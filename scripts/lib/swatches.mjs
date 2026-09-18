@@ -66,6 +66,7 @@ const cellText = (step) => (step.wcag >= 4.5 ? '#ffffff' : '#111111');
 function renderCell(step) {
 	const l = step.l.toFixed(3);
 	const c = step.c.toFixed(3);
+	const h = step.h.toFixed(1);
 	const gamut = step.inSrgb ? '' : ' <span class="warn">!</span>';
 	const fail = step.failsContrast ? ' <span class="warn">fails floor</span>' : '';
 	const cellClass = step.failsContrast ? 'cell fail' : 'cell';
@@ -73,7 +74,7 @@ function renderCell(step) {
 	return `<div class="${cellClass}" style="background:${step.hex};color:${cellText(step)}">
 		<b>${step.step}</b>
 		${step.role ? `<span class="role">${step.role}</span>` : ''}
-		<span>${l} / ${c}</span>
+		<span>${l} / ${c} / ${h}</span>
 		<span>${step.wcag.toFixed(2)}:1${gamut}${fail}</span>
 		<span>Lc ${Math.round(step.apca)}</span>
 	</div>`;
@@ -118,9 +119,10 @@ export function renderSwatchPage(groups, title = 'Cambium ramp swatches') {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>${title}</title><style>${STYLE}</style></head>
 <body><h1>${title}</h1>
-<p class="note">Each cell shows its step, OKLCH lightness and chroma, and WCAG contrast against
-its own ramp's step 2, then APCA Lc against the same background. A red exclamation marks a color
-outside the sRGB gamut. WCAG is the gate; the Lc figure is advisory and never decides a pass.</p>
+<p class="note">Each cell shows its step, its OKLCH lightness, chroma and hue, and WCAG contrast
+against its own ramp's step 2, then APCA Lc against the same background. A red exclamation marks a
+color outside the sRGB gamut. WCAG is the gate; the Lc figure is advisory and never decides a
+pass.</p>
 ${groups.map(renderGroup).join('')}
 </body></html>`;
 }
