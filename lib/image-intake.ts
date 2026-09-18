@@ -125,10 +125,21 @@ export function describeRejectedBytes(head: Uint8Array): string | null {
 }
 
 /**
- * The largest size that fits inside `maxEdge` on its long side, holding aspect ratio. Guards
- * zero or negative input by returning it unchanged rather than dividing — a caller passing a
- * broken probe result gets that same broken result back, not `NaN` or `Infinity` laundered
- * through rounding.
+ * The largest size that fits inside `maxEdge` on its long side, holding aspect ratio.
+ *
+ * Zero or negative input comes back unchanged rather than being divided — a caller passing a broken
+ * probe result gets that same broken result back, not `NaN` or `Infinity` laundered through
+ * rounding.
+ *
+ * A positive edge never rounds to zero. A 5000x1 strip scales by 0.31 and rounds its short edge to
+ * 0, which reaches `createImageBitmap` as `resizeHeight: 0`; the browser then refuses an image it
+ * had already decoded, and the picker reports a perfectly good file as damaged. That is the same
+ * misleading-failure class `ImageEncodeError` exists to prevent, arriving through a different door.
+ *
+ * A strip like that is accepted rather than rejected, which is a decision rather than an oversight.
+ * Issue #22 takes reference images "of any kind" and names no minimum dimension, so a floor here
+ * would be a number nobody asked for, turning away a wide banner crop or a colour strip that a
+ * vision model can read perfectly well. The clamp is what makes accepting it safe.
  */
 export function fitWithin(
 	width: number,
@@ -139,7 +150,10 @@ export function fitWithin(
 
 	const scale = Math.min(1, maxEdge / Math.max(width, height));
 
-	return { width: Math.round(width * scale), height: Math.round(height * scale) };
+	return {
+		width: Math.max(1, Math.round(width * scale)),
+		height: Math.max(1, Math.round(height * scale)),
+	};
 }
 
 /** Decoded pixels. Narrower than `ImageBitmap` so a Node test can supply one with no canvas. */
@@ -306,13 +320,19 @@ export async function prepareReferenceImage(
 	file: Blob,
 	codec: ImageCodec = platformImageCodec,
 ): Promise<IntakeResult> {
-	const original = new Uint8Array(await file.arrayBuffer());
-	const head = original.subarray(0, SNIFF_BYTES);
+	// Twelve bytes before the whole file, and the order is the point. A renamed video is refused on
+	// its signature alone, where buffering first would allocate the entire file into memory to reach
+	// exactly the same answer. Nothing upstream caps what a file picker hands over.
+	const head = new Uint8Array(await file.slice(0, SNIFF_BYTES).arrayBuffer());
 	const sniffed = sniffImageType(head);
 
 	if (!sniffed) {
 		return { kind: 'unsupported', rejected: { detected: describeRejectedBytes(head) } };
 	}
+
+	// Now the whole file, and only now. `originalHash` identifies the file the user actually picked,
+	// so it has to run over every byte; this reorders that read rather than avoiding it.
+	const original = new Uint8Array(await file.arrayBuffer());
 
 	const probe = await decodeSize(codec, file);
 	const fitted = fitWithin(probe.width, probe.height, MAX_EDGE_PX);
@@ -341,7 +361,10 @@ export async function prepareReferenceImage(
 	const landed = await decodeSize(codec, stored);
 
 	const originalHash = `sha256:${await sha256Hex(original)}`;
-	const storedBytes = new Uint8Array(await stored.arrayBuffer());
+	// On the passthrough path `stored` is `file`, so its bytes are the ones already in hand. Reading
+	// it again would buffer the whole file a second time, which is the common case: every image
+	// small enough to keep takes this branch.
+	const storedBytes = passthrough ? original : new Uint8Array(await stored.arrayBuffer());
 	const downscaled = `data:${mediaType};base64,${toBase64(storedBytes)}`;
 
 	const image: ReferenceImage = { id: crypto.randomUUID(), downscaled, originalHash };

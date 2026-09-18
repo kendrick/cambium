@@ -14,10 +14,25 @@ import { buttonVariants } from '@/components/ui/button';
  */
 const RECORD_PARAM = 'record';
 
+/**
+ * `missing` and `unreadable` are separate states because the recovery differs and because
+ * collapsing them destroys a signal the system depends on.
+ *
+ * `app/storage/indexed-db-record-store.ts` parses on the way out and throws when a stored record's
+ * `schemaVersion` has moved, deliberately: the export archive is the only migration path, and it
+ * works only if a mismatch is loud. #9 bumps that number in this same wave. Reporting that throw as
+ * "nothing is stored" would take the one incompatibility alarm this system has and answer it with
+ * "there was never anything here", on the screen most likely to meet it first.
+ *
+ * It is also a lie about a larger thing than the dropped tags this route already stopped lying
+ * about. A record that cannot be read is still on disk, and telling somebody their work is gone is
+ * how the work then actually gets deleted.
+ */
 type SavedRecord =
 	| { kind: 'loading' }
 	| { kind: 'found'; imageCount: number }
-	| { kind: 'missing' };
+	| { kind: 'missing' }
+	| { kind: 'unreadable' };
 
 export function LandingRoute() {
 	const router = useRouter();
@@ -40,19 +55,31 @@ export function LandingRoute() {
 		let live = true;
 
 		void (async () => {
-			// Dynamic for the same reason the save path is: the store imports `BrandRecordSchema`, and
-			// zod costs more than the first-load budget has to give. See ADR-0002.
-			const { createIndexedDbRecordStore } =
-				await import('../../app/storage/indexed-db-record-store');
-			const store = await createIndexedDbRecordStore();
-			const record = await store.get(recordId).catch(() => null);
+			let result: SavedRecord;
 
-			if (!live) return;
+			try {
+				// Dynamic for the same reason the save path is: the store imports `BrandRecordSchema`, and
+				// zod costs more than the first-load budget has to give. See ADR-0002.
+				const { createIndexedDbRecordStore } =
+					await import('../../app/storage/indexed-db-record-store');
+				const store = await createIndexedDbRecordStore();
+				const record = await store.get(recordId);
 
-			setLoaded({
-				id: recordId,
-				result: record ? { kind: 'found', imageCount: record.images.length } : { kind: 'missing' },
-			});
+				// Only a resolved null means the record is not there. That is the one answer storage gives
+				// that is actually about absence, and every other outcome below is about failure.
+				result = record ? { kind: 'found', imageCount: record.images.length } : { kind: 'missing' };
+			} catch {
+				// A schema mismatch, a corrupt row, an origin that will not open its database at all: the
+				// route cannot tell these apart and does not need to, because the advice is the same for
+				// all of them and is the opposite of the advice for a record that is not there.
+				//
+				// The try also covers opening the store, which used to sit outside any handler. A browser
+				// refusing IndexedDB left the whole effect rejecting and the screen on "Looking for that
+				// record…" forever.
+				result = { kind: 'unreadable' };
+			}
+
+			if (live) setLoaded({ id: recordId, result });
 		})();
 
 		return () => {
@@ -80,6 +107,26 @@ export function LandingRoute() {
 				</p>
 				<Link className={buttonVariants({ variant: 'outline' })} href="/">
 					Start again
+				</Link>
+			</div>
+		);
+	}
+
+	if (saved.kind === 'unreadable') {
+		return (
+			<div className="flex flex-col items-start gap-4">
+				<p className="text-sm">
+					A record is stored under that id, but this version of Cambium could not read it. A record
+					whose format has moved is refused rather than guessed at, so the usual cause is that a
+					different version of Cambium saved it.
+				</p>
+				{/* The one instruction that matters, because the failure looks like absence and the
+				    reflex it invites is the thing that would make the loss real. */}
+				<p className="text-muted-foreground text-sm">
+					It is still in this browser. Clearing your browsing data is what would lose it.
+				</p>
+				<Link className={buttonVariants({ variant: 'outline' })} href="/">
+					Start a new brand
 				</Link>
 			</div>
 		);

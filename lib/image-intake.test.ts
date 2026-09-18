@@ -146,6 +146,17 @@ describe('fitWithin', () => {
 		expect(fitWithin(0, 500, 1568)).toEqual({ width: 0, height: 500 });
 		expect(fitWithin(-10, 500, 1568)).toEqual({ width: -10, height: 500 });
 	});
+
+	/**
+	 * A positive edge that rounds to zero reaches `createImageBitmap` as `resizeHeight: 0`, and the
+	 * browser refuses an image it had already decoded. The picker then calls a good file damaged,
+	 * which is the misleading failure `ImageEncodeError` exists to prevent, by another route.
+	 */
+	it('never rounds a positive edge down to zero', () => {
+		expect(fitWithin(5000, 1, 1568)).toEqual({ width: 1568, height: 1 });
+		expect(fitWithin(4000, 3, 1568)).toEqual({ width: 1568, height: 1 });
+		expect(fitWithin(1, 5000, 1568)).toEqual({ width: 1, height: 1568 });
+	});
 });
 
 describe('prepareReferenceImage', () => {
@@ -323,6 +334,46 @@ describe('prepareReferenceImage', () => {
 	 * header, which `app/readers/anthropic-request.ts` forwards to the Messages API as the image's
 	 * media type. This fails if the encode branch ever assumes its own output type again.
 	 */
+	/**
+	 * A file picker caps nothing, so a renamed multi-gigabyte video reaches this function. Reading
+	 * twelve bytes settles it, and buffering the whole file first would allocate all of it to arrive
+	 * at the same rejection. `slice` returns a new Blob, so the instrumented `arrayBuffer` below
+	 * counts whole-file reads only.
+	 */
+	it('rejects on the signature without buffering the whole file', async () => {
+		const file = new Blob([bytes(GIF_HEAD)], { type: 'image/gif' });
+		let wholeFileReads = 0;
+		const read = file.arrayBuffer.bind(file);
+		file.arrayBuffer = async () => {
+			wholeFileReads += 1;
+
+			return read();
+		};
+
+		const result = await prepareReferenceImage(file, fakeCodec());
+
+		expect(result.kind).toBe('unsupported');
+		expect(wholeFileReads).toBe(0);
+	});
+
+	// The other half of the reorder: an accepted file still gets read in full, once, because
+	// `originalHash` has to run over every byte.
+	it('buffers the whole file once the signature is accepted', async () => {
+		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
+		let wholeFileReads = 0;
+		const read = file.arrayBuffer.bind(file);
+		file.arrayBuffer = async () => {
+			wholeFileReads += 1;
+
+			return read();
+		};
+
+		const result = await prepareReferenceImage(file, fakeCodec());
+
+		expect(result.kind).toBe('prepared');
+		expect(wholeFileReads).toBe(1);
+	});
+
 	/**
 	 * The case the first version of this fix would have passed and should not have. `ImageCodec` is
 	 * an injectable seam, so `Blob.type` is a declaration like any other, and trusting it here would
