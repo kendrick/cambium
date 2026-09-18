@@ -12,20 +12,29 @@ import { systemConstants } from './system-constants';
 import { trackingScale } from './tracking-scale';
 import { typeScale } from './type-scale';
 import { parseSeed } from './parse-seed';
+import { CAMBIUM_NAMESPACE, derived, invented, observed } from './provenance';
 import { rankFonts } from './rank-fonts';
 import { BALANCED } from './scale-engine';
 import { buildTokenSet } from './semantic-layer';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
 import { TokenSetSchema } from './token-set';
 
+/** Reused wherever this file needs a token to carry provenance and nothing about which. */
+const extensions = derived('keyColors', 'exercises a schema bound rather than a real derivation');
+
 const ramp = Array.from({ length: 12 }, (_, i) => ({
 	step: i + 1,
 	l: 0.05 + i * 0.08,
 	c: 0.05,
 	h: 259.8,
+	$extensions: extensions,
 }));
 const shadow = SHADOW_FIXTURE;
-const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' }, shadow };
+const layer = {
+	primitives: { brand: ramp },
+	semantic: { border: { alias: 'brand.6', $extensions: extensions } },
+	shadow,
+};
 
 const seed = {
 	keyColors: [
@@ -158,9 +167,25 @@ describe('core purity', () => {
 		['the tracking scale', () => trackingScale(null).source === 'derived'],
 		[
 			'the shadow scale',
-			() => shadowScale({ l: 0.99, c: 0.004, h: 259.8 }, null).source === 'derived',
+			() =>
+				shadowScale(
+					{
+						color: { l: 0.99, c: 0.004, h: 259.8 },
+						provenance: { provenance: 'derived', seedField: 'keyColors', rationale: 'a page' },
+					},
+					null,
+				).source === 'derived',
 		],
 		['the system constants', () => systemConstants().focusRing.source === 'system'],
+		[
+			'the provenance builders',
+			() =>
+				observed('keyColors', 'places the brand key colour')[CAMBIUM_NAMESPACE].provenance ===
+					'observed' &&
+				derived('trackingFeel', 'shifts the tracking scale by the stated feel')[CAMBIUM_NAMESPACE]
+					.provenance === 'derived' &&
+				invented('no seed field speaks to this slot')[CAMBIUM_NAMESPACE].seedField === null,
+		],
 		[
 			'the non-colour derivation',
 			() => {
@@ -168,7 +193,12 @@ describe('core purity', () => {
 
 				if (!generated.ok) return false;
 
-				const semantic = { background: 'neutral.1' };
+				const semantic = {
+					background: {
+						alias: 'neutral.1',
+						$extensions: derived('keyColors', 'aliases the page surface to a neutral step'),
+					},
+				};
 				const schemes = {
 					light: { primitives: generated.schemes.light, semantic },
 					dark: { primitives: generated.schemes.dark, semantic },

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { type BrandSeed, BrandSeedSchema } from './brand-seed';
 import { createOklchScaleEngine } from './oklch-scale-engine';
 import { contrastFromOklch } from './oklch';
+import { CAMBIUM_NAMESPACE, invented } from './provenance';
 import { BALANCED, RAMP_NAMES, SCHEME_NAMES } from './scale-engine';
 import { resolveScheme } from './resolve-scheme';
 import { buildTokenSet } from './semantic-layer';
@@ -104,19 +105,19 @@ describe('buildTokenSet', () => {
 		for (const [token, assignment] of Object.entries(SEMANTIC_MAP)) {
 			if (typeof assignment !== 'string') continue;
 
-			expect(schemes.light.semantic[token]).toBe(assignment);
-			expect(schemes.dark.semantic[token]).toBe(assignment);
+			expect(schemes.light.semantic[token]!.alias).toBe(assignment);
+			expect(schemes.dark.semantic[token]!.alias).toBe(assignment);
 		}
 	});
 
-	// A scheme's semantic layer is what an export adapter reads, so every value in it has to be a
-	// plain alias. Leaking a pair through would hand the adapter an object where a colour goes.
+	// A scheme's semantic layer is what an export adapter reads, so every entry's `alias` has to be
+	// one plain alias. Leaking a pair through would hand the adapter a rule where a colour goes.
 	it('resolves each contrasting pair down to one plain alias per scheme', () => {
 		const { schemes } = build(blue);
 
 		for (const scheme of SCHEME_NAMES) {
-			for (const value of Object.values(schemes[scheme].semantic)) {
-				expect(typeof value).toBe('string');
+			for (const entry of Object.values(schemes[scheme].semantic)) {
+				expect(typeof entry.alias).toBe('string');
 			}
 		}
 	});
@@ -184,7 +185,8 @@ describe('resolveScheme', () => {
 	 */
 	it('throws rather than emitting a hole when an alias resolves to nothing', () => {
 		const { schemes } = build(blue);
-		const broken = { ...schemes.light, semantic: { border: 'missing.6' } };
+		const dangling = { alias: 'missing.6', $extensions: invented('Points at no ramp on purpose') };
+		const broken = { ...schemes.light, semantic: { border: dangling } };
 
 		expect(() => resolveScheme(broken)).toThrow(/missing\.6/);
 	});
@@ -330,6 +332,60 @@ describe('foregrounds that sit on a solid fill', () => {
 			expect(failures).toEqual([]);
 		},
 	);
+});
+
+/**
+ * A consumer reads a semantic token as a colour, and that colour is the ramp step's. So the layer
+ * has no provenance of its own to state. It inherits the step's, and the rationale is the only part
+ * the alias assignment contributes.
+ */
+describe('semantic provenance', () => {
+	it.each(SCHEME_NAMES)('inherits each %s payload from the step it resolves to', (scheme) => {
+		const built = build(blue).schemes[scheme];
+		const drifted: string[] = [];
+
+		for (const [token, entry] of Object.entries(built.semantic)) {
+			const taken = entry.$extensions[CAMBIUM_NAMESPACE];
+			const step = stepOf(built, entry.alias).$extensions[CAMBIUM_NAMESPACE];
+
+			if (taken.provenance !== step.provenance || taken.seedField !== step.seedField)
+				drifted.push(`${token} -> ${entry.alias}`);
+		}
+
+		expect(drifted).toEqual([]);
+	});
+
+	/**
+	 * The shortcut this exists to catch is tagging the whole layer `derived`, which satisfies the
+	 * schema and every other assertion in this file. Step 9 is the seed's own colour and every other
+	 * brand step is computed off it, so `primary` and `ring` disagree under any seed.
+	 */
+	it('does not hand the whole layer one provenance value', () => {
+		const taken = Object.values(build(blue).semantic).map(
+			(entry) => entry.$extensions[CAMBIUM_NAMESPACE].provenance,
+		);
+
+		expect(new Set(taken).size).toBeGreaterThan(1);
+	});
+
+	/**
+	 * Both halves have to appear. A rationale naming only the winner reads exactly like a fixed
+	 * alias, and this one declaration resolves to different winners in the two schemes.
+	 */
+	it.each(SCHEME_NAMES)('records what a %s pair beat and what it measured against', (scheme) => {
+		const pair = SEMANTIC_MAP['primary-foreground'];
+		const entry = build(blue).schemes[scheme].semantic['primary-foreground']!;
+		const beaten = pair.candidates.find((candidate) => candidate !== entry.alias)!;
+
+		// Word-bounded, because a bare substring check for `brand.1` also passes on `brand.12` and
+		// would call the rationale complete when it named only the winner.
+		expect(entry.$extensions[CAMBIUM_NAMESPACE].rationale).toMatch(
+			new RegExp(`\\b${beaten.replace('.', '\\.')}\\b`),
+		);
+		expect(entry.$extensions[CAMBIUM_NAMESPACE].rationale).toMatch(
+			new RegExp(`\\b${pair.on.replace('.', '\\.')}\\b`),
+		);
+	});
 });
 
 /**

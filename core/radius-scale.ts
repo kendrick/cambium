@@ -1,4 +1,5 @@
 import type { BrandSeed } from './brand-seed';
+import { derived, invented } from './provenance';
 import type { Dimension, RadiusScale } from './token-set';
 
 /**
@@ -37,10 +38,20 @@ export function radiusScale(character: BrandSeed['radiusCharacter']): RadiusScal
 	const anchorRem = clampedPx / 16;
 	const multipliers = MULTIPLIERS[progression];
 
+	/**
+	 * `character` is one seed field, read whole rather than per step: whether it was stated or
+	 * fell back is a fact about this call, not about any individual step it produces.
+	 */
+	const extensions = character
+		? derived('radiusCharacter', "Scaled from the brand seed's stated radius character")
+		: invented(
+				'The seed measured no radius character, so this scale falls back to the vendored default',
+			);
+
 	const values = Object.fromEntries(
 		STEPS.map((step, i): [string, Dimension] => [
 			step,
-			{ value: anchorRem * multipliers[i]!, unit: 'rem' },
+			{ value: anchorRem * multipliers[i]!, unit: 'rem', $extensions: extensions },
 		]),
 	) as Record<(typeof STEPS)[number], Dimension>;
 

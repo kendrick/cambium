@@ -1,13 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
+import { derived } from './provenance';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
 import { SchemeSchema, TokenSetSchema } from './token-set';
+
+/**
+ * One payload, reused everywhere this file needs a token to carry provenance and nothing about
+ * which provenance matters. `provenance.test.ts` is where the values a real pipeline attaches are
+ * checked; every literal here exists to exercise a bound of `TokenSetSchema` itself.
+ */
+const extensions = derived('keyColors', 'exercises a schema bound rather than a real derivation');
 
 const ramp = Array.from({ length: 12 }, (_, i) => ({
 	step: i + 1,
 	l: 0.05 + i * 0.08,
 	c: 0.05,
 	h: 259.8,
+	$extensions: extensions,
 }));
 
 const shadow = SHADOW_FIXTURE;
@@ -15,7 +24,11 @@ const shadow = SHADOW_FIXTURE;
 /** Shadow is the one non-colour category that differs per scheme, so it is the one a scheme carries. */
 const layer = {
 	primitives: { brand: ramp, neutral: ramp },
-	semantic: { border: 'brand.6', primary: 'brand.9', foreground: 'neutral.12' },
+	semantic: {
+		border: { alias: 'brand.6', $extensions: extensions },
+		primary: { alias: 'brand.9', $extensions: extensions },
+		foreground: { alias: 'neutral.12', $extensions: extensions },
+	},
 	shadow,
 };
 
@@ -53,7 +66,7 @@ describe('TokenSetSchema', () => {
 
 		expect(parsed.primitives.brand).toHaveLength(12);
 		expect(Object.keys(parsed.schemes)).toEqual(['light', 'dark']);
-		expect(parsed.radius.values.lg).toEqual({ value: 0.625, unit: 'rem' });
+		expect(parsed.radius.values.lg).toEqual(nonColor.radius.values.lg);
 	});
 
 	it('rejects a ramp that is not twelve steps', () => {
@@ -76,19 +89,25 @@ describe('TokenSetSchema', () => {
 	});
 
 	it('rejects an alias pointing at a ramp that does not exist', () => {
-		const dangling = withMirrored('semantic', { border: 'missing.6' });
+		const dangling = withMirrored('semantic', {
+			border: { alias: 'missing.6', $extensions: extensions },
+		});
 
 		expect(TokenSetSchema.safeParse(dangling).success).toBe(false);
 	});
 
 	it('rejects an alias pointing at a step outside the ramp', () => {
-		const offRamp = withMirrored('semantic', { border: 'brand.99' });
+		const offRamp = withMirrored('semantic', {
+			border: { alias: 'brand.99', $extensions: extensions },
+		});
 
 		expect(TokenSetSchema.safeParse(offRamp).success).toBe(false);
 	});
 
 	it('rejects an alias that is not in ramp.step form', () => {
-		const malformed = withMirrored('semantic', { border: '#0f172a' });
+		const malformed = withMirrored('semantic', {
+			border: { alias: '#0f172a', $extensions: extensions },
+		});
 
 		expect(TokenSetSchema.safeParse(malformed).success).toBe(false);
 	});
@@ -105,7 +124,10 @@ describe('TokenSetSchema', () => {
 	});
 
 	it('cross-checks aliases inside each scheme, not just at the top level', () => {
-		const badScheme = { ...layer, semantic: { border: 'missing.6' } };
+		const badScheme = {
+			...layer,
+			semantic: { border: { alias: 'missing.6', $extensions: extensions } },
+		};
 
 		const result = TokenSetSchema.safeParse({
 			...validTokenSet,
@@ -123,7 +145,9 @@ describe('TokenSetSchema alias lookups', () => {
 	it.each(['constructor.1', 'toString.1', 'valueOf.1'])(
 		'rejects %j, which resolves only through the prototype chain',
 		(alias) => {
-			const result = TokenSetSchema.safeParse(withMirrored('semantic', { border: alias }));
+			const result = TokenSetSchema.safeParse(
+				withMirrored('semantic', { border: { alias, $extensions: extensions } }),
+			);
 
 			expect(result.success).toBe(false);
 		},
@@ -201,7 +225,10 @@ describe('TokenSetSchema non-colour categories', () => {
 	});
 
 	it('rejects an opacity outside the 0 to 1 range', () => {
-		const broken = { ...validTokenSet, opacity: { source: 'system', values: { disabled: 50 } } };
+		const broken = {
+			...validTokenSet,
+			opacity: { source: 'system', values: { disabled: { value: 50, $extensions: extensions } } },
+		};
 
 		expect(TokenSetSchema.safeParse(broken).success).toBe(false);
 	});
@@ -211,7 +238,10 @@ describe('TokenSetSchema non-colour categories', () => {
 			...validTokenSet,
 			motion: {
 				source: 'system',
-				values: { ...nonColor.motion.values, easing: { standard: [0.2, 0, 0] } },
+				values: {
+					...nonColor.motion.values,
+					easing: { standard: { value: [0.2, 0, 0], $extensions: extensions } },
+				},
 			},
 		};
 
@@ -241,6 +271,13 @@ describe('TokenSetSchema non-colour categories', () => {
 const px = (value: number) => ({ value, unit: 'px' });
 
 /**
+ * `px` alone is what a shadow's geometry slots take: `ShadowSchema` carries one payload for the
+ * whole token and its four `*ValueSchema` parts carry none. Every other dimension slot in the set
+ * is its own token and the schema requires `$extensions` there, so this wraps `px` for those.
+ */
+const pxDimension = (value: number) => ({ value, unit: 'px', $extensions: extensions });
+
+/**
  * A dimension that admits a negative where CSS does not is a value correct in isolation that the
  * browser drops on arrival, so the split is per slot and both halves need pinning. A rule that
  * rejected every negative would pass the first of these blocks and be wrong.
@@ -257,23 +294,35 @@ describe('TokenSetSchema dimension signs', () => {
 		});
 
 	it.each([
-		['radius', { ...validTokenSet, radius: { source: 'derived', values: { lg: px(-4) } } }],
+		[
+			'radius',
+			{ ...validTokenSet, radius: { source: 'derived', values: { lg: pxDimension(-4) } } },
+		],
 		[
 			'a type size',
 			{
 				...validTokenSet,
 				typography: {
 					...nonColor.typography,
-					values: { ...nonColor.typography.values, size: { base: { value: -1, unit: 'rem' } } },
+					values: {
+						...nonColor.typography.values,
+						size: { base: { value: -1, unit: 'rem', $extensions: extensions } },
+					},
 				},
 			},
 		],
-		['spacing', { ...validTokenSet, spacing: { source: 'system', values: { md: px(-8) } } }],
+		[
+			'spacing',
+			{ ...validTokenSet, spacing: { source: 'system', values: { md: pxDimension(-8) } } },
+		],
 		[
 			'a focus ring width',
 			{
 				...validTokenSet,
-				focusRing: { source: 'system', values: { width: px(-3), offset: px(0) } },
+				focusRing: {
+					source: 'system',
+					values: { width: pxDimension(-3), offset: pxDimension(0) },
+				},
 			},
 		],
 		['a shadow blur', shadowWith({ blur: px(-6) })],
@@ -286,7 +335,10 @@ describe('TokenSetSchema dimension signs', () => {
 			'tracking',
 			{
 				...validTokenSet,
-				tracking: { source: 'derived', values: { tight: { value: -0.025, unit: 'em' } } },
+				tracking: {
+					source: 'derived',
+					values: { tight: { value: -0.025, unit: 'em', $extensions: extensions } },
+				},
 			},
 		],
 		['a shadow offsetX', shadowWith({ offsetX: px(-2) })],
@@ -296,7 +348,10 @@ describe('TokenSetSchema dimension signs', () => {
 			'a focus ring offset',
 			{
 				...validTokenSet,
-				focusRing: { source: 'system', values: { width: px(3), offset: px(-2) } },
+				focusRing: {
+					source: 'system',
+					values: { width: pxDimension(3), offset: pxDimension(-2) },
+				},
 			},
 		],
 	])('accepts a negative %s, which CSS takes as a direction', (_name, value) => {
@@ -316,7 +371,14 @@ describe('TokenSetSchema dimension signs', () => {
 describe('TokenSetSchema mirrored layers', () => {
 	const DIVERGENT: [string, unknown][] = [
 		['primitives', { brand: ramp, neutral: ramp.map((step) => ({ ...step, h: 120 })) }],
-		['semantic', { border: 'neutral.9', primary: 'brand.9', foreground: 'neutral.12' }],
+		[
+			'semantic',
+			{
+				border: { alias: 'neutral.9', $extensions: extensions },
+				primary: { alias: 'brand.9', $extensions: extensions },
+				foreground: { alias: 'neutral.12', $extensions: extensions },
+			},
+		],
 		[
 			'shadow',
 			{
@@ -339,7 +401,11 @@ describe('TokenSetSchema mirrored layers', () => {
 		const reordered = {
 			...validTokenSet,
 			primitives: { neutral: ramp, brand: ramp },
-			semantic: { foreground: 'neutral.12', border: 'brand.6', primary: 'brand.9' },
+			semantic: {
+				foreground: { alias: 'neutral.12', $extensions: extensions },
+				border: { alias: 'brand.6', $extensions: extensions },
+				primary: { alias: 'brand.9', $extensions: extensions },
+			},
 		};
 
 		expect(TokenSetSchema.safeParse(reordered).success).toBe(true);

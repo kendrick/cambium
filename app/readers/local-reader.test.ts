@@ -4,8 +4,11 @@ import type { ReferenceImage } from '../../core/brand-record';
 import { BrandSeedSchema } from '../../core/brand-seed';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
 import { parseSeed } from '../../core/parse-seed';
+import { CAMBIUM_NAMESPACE, type TokenProvenance } from '../../core/provenance';
 import { rankFonts } from '../../core/rank-fonts';
 import { BALANCED } from '../../core/scale-engine';
+import { buildTokenSet } from '../../core/semantic-layer';
+import type { TokenExtensions } from '../../core/token-set';
 
 import { LOGO_FIXTURE, NEUTRAL_PAGE_FIXTURE, SCREENSHOT_FIXTURE } from './fixtures/brand-images';
 import {
@@ -138,9 +141,8 @@ describe('what derivation does with a locally extracted seed', () => {
 	 * rather than producing invented candidates: nothing is marked invented because nothing was
 	 * invented.
 	 *
-	 * Token-level `$extensions` provenance is #9's work and does not exist yet. When it lands, the
-	 * assertion the ticket actually wants belongs beside it in the core, against every field this
-	 * seed leaves null.
+	 * Token-level `$extensions` provenance is a separate mechanism and lands below, against every
+	 * field this seed leaves null.
 	 */
 	it('declines to rank fonts rather than inventing a classification', async () => {
 		const ranked = rankFonts(
@@ -162,4 +164,63 @@ describe('what derivation does with a locally extracted seed', () => {
 			Object.fromEntries(uninformed.map((key) => [key, null])),
 		);
 	});
+
+	/**
+	 * The criterion #33 carried and could not satisfy, moved here by the comment on #9. Ten of the
+	 * eleven seed fields come back null from a keyless read, so most of what a token set derives
+	 * from one is invented rather than observed, and that share is much larger than the keyed path
+	 * produces. Showing the gap is the point.
+	 *
+	 * Asserted over every token rather than a sample, because a sample would pass against a
+	 * pipeline that marked one category honestly and guessed at the rest. `seedField` is the trace,
+	 * so "not traceable to `keyColors`" is exactly "names some other field, or none".
+	 *
+	 * Runs here rather than in `core/` because the seed has to be one the extractor actually
+	 * produced. A hand-written colours-only seed would assert the rule against a fixture that
+	 * agrees with it by construction.
+	 */
+	it('marks every token a key colour cannot reach as invented', async () => {
+		const seed = await localSeed();
+		const generated = createOklchScaleEngine().generate(seed, BALANCED);
+
+		if (!generated.ok) throw new Error('a local seed has to ramp');
+
+		const found = payloads(buildTokenSet(generated.schemes, seed));
+		const untraceable = found.filter(({ payload }) => payload.seedField !== 'keyColors');
+
+		// Named by path rather than counted, so a failure says which token lied about where it came
+		// from instead of only that some token did.
+		expect(
+			untraceable
+				.filter(({ payload }) => payload.provenance !== 'invented')
+				.map(({ path }) => path),
+		).toEqual([]);
+
+		// Both halves have to be non-empty or the assertion above passes vacuously: a set with no
+		// payloads at all, and one where every token claimed `keyColors`, would each satisfy it.
+		expect(untraceable.length).toBeGreaterThan(0);
+		expect(found.length).toBeGreaterThan(untraceable.length);
+	});
 });
+
+/**
+ * Every provenance payload in a token set, with the path that carries it.
+ *
+ * Walks the parsed structure rather than reading a list the core exports, so a category that
+ * forgot to tag itself shows up as a missing path rather than staying invisible to a helper that
+ * only knows the categories somebody told it about.
+ */
+function payloads(node: unknown, path = ''): Array<{ path: string; payload: TokenProvenance }> {
+	if (Array.isArray(node)) return node.flatMap((child, i) => payloads(child, `${path}[${i}]`));
+	if (node === null || typeof node !== 'object') return [];
+
+	const record = node as Record<string, unknown>;
+	const extensions = record.$extensions as TokenExtensions | undefined;
+	const own = extensions ? [{ path, payload: extensions[CAMBIUM_NAMESPACE] }] : [];
+
+	return own.concat(
+		Object.entries(record)
+			.filter(([key]) => key !== '$extensions')
+			.flatMap(([key, value]) => payloads(value, path ? `${path}.${key}` : key)),
+	);
+}

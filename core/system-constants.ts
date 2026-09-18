@@ -1,4 +1,36 @@
-import type { SystemConstants } from './token-set';
+import type {
+	CubicBezierValue,
+	DimensionValue,
+	DurationValue,
+	SignedDimensionValue,
+} from './token-set';
+
+/**
+ * The five categories, before `$extensions` lands on a single one of their tokens.
+ *
+ * `token-set.ts`'s `SystemConstants` is the tagged shape now: every leaf carries `$extensions`,
+ * because #9 requires it everywhere. Tagging forty leaves by hand here would scatter the
+ * system-means-invented rule across forty call sites instead of stating it once, so this function
+ * stays untagged and `deriveNonColor` does the tagging in the one pass that already assembles
+ * every category. Built from the same `*Value` schemas `token-set.ts` exports for exactly this:
+ * the untagged half of a `Dimension`, a `SignedDimension`, a `Duration`, and a `CubicBezier`.
+ */
+export type UntaggedSystemConstants = {
+	spacing: { source: 'system'; values: Record<string, DimensionValue> };
+	opacity: { source: 'system'; values: Record<string, number> };
+	motion: {
+		source: 'system';
+		values: {
+			duration: Record<string, DurationValue>;
+			easing: Record<string, CubicBezierValue>;
+		};
+	};
+	focusRing: {
+		source: 'system';
+		values: { width: DimensionValue; offset: SignedDimensionValue };
+	};
+	zIndex: { source: 'system'; values: Record<string, number> };
+};
 
 /**
  * Five design system categories that #7 names exhaustively and that no seed informs.
@@ -6,13 +38,15 @@ import type { SystemConstants } from './token-set';
  * Issue #7 requires that no system-constant category varies with the seed, and a function that
  * takes no argument cannot vary with one. Every value here is either a vendored authority
  * (components/ui/button.tsx paints with `disabled:opacity-50` and `focus-visible:ring-3`), or
- * a stated default nobody has measured yet. `source: 'system'` records that distinction.
+ * a stated default nobody has measured yet. `source: 'system'` records that distinction, and
+ * `deriveNonColor` records it a second way: every token here comes back `invented` with a null
+ * `seedField`, because `source: 'system'` already means no seed field reached the category.
  *
  * `focusRing` rather than `ring`: SEMANTIC_MAP.ring is already a colour that reaches a stylesheet
  * as `--ring`. A constant sharing that name would flatten to the same variable and overwrite the
  * colour with a width. No adapter writing a flat variable list would report the collision.
  */
-export function systemConstants(): SystemConstants {
+export function systemConstants(): UntaggedSystemConstants {
 	return {
 		spacing: {
 			source: 'system',

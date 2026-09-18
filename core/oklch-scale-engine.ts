@@ -8,6 +8,7 @@ import {
 	quantizeToSrgb,
 	solveLightnessForContrast,
 } from './oklch';
+import { derived, invented, observed, type SeedField } from './provenance';
 import {
 	ANCHOR_TOLERANCE,
 	type BrandAnchor,
@@ -21,8 +22,8 @@ import {
 	type ScaleEngineError,
 	type ScaleEngineResult,
 } from './scale-engine';
-import { BRAND_STEP, STEP_ROLES } from './step-roles';
-import type { Ramp, RampStep } from './token-set';
+import { BRAND_STEP, STEP_ROLES, type StepRole } from './step-roles';
+import type { Ramp, RampStep, TokenExtensions } from './token-set';
 
 /**
  * Persisted on every version as `scaleEngine`, because the same seed under a different engine
@@ -154,6 +155,50 @@ function meetFloor(
 }
 
 /**
+ * The provenance payload for one step, given its role in the table.
+ *
+ * Classification is a whole-ramp decision — what the seed said, or failed to say, about the colour
+ * the ramp is built on — and only the wording moves per step. So a ramp is handed one of these and
+ * applies it twelve times, rather than each step deciding for itself and risking twelve answers.
+ */
+type StepProvenance = (role: StepRole) => TokenExtensions;
+
+/**
+ * Step 9's entry in `STEP_ROLES` reads "solid fill, the brand colour itself", which is true of the
+ * brand ramp and false of the other six. A rationale is read beside its own token, so the accent
+ * ramp describes its own step 9 instead of borrowing the brand's description of one.
+ */
+function roleText(role: StepRole, ramp: RampName): string {
+	return role.step === BRAND_STEP && ramp !== 'brand' ? 'solid fill' : role.role;
+}
+
+/**
+ * A ramp anchored on a colour the seed actually placed. Step 9 is that colour and nothing else,
+ * which is the one thing in a token set a consumer can point at the reference image for; the other
+ * eleven are the curve applied to it.
+ */
+function placedKeyColor(ramp: 'brand' | 'accent'): StepProvenance {
+	return (role) =>
+		role.step === BRAND_STEP
+			? observed(
+					'keyColors',
+					`Step 9 is the ${ramp} key colour the seed placed, carried through only sRGB gamut mapping`,
+				)
+			: derived(
+					'keyColors',
+					`Step ${role.step}, the ${roleText(role, ramp)}, curved from the ${ramp} key colour's hue and chroma`,
+				);
+}
+
+function derivedRamp(ramp: RampName, seedField: SeedField, reason: string): StepProvenance {
+	return (role) => derived(seedField, `Step ${role.step}, the ${roleText(role, ramp)}, ${reason}`);
+}
+
+function inventedRamp(ramp: RampName, reason: string): StepProvenance {
+	return (role) => invented(`Step ${role.step}, the ${roleText(role, ramp)}, ${reason}`);
+}
+
+/**
  * One ramp, twelve steps, in three passes.
  *
  * The curve places every step first. Then each step carrying a floor in the table is solved onto
@@ -168,6 +213,7 @@ function buildRamp(
 	anchor: Oklch,
 	scheme: SchemeName,
 	spread: number,
+	provenance: StepProvenance,
 ): { ok: true; ramp: Ramp } | { ok: false; step: number } {
 	const lightness = LIGHTNESS[scheme];
 	const fractions = CHROMA_FRACTION[scheme];
@@ -198,7 +244,7 @@ function buildRamp(
 
 		const { l, c, h } = quantizeToSrgb({ ...solved, h: normalizeHue(solved.h) });
 
-		steps.push({ step: role.step, l, c, h });
+		steps.push({ step: role.step, l, c, h, $extensions: provenance(role) });
 	}
 
 	return { ok: true, ramp: steps as Ramp };
@@ -255,14 +301,12 @@ function clearOfReservedHues(preferred: number, reserved: readonly number[]): nu
  * from a status hue Cambium chose would be the tool overruling the evidence.
  */
 function accentAnchor(
-	keyColors: readonly KeyColor[],
+	accentKey: KeyColor | undefined,
 	brand: Oklch,
 	params: InterpretationParams,
 	statusHues: readonly number[],
 ): Oklch {
-	const observed = pickKeyColor(keyColors, 'accent');
-
-	if (observed) return toOklch(observed.oklch);
+	if (accentKey) return toOklch(accentKey.oklch);
 
 	const preferred = normalizeHue(brand.h + params.accentRotation);
 
@@ -293,8 +337,12 @@ function statusAnchor(
 	return { ...canonical, h: rotateToward(canonical.h, brand.h, params.harmonization) };
 }
 
-function anchorsFor(seed: BrandSeed, brand: Oklch, params: InterpretationParams) {
-	const keyColors = seed.keyColors ?? [];
+function anchorsFor(
+	seed: BrandSeed,
+	brand: Oklch,
+	params: InterpretationParams,
+	accentKey: KeyColor | undefined,
+) {
 	const neutral = neutralAnchor(seed, brand, params);
 	const status = {
 		danger: statusAnchor('danger', brand, params),
@@ -305,7 +353,7 @@ function anchorsFor(seed: BrandSeed, brand: Oklch, params: InterpretationParams)
 	const fixed: Record<Exclude<RampName, 'neutral'>, Oklch> = {
 		brand,
 		accent: accentAnchor(
-			keyColors,
+			accentKey,
 			brand,
 			params,
 			Object.values(status).map((anchor) => anchor.h),
@@ -319,12 +367,87 @@ function anchorsFor(seed: BrandSeed, brand: Oklch, params: InterpretationParams)
 	return (scheme: SchemeName): Record<RampName, Oklch> => ({ ...fixed, neutral: neutral(scheme) });
 }
 
+/**
+ * What informed each ramp, read off the seed and the parameters rather than off the ramp's name.
+ *
+ * The name is the wrong key for six of the seven. Accent is either a colour the seed placed or a
+ * hue rotated off the brand, neutral is either a stated temperature or a tint taken from the brand,
+ * and the status four are canonical hues until `harmonization` pulls them toward the brand. So a
+ * table keyed on the name alone is frozen to whichever seed it was written against, and the one it
+ * would be written against is the fixture — leaving the keyless read `createLocalBrandReader`
+ * produces claiming evidence that never reached the value.
+ *
+ * A token names the field its value traces to, which is not the same as the field that was absent.
+ * `accentAnchor` copies the brand key colour's lightness and chroma outright and rotates only its
+ * hue, and `neutralAnchor` with no stated temperature takes its chroma and its hue from the brand
+ * too. Both move when `keyColors` moves, so both are derived from `keyColors` rather than invented:
+ * calling them invented would tell a consumer no seed field reached the value, which is false, and
+ * `keyColors` is the one field a keyless read does populate. Marking them invented misreports the
+ * keyless gap rather than showing it.
+ *
+ * The status four are the contrast and the reason a rule keyed on absence is wrong. They carry
+ * their own canonical anchors and borrow the brand hue only when `harmonization` is above zero, so
+ * they alone fall back to something no seed informs.
+ *
+ * Neutral has no observed step even with a temperature stated, because step 9's lightness comes
+ * from `NEUTRAL_ANCHOR_LIGHTNESS`: the seed named a tint, not a colour, so nothing in the ramp is a
+ * value it placed.
+ */
+function rampProvenance(
+	seed: BrandSeed,
+	params: InterpretationParams,
+	accentKey: KeyColor | undefined,
+): Record<RampName, StepProvenance> {
+	const statusProvenance = (name: RampName): StepProvenance =>
+		params.harmonization > 0
+			? derivedRamp(
+					name,
+					'keyColors',
+					`built on the canonical ${name} hue rotated toward the brand key colour`,
+				)
+			: inventedRamp(
+					name,
+					`built on the canonical ${name} hue, which no field of the seed informs`,
+				);
+
+	return {
+		brand: placedKeyColor('brand'),
+		accent: accentKey
+			? placedKeyColor('accent')
+			: derivedRamp(
+					'accent',
+					'keyColors',
+					"taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+				),
+		neutral: seed.neutralTemperature
+			? derivedRamp(
+					'neutral',
+					'neutralTemperature',
+					'tinted by the neutral temperature the seed stated',
+				)
+			: derivedRamp(
+					'neutral',
+					'keyColors',
+					'tinted from the brand key colour, the seed having stated no neutral temperature',
+				),
+		danger: statusProvenance('danger'),
+		warning: statusProvenance('warning'),
+		success: statusProvenance('success'),
+		info: statusProvenance('info'),
+	};
+}
+
 function buildSchemes(
 	seed: BrandSeed,
 	brand: Oklch,
 	params: InterpretationParams,
 ): { ok: true; schemes: Record<SchemeName, RampSet> } | { ok: false; error: ScaleEngineError } {
-	const anchorsIn = anchorsFor(seed, brand, params);
+	// One read of the seed decides both the anchor and the provenance that describes it. The accent
+	// is invented exactly when no key colour named one, and answering that question in two places is
+	// how a ramp comes to claim a seed field its anchor never used.
+	const accentKey = pickKeyColor(seed.keyColors ?? [], 'accent');
+	const anchorsIn = anchorsFor(seed, brand, params, accentKey);
+	const provenance = rampProvenance(seed, params, accentKey);
 	const schemes = {} as Record<SchemeName, RampSet>;
 
 	for (const scheme of SCHEME_NAMES) {
@@ -332,7 +455,7 @@ function buildSchemes(
 		const ramps = {} as RampSet;
 
 		for (const name of RAMP_NAMES) {
-			const built = buildRamp(anchors[name], scheme, params.chromaSpread);
+			const built = buildRamp(anchors[name], scheme, params.chromaSpread, provenance[name]);
 
 			if (!built.ok) {
 				return { ok: false, error: { kind: 'unreachable-floor', ramp: name, step: built.step } };

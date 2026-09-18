@@ -1,4 +1,5 @@
 import type { BrandSeed } from './brand-seed';
+import { derived, invented } from './provenance';
 import type { Dimension, Typography } from './token-set';
 
 /** Tailwind's own step names, in order, so a `--text-<step>` adapter finds every one of them. */
@@ -50,21 +51,65 @@ function clampRatio(ratio: number): number {
 export function typeScale(ratio: BrandSeed['typeScaleRatio']): Typography {
 	const clamped = clampRatio(ratio ?? DEFAULT_RATIO);
 
+	/** A stated-vs-fallback ratio is a fact about the call, so it is read once for the whole set. */
+	const scaledExtensions = ratio
+		? derived('typeScaleRatio', "Scaled from the brand seed's stated type scale ratio")
+		: invented('The seed measured no type scale ratio, so this scale falls back to a minor third');
+
+	/**
+	 * `base` is the one size the ratio cannot move, and it says so.
+	 *
+	 * Its exponent is zero, so `clamped ** 0` is 1 at every ratio the seed can state and at the
+	 * fallback alike. Marking it `derived` on `typeScaleRatio` would claim a field informed a value
+	 * it never touches, which is the same false claim as marking a brand-tracking token `invented`,
+	 * with the sign flipped. The anchor is the page's own root size and nothing in a Brand Seed
+	 * reaches it.
+	 */
+	const anchorExtensions = invented(
+		"The scale anchors at the page's own root size, which no stated ratio moves",
+	);
+
+	/**
+	 * Unconditional, both of them: a Brand Seed measures a scale ratio and a type classification,
+	 * not a weight axis or a leading, so there is no seed field for either to track regardless of
+	 * whether the ratio itself was stated.
+	 */
+	const weightExtensions = invented(
+		"A Brand Seed measures no weight axis, so this weight is the pipeline's own default",
+	);
+	const lineHeightExtensions = invented(
+		"A Brand Seed measures no leading, so this line height is the pipeline's own default",
+	);
+
 	const size: Record<(typeof STEPS)[number], Dimension> = {} as Record<
 		(typeof STEPS)[number],
 		Dimension
 	>;
 
 	STEPS.forEach((step, index) => {
-		size[step] = { value: clamped ** (index - BASE_STEP_INDEX), unit: 'rem' };
+		size[step] = {
+			value: clamped ** (index - BASE_STEP_INDEX),
+			unit: 'rem',
+			$extensions: index === BASE_STEP_INDEX ? anchorExtensions : scaledExtensions,
+		};
 	});
 
 	return {
 		source: 'derived',
 		values: {
 			size,
-			weight: { regular: 400, medium: 500, semibold: 600, bold: 700 },
-			lineHeight: { tight: 1.1, snug: 1.3, normal: 1.5, relaxed: 1.75 },
+			weight: {
+				regular: { value: 400, $extensions: weightExtensions },
+				medium: { value: 500, $extensions: weightExtensions },
+				semibold: { value: 600, $extensions: weightExtensions },
+				bold: { value: 700, $extensions: weightExtensions },
+			},
+			lineHeight: {
+				tight: { value: 1.1, $extensions: lineHeightExtensions },
+				snug: { value: 1.3, $extensions: lineHeightExtensions },
+				normal: { value: 1.5, $extensions: lineHeightExtensions },
+				relaxed: { value: 1.75, $extensions: lineHeightExtensions },
+			},
 		},
 	};
 }

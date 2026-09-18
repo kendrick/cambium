@@ -1,5 +1,118 @@
 import { z } from 'zod';
 
+import { BrandSeedSchema } from './brand-seed';
+import { CAMBIUM_NAMESPACE } from './provenance';
+
+/**
+ * The three provenance values, ordered by distance from the brand: a value read off the seed, a
+ * value computed from one, and a value the pipeline supplied because nothing in the seed spoke to
+ * it.
+ *
+ * Destructured into the union below rather than restated there, so the list a consumer iterates and
+ * the schema that validates a payload cannot come to name different sets.
+ */
+export const PROVENANCE_VALUES = ['observed', 'derived', 'invented'] as const;
+
+const [OBSERVED, DERIVED, INVENTED] = PROVENANCE_VALUES;
+
+/**
+ * The eleven seed fields, read off `BrandSeedSchema` rather than written out a second time.
+ *
+ * A free string here would let a token claim a field no seed has, and a trace that resolves to
+ * nothing still reads as evidence — the same failure `BrandRecordSchema` guards against when it
+ * checks a key colour's `sourceImageId` against the images the record holds. Deriving the enum also
+ * means renaming a seed field fails every stale reference at parse instead of leaving them
+ * pointing at a name that no longer exists.
+ *
+ * `brand-seed.ts` imports only zod, so reaching for it here adds no cycle.
+ */
+export const SeedFieldSchema = z.enum(
+	Object.keys(BrandSeedSchema.shape) as [
+		keyof typeof BrandSeedSchema.shape,
+		...Array<keyof typeof BrandSeedSchema.shape>,
+	],
+);
+
+/** Long enough for a clause naming a field and what was done to it; short of a paragraph. */
+const RATIONALE_MAX_LENGTH = 200;
+
+/**
+ * One sentence, bounded rather than parsed.
+ *
+ * Non-empty, capped, and rejecting a terminator followed by whitespace. That is deliberately a
+ * bound on the shape and not a proof of grammar: it catches `Takes the brand hue. Then solves it.`
+ * and leaves `0.625rem` and `8.4:1` alone, which is the whole of what it claims to do. A rationale
+ * is read beside its token in a UI a line at a time, so a second sentence is a design document
+ * filed in the wrong place rather than something to reflow.
+ */
+const RationaleSchema = z
+	.string()
+	.min(1, 'rationale cannot be empty')
+	.max(RATIONALE_MAX_LENGTH, `rationale must fit in ${RATIONALE_MAX_LENGTH} characters`)
+	.refine((rationale) => !/[.!?]\s/.test(rationale), {
+		message: 'rationale must be a single sentence',
+	});
+
+/**
+ * `seedField` is the discriminator's dependent, the same split `FontCandidateSchema` makes between
+ * a ranked candidate and an invented one. A flat object with a nullable field would let a token
+ * nothing informed point at a seed field anyway, and let one claiming to be observed name nothing —
+ * both parse, and both are provenance that cannot be followed.
+ */
+export const TokenProvenanceSchema = z.discriminatedUnion('provenance', [
+	z.strictObject({
+		provenance: z.literal(OBSERVED),
+		rationale: RationaleSchema,
+		seedField: SeedFieldSchema,
+	}),
+	z.strictObject({
+		provenance: z.literal(DERIVED),
+		rationale: RationaleSchema,
+		seedField: SeedFieldSchema,
+	}),
+	z.strictObject({
+		provenance: z.literal(INVENTED),
+		rationale: RationaleSchema,
+		seedField: z.null(),
+	}),
+]);
+
+/**
+ * Loose, and the one object in this file that is.
+ *
+ * DTCG section 5.2.3: "Tools that process design token files MUST preserve any extension data they
+ * do not themselves understand." `docs/research/oss-landscape.md:578` records it and adds that the
+ * requirement is preserve rather than ignore, and that a round trip must not drop foreign keys.
+ *
+ * Strict fails that MUST as surely as Zod's default stripping does. This file argues against
+ * stripping because it loses data without a word, which is the preserve argument stated correctly,
+ * and then rejecting a foreign namespace refuses the same data more loudly. Dropping and rejecting
+ * are two ways of not preserving, and one token carrying another tool's namespace would have taken
+ * the whole set down.
+ *
+ * Two different things were conflated here. A Cambium payload misfiled, whether as bare
+ * `provenance` and `rationale` keys beside the value or under a near-miss spelling, is still a
+ * parse error: `com.cambium` is required, and every shape around this one is still strict. Another
+ * tool's namespace is not ours to judge, so it parses and comes back untouched.
+ *
+ * `core/provenance.test.ts` proves that preservation through `JSON.stringify` and through
+ * `structuredClone` rather than asserting it, because `structuredClone` is the path an IndexedDB
+ * write actually takes.
+ */
+export const TokenExtensionsSchema = z.looseObject({
+	[CAMBIUM_NAMESPACE]: TokenProvenanceSchema,
+});
+
+/**
+ * Five slots hold a bare number or a tuple and so have nowhere to hang a key: typography's weights
+ * and line heights, opacity, z-index, and motion's easings. Wrapping the payload under `value`
+ * reads the way `Dimension` and `Duration` already do rather than introducing a second idiom, and
+ * it keeps every token in the set answering `$extensions` at its own level.
+ */
+function scalarToken<T extends z.ZodType>(value: T) {
+	return z.strictObject({ value, $extensions: TokenExtensionsSchema });
+}
+
 /**
  * The three OKLCH channels and their bounds, in one place.
  *
@@ -23,6 +136,7 @@ const OklchChannelsSchema = z.strictObject({
 
 export const RampStepSchema = OklchChannelsSchema.extend({
 	step: z.number().int().min(1).max(12),
+	$extensions: TokenExtensionsSchema,
 });
 
 /**
@@ -76,8 +190,21 @@ export function stepForAlias<T>(
 	return declaredRamp(primitives, alias.slice(0, dot))?.[Number(alias.slice(dot + 1)) - 1];
 }
 
+/**
+ * A semantic entry was a bare alias string until it had to carry provenance, and a string has
+ * nowhere to put it.
+ *
+ * The key stays `alias` rather than DTCG's `$value`. Cambium's alias is `ramp.step`, DTCG's is
+ * `{group.token}`, and sharing the key would invite a reader to treat one as the other. The
+ * borrowed key here is `$extensions` and only that.
+ */
+export const SemanticEntrySchema = z.strictObject({
+	alias: z.string().regex(ALIAS_PATTERN, 'alias must be in ramp.step form'),
+	$extensions: TokenExtensionsSchema,
+});
+
 export const SemanticLayerSchema = z
-	.record(z.string().min(1), z.string().regex(ALIAS_PATTERN, 'alias must be in ramp.step form'))
+	.record(z.string().min(1), SemanticEntrySchema)
 	.refine((layer) => Object.keys(layer).length > 0, { message: 'semantic layer cannot be empty' });
 
 export const PrimitiveLayerSchema = z
@@ -90,11 +217,11 @@ export const PrimitiveLayerSchema = z
  * needs both layers in scope, so it lives here rather than on the alias string.
  */
 function checkAliasesResolve(
-	value: { primitives: Record<string, unknown[]>; semantic: Record<string, string> },
+	value: { primitives: Record<string, unknown[]>; semantic: Record<string, { alias: string }> },
 	ctx: z.RefinementCtx,
 ) {
-	for (const [token, alias] of Object.entries(value.semantic)) {
-		const match = ALIAS_PATTERN.exec(alias);
+	for (const [token, entry] of Object.entries(value.semantic)) {
+		const match = ALIAS_PATTERN.exec(entry.alias);
 		if (!match) continue;
 
 		const [, rampName, rawStep] = match;
@@ -130,10 +257,11 @@ function checkAliasesResolve(
  * seed" is checkable directly: run two seeds, keep the categories whose source is `system`, and
  * assert they are deep-equal.
  *
- * `source` rather than `provenance`, deliberately. #9's `provenance` is per token and says what
- * informed a value; this is per category and says whether the seed reached it. Two words keep the
- * two questions apart. `$extensions` is #9's and stays unwidened here, which is what keeps
- * `core/strictness.test.ts` guarding the next category rather than one already declared.
+ * `source` rather than `provenance`, deliberately. #9's `provenance` now sits on every token inside
+ * `values` and says what informed that value; this stays per category and says whether the seed
+ * reached the category at all. A category is `derived` whether its governing seed field was stated
+ * or fell back, so the two answers genuinely differ and two words keep them apart — reading one off
+ * the other is the mistake a producer here is most likely to make.
  *
  * `values` wraps the payload so a token named `source` cannot collide with the discriminator.
  */
@@ -166,9 +294,22 @@ function nonEmptyRecord<T extends z.ZodType>(value: T, label: string) {
  * slot wrongly signed ships CSS nobody can see is broken. The tenth slot someone adds should
  * inherit the one that fails loudly.
  */
-export const DimensionSchema = z.strictObject({
+export const DimensionValueSchema = z.strictObject({
 	value: z.number().min(0),
 	unit: z.enum(['px', 'rem', 'em']),
+});
+
+/**
+ * The same dimension where it is a token in its own right rather than a part of one.
+ *
+ * `ShadowSchema` holds four dimensions and is itself one token, because DTCG's `shadow` is a
+ * composite type whose `$value` carries colour and geometry together. The shadow takes the payload
+ * and its offsets take none, which is what forces the split: `Duration`, `SignedDimension` and
+ * `CubicBezier` all make it too. The bare name stays on the token so downstream annotations keep
+ * reading the way they did, and the `Value` suffix marks the half a composite holds.
+ */
+export const DimensionSchema = DimensionValueSchema.extend({
+	$extensions: TokenExtensionsSchema,
 });
 
 /**
@@ -187,23 +328,33 @@ export const DimensionSchema = z.strictObject({
  * catches it. Naming `SignedDimension` at the producing site is documentation rather than
  * enforcement, which is worth knowing before relying on the compiler here.
  */
-export const SignedDimensionSchema = z.strictObject({
+export const SignedDimensionValueSchema = z.strictObject({
 	value: z.number(),
 	unit: z.enum(['px', 'rem', 'em']),
 });
 
-export const DurationSchema = z.strictObject({
+export const SignedDimensionSchema = SignedDimensionValueSchema.extend({
+	$extensions: TokenExtensionsSchema,
+});
+
+export const DurationValueSchema = z.strictObject({
 	value: z.number().min(0),
 	unit: z.literal('ms'),
 });
 
+export const DurationSchema = DurationValueSchema.extend({
+	$extensions: TokenExtensionsSchema,
+});
+
 /** DTCG's `cubicBezier` type. The x coordinates are progress in time, so CSS rejects them outside 0 to 1. */
-export const CubicBezierSchema = z.tuple([
+export const CubicBezierValueSchema = z.tuple([
 	z.number().min(0).max(1),
 	z.number(),
 	z.number().min(0).max(1),
 	z.number(),
 ]);
+
+export const CubicBezierSchema = scalarToken(CubicBezierValueSchema);
 
 /**
  * A shadow colour carries alpha where a ramp step does not. Every other colour in the set is opaque
@@ -214,12 +365,18 @@ export const ShadowColorSchema = OklchChannelsSchema.extend({
 	alpha: z.number().min(0).max(1),
 });
 
+/**
+ * One token, five parts. A shadow's geometry only means anything together with its colour, so
+ * `shadow.md` is what a consumer reads and what carries the payload; tagging each of the five
+ * separately would make the token count wrong in every tool that walks the set for provenance.
+ */
 export const ShadowSchema = z.strictObject({
 	color: ShadowColorSchema,
-	offsetX: SignedDimensionSchema,
-	offsetY: SignedDimensionSchema,
-	blur: DimensionSchema,
-	spread: SignedDimensionSchema,
+	offsetX: SignedDimensionValueSchema,
+	offsetY: SignedDimensionValueSchema,
+	blur: DimensionValueSchema,
+	spread: SignedDimensionValueSchema,
+	$extensions: TokenExtensionsSchema,
 });
 
 export const RadiusScaleSchema = derivedCategory(nonEmptyRecord(DimensionSchema, 'radius scale'));
@@ -233,8 +390,8 @@ export const TypographySchema = derivedCategory(
 		 * `size` derives from the seed: a Brand Seed measures a scale ratio and a type
 		 * classification, and it measures no weight axis and no leading.
 		 */
-		weight: nonEmptyRecord(z.number().int().min(1).max(1000), 'weight set'),
-		lineHeight: nonEmptyRecord(z.number().positive(), 'line height set'),
+		weight: nonEmptyRecord(scalarToken(z.number().int().min(1).max(1000)), 'weight set'),
+		lineHeight: nonEmptyRecord(scalarToken(z.number().positive()), 'line height set'),
 	}),
 );
 
@@ -254,7 +411,7 @@ export const ShadowScaleSchema = derivedCategory(nonEmptyRecord(ShadowSchema, 's
 export const SpacingScaleSchema = systemCategory(nonEmptyRecord(DimensionSchema, 'spacing scale'));
 
 export const OpacityScaleSchema = systemCategory(
-	nonEmptyRecord(z.number().min(0).max(1), 'opacity scale'),
+	nonEmptyRecord(scalarToken(z.number().min(0).max(1)), 'opacity scale'),
 );
 
 export const MotionScaleSchema = systemCategory(
@@ -273,7 +430,9 @@ export const FocusRingSchema = systemCategory(
 	z.strictObject({ width: DimensionSchema, offset: SignedDimensionSchema }),
 );
 
-export const ZIndexScaleSchema = systemCategory(nonEmptyRecord(z.number().int(), 'z-index scale'));
+export const ZIndexScaleSchema = systemCategory(
+	nonEmptyRecord(scalarToken(z.number().int()), 'z-index scale'),
+);
 
 /**
  * The colour half of a scheme, on its own.
@@ -312,6 +471,10 @@ export const SchemeSchema = z.strictObject(SCHEME_SHAPE).superRefine(checkAliase
  * Not general-purpose structural equality: two objects with no own keys compare equal, so a pair of
  * `Date`s would. Nothing here parses to one, and widening this to handle shapes the schemas cannot
  * produce would be answering a question nobody asked.
+ *
+ * `$extensions` is compared through `sameOwnProvenance` rather than structurally, which is the one
+ * place this stops being plain equality. That carve-out is the whole of the mirror's foreign-data
+ * policy and `checkMirroredLayers` records why.
  */
 function sameValue(a: unknown, b: unknown): boolean {
 	if (a === b) return true;
@@ -324,7 +487,27 @@ function sameValue(a: unknown, b: unknown): boolean {
 
 	if (keys.length !== Object.keys(right).length) return false;
 
-	return keys.every((key) => Object.hasOwn(right, key) && sameValue(left[key], right[key]));
+	return keys.every(
+		(key) =>
+			Object.hasOwn(right, key) &&
+			(key === '$extensions'
+				? sameOwnProvenance(left[key], right[key])
+				: sameValue(left[key], right[key])),
+	);
+}
+
+/**
+ * Of two mirrored `$extensions` objects, only Cambium's own payload has to agree.
+ *
+ * Ours describes one derivation, so two copies disagreeing about it is corruption of data this
+ * pipeline wrote and stays a parse error. A namespace belonging to somebody else is not compared at
+ * all, and the next reader should leave that alone: see `checkMirroredLayers`.
+ */
+function sameOwnProvenance(a: unknown, b: unknown): boolean {
+	const left = a as Record<string, unknown> | null;
+	const right = b as Record<string, unknown> | null;
+
+	return sameValue(left?.[CAMBIUM_NAMESPACE], right?.[CAMBIUM_NAMESPACE]);
 }
 
 /**
@@ -339,6 +522,27 @@ function sameValue(a: unknown, b: unknown): boolean {
  * Checked over the derived key set rather than a written list. #7 added `shadow` to a mirror that
  * already held `primitives` and `semantic` unguarded, and guarding only the new one would leave a
  * reader to infer from it that the other two were guarded too.
+ *
+ * A foreign `$extensions` namespace is deliberately exempt, and that line is the surprising one in
+ * this file. Read the justification above before correcting it: what the mirror protects is the
+ * theme a consumer renders. Values decide that and have to agree. Cambium's own payload has to
+ * agree too, because it describes one derivation and two answers would mean one of them is wrong.
+ * Another tool's annotation decides nothing a consumer renders, so two copies carrying different
+ * notes still emit the same light theme.
+ *
+ * Requiring the mirror to hold there would reject a file no conforming tool could have written.
+ * Nothing announces that Cambium duplicates its light scheme at the top level, so a tool that walks
+ * a file and annotates the copy it found has done the only thing available to it, and failing the
+ * whole set over that is the same DTCG 5.2.3 breach `TokenExtensionsSchema` exists to fix, one
+ * layer further in.
+ *
+ * The cost is real and worth stating: the two copies may now carry different foreign data, so an
+ * adapter assembling a light theme meets a token annotated twice. The two are the same token
+ * written twice for consumers, so the honest reading is the union of both, with a genuine collision
+ * on one namespace being the adapter's to report rather than this schema's to prevent. Merging them
+ * here instead was the other candidate and it loses more than it buys: writing a top-level
+ * annotation onto `schemes.light` fabricates data the foreign tool never wrote, and it breaks the
+ * byte-identical round trip `core/provenance.test.ts` pins.
  */
 function checkMirroredLayers(
 	value: Record<string, unknown> & { schemes: { light: Record<string, unknown> } },
@@ -361,9 +565,16 @@ function checkMirroredLayers(
 
 /**
  * Strict rather than stripping, here and throughout the persisted shapes. Zod drops unknown
- * keys by default, which for something written to disk means losing data without a word. The
- * `$extensions` payload #9 attaches still needs a slot this schema does not have, so that
- * ticket gets a parse error naming the file to widen instead of a silent gap in the archive.
+ * keys by default, which for something written to disk means losing data without a word. That is
+ * also exactly how #9's `$extensions` payload would fail silently: it would satisfy every
+ * in-memory assertion and then vanish on the way to disk. The payload has a declared slot now, so
+ * what strictness still guards is the spelling — anything else is a parse error naming the file to
+ * widen rather than a gap in the archive.
+ *
+ * `TokenExtensionsSchema` is the one deliberate exception and its own docblock says why: DTCG
+ * requires a tool to preserve extension data it does not understand, and refusing a foreign
+ * namespace fails that requirement the same way silently dropping one would. Strictness here
+ * protects data Cambium wrote; looseness there protects data somebody else wrote.
  *
  * The nine non-colour categories are siblings of the colour layers rather than one `nonColor`
  * block, because an export adapter asks for a category by name and reads `tokenSet.radius`, and
@@ -391,11 +602,22 @@ export const TokenSetSchema = z
 	.superRefine(checkAliasesResolve)
 	.superRefine(checkMirroredLayers);
 
+export type SeedField = z.infer<typeof SeedFieldSchema>;
+export type TokenProvenance = z.infer<typeof TokenProvenanceSchema>;
+export type TokenExtensions = z.infer<typeof TokenExtensionsSchema>;
+
 export type RampStep = z.infer<typeof RampStepSchema>;
 export type Ramp = z.infer<typeof RampSchema>;
+export type SemanticEntry = z.infer<typeof SemanticEntrySchema>;
 export type ColorScheme = z.infer<typeof ColorSchemeSchema>;
 export type Scheme = z.infer<typeof SchemeSchema>;
 export type TokenSet = z.infer<typeof TokenSetSchema>;
+
+/** The `Value` half of each pair is the part a composite holds; the bare name is the token. */
+export type DimensionValue = z.infer<typeof DimensionValueSchema>;
+export type SignedDimensionValue = z.infer<typeof SignedDimensionValueSchema>;
+export type DurationValue = z.infer<typeof DurationValueSchema>;
+export type CubicBezierValue = z.infer<typeof CubicBezierValueSchema>;
 
 export type Dimension = z.infer<typeof DimensionSchema>;
 export type SignedDimension = z.infer<typeof SignedDimensionSchema>;

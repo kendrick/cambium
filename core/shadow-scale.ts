@@ -1,5 +1,6 @@
 import type { BrandSeed } from './brand-seed';
 import { fitToSrgbGamut, type Oklch } from './oklch';
+import { derived, inheritedFrom, type TokenProvenance } from './provenance';
 import type { Shadow, ShadowScale } from './token-set';
 
 const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
@@ -109,21 +110,61 @@ const DARK_BLUR_GAIN = 0.5;
  * `character.spread` is the seed's word for how far the shadow diffuses, which is the blur. It is
  * not the CSS spread radius the same-named `Shadow.spread` dimension carries.
  */
-export function shadowScale(surface: Oklch, character: BrandSeed['shadowCharacter']): ShadowScale {
+/**
+ * The page surface a shadow tints off, with the provenance of the token it was resolved from.
+ *
+ * The colour alone is not enough any more. A shadow with no stated character traces to whatever
+ * reached the surface, and only the surface's own token knows what that was.
+ */
+export type ShadowSurface = { color: Oklch; provenance: TokenProvenance };
+
+export function shadowScale(
+	surface: ShadowSurface,
+	character: BrandSeed['shadowCharacter'],
+): ShadowScale {
 	const diffusion = diffusionFor(character?.spread);
-	const darkness = 1 - surface.l;
+	const darkness = 1 - surface.color.l;
+
+	// A shadow is one DTCG composite token, so it gets one provenance value rather than five, and its
+	// colour and its geometry have different ancestries. A token names the field its value traces to
+	// rather than the field that was absent, so the value names the traceable half and the rationale
+	// carries the rest.
+	//
+	// With no `shadowCharacter` the colour is the only half the seed reached, and it reached it
+	// through the surface rather than directly. So the provenance is inherited rather than stated:
+	// `deriveNonColor` resolves `background` off the semantic layer, which rests on the neutral ramp,
+	// and that ramp traces to `neutralTemperature` when the seed stated one and to `keyColors` when
+	// it did not. Naming either outright is right for one seed and false for the other, which is the
+	// defect this replaced. `core/semantic-layer.ts` inherits the same way for the same reason.
+	//
+	// Splitting the token to carry two provenances is ruled out: #9's non-goals stop at the
+	// `$extensions` payload, and the coarseness is the recorded trade rather than an oversight.
+	const surfaceTrace = surface.provenance.seedField
+		? `which traces to ${surface.provenance.seedField}`
+		: 'which no seed field informs';
+	const extensions = character
+		? derived(
+				'shadowCharacter',
+				'Geometry and diffusion follow the seed while colour still tints from the resolved page surface',
+			)
+		: inheritedFrom(
+				surface.provenance,
+				`Colour tints from the page surface, ${surfaceTrace}, while depth and blur fall back to the module constants`,
+			);
 
 	// Hue is meaningless at zero chroma, and `core/oklch.ts` canonicalises it to 0 there, so a
 	// genuinely achromatic page would otherwise hand back a red-tinted shadow. An interpretation
 	// preset that leaves the neutral ramp untinted is the case that reaches this.
-	const tinted = (character?.tintFromSurface ?? true) && surface.c > 0;
+	const tinted = (character?.tintFromSurface ?? true) && surface.color.c > 0;
 
-	const l = surface.l * SHADOW_LIGHTNESS;
+	const l = surface.color.l * SHADOW_LIGHTNESS;
 
 	// Clamped to what sRGB can actually show at this lightness and hue, rather than declared and
 	// left for the display to clamp past. A token file stating a chroma nothing can render is the
 	// same invisible tint as one stating no chroma, minus the chance of anyone noticing.
-	const color = tinted ? fitToSrgbGamut({ l, c: SHADOW_CHROMA, h: surface.h }) : { l, c: 0, h: 0 };
+	const color = tinted
+		? fitToSrgbGamut({ l, c: SHADOW_CHROMA, h: surface.color.h })
+		: { l, c: 0, h: 0 };
 
 	const values = Object.fromEntries(
 		STEPS.map((step, i): [string, Shadow] => {
@@ -140,6 +181,7 @@ export function shadowScale(surface: Oklch, character: BrandSeed['shadowCharacte
 					offsetY: px(base.offsetY),
 					blur: px(base.blur * diffusion * (1 + DARK_BLUR_GAIN * darkness)),
 					spread: px(base.spread),
+					$extensions: extensions,
 				},
 			];
 		}),

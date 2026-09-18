@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { CAMBIUM_NAMESPACE } from './provenance';
 import { trackingScale } from './tracking-scale';
 
 const STEPS = ['tighter', 'tight', 'normal', 'wide', 'wider'] as const;
@@ -62,5 +63,35 @@ describe('trackingScale', () => {
 
 	it('produces the same scale from the same feel', () => {
 		expect(trackingScale('wide')).toEqual(trackingScale('wide'));
+	});
+
+	/**
+	 * `feel` is the module's only argument, so seeing whether it was stated costs nothing extra.
+	 * `source` on the category stays `derived` regardless, so the split lives on each step's own
+	 * payload rather than on the discriminator a category-level read would reach for.
+	 */
+	it.each(['tight', 'normal', 'wide'] as const)(
+		'tags every step derived on trackingFeel when the seed stated %s',
+		(feel) => {
+			const { values } = trackingScale(feel);
+
+			STEPS.forEach((step) => {
+				expect(values[step]!.$extensions[CAMBIUM_NAMESPACE]).toMatchObject({
+					provenance: 'derived',
+					seedField: 'trackingFeel',
+				});
+			});
+		},
+	);
+
+	it('tags every step invented with a null seed field when the seed measured no feel', () => {
+		const { values } = trackingScale(null);
+
+		STEPS.forEach((step) => {
+			expect(values[step]!.$extensions[CAMBIUM_NAMESPACE]).toMatchObject({
+				provenance: 'invented',
+				seedField: null,
+			});
+		});
 	});
 });
