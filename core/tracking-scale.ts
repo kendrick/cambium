@@ -1,5 +1,5 @@
 import type { BrandSeed } from './brand-seed';
-import type { Dimension, TrackingScale } from './token-set';
+import type { SignedDimension, TrackingScale } from './token-set';
 
 /** Tailwind's own tracking names and values, which a `normal` feel reproduces exactly. */
 const STEPS = ['tighter', 'tight', 'normal', 'wide', 'wider'] as const;
@@ -22,7 +22,10 @@ export function trackingScale(feel: BrandSeed['trackingFeel']): TrackingScale {
 	const shift = feel === 'tight' ? -FEEL_SHIFT : feel === 'wide' ? FEEL_SHIFT : 0;
 
 	const values = Object.fromEntries(
-		STEPS.map((step, i): [string, Dimension] => [step, { value: BASE_EM[i]! + shift, unit: 'em' }]),
+		STEPS.map((step, i): [string, SignedDimension] => [
+			step,
+			{ value: BASE_EM[i]! + shift, unit: 'em' },
+		]),
 	) as TrackingScale['values'];
 
 	return { source: 'derived', values };

@@ -238,6 +238,72 @@ describe('TokenSetSchema non-colour categories', () => {
 	});
 });
 
+const px = (value: number) => ({ value, unit: 'px' });
+
+/**
+ * A dimension that admits a negative where CSS does not is a value correct in isolation that the
+ * browser drops on arrival, so the split is per slot and both halves need pinning. A rule that
+ * rejected every negative would pass the first of these blocks and be wrong.
+ *
+ * The signed half is not hypothetical. This repo's shadow scale runs spread from 0 to -5px, and
+ * the generated tracking scale is negative for three of its five steps under a `tight` feel and
+ * two under the others.
+ */
+describe('TokenSetSchema dimension signs', () => {
+	const shadowWith = (patch: object) =>
+		withMirrored('shadow', {
+			...shadow,
+			values: { md: { ...shadow.values.md, ...patch } },
+		});
+
+	it.each([
+		['radius', { ...validTokenSet, radius: { source: 'derived', values: { lg: px(-4) } } }],
+		[
+			'a type size',
+			{
+				...validTokenSet,
+				typography: {
+					...nonColor.typography,
+					values: { ...nonColor.typography.values, size: { base: { value: -1, unit: 'rem' } } },
+				},
+			},
+		],
+		['spacing', { ...validTokenSet, spacing: { source: 'system', values: { md: px(-8) } } }],
+		[
+			'a focus ring width',
+			{
+				...validTokenSet,
+				focusRing: { source: 'system', values: { width: px(-3), offset: px(0) } },
+			},
+		],
+		['a shadow blur', shadowWith({ blur: px(-6) })],
+	])('rejects a negative %s', (_name, value) => {
+		expect(TokenSetSchema.safeParse(value).success).toBe(false);
+	});
+
+	it.each([
+		[
+			'tracking',
+			{
+				...validTokenSet,
+				tracking: { source: 'derived', values: { tight: { value: -0.025, unit: 'em' } } },
+			},
+		],
+		['a shadow offsetX', shadowWith({ offsetX: px(-2) })],
+		['a shadow offsetY', shadowWith({ offsetY: px(-4) })],
+		['a shadow spread', shadowWith({ spread: px(-5) })],
+		[
+			'a focus ring offset',
+			{
+				...validTokenSet,
+				focusRing: { source: 'system', values: { width: px(3), offset: px(-2) } },
+			},
+		],
+	])('accepts a negative %s, which CSS takes as a direction', (_name, value) => {
+		expect(TokenSetSchema.safeParse(value).success).toBe(true);
+	});
+});
+
 /**
  * Every key a scheme carries appears twice in a stored set, once unprefixed and once under
  * `schemes.light`. Two copies that may disagree are one copy and a rumour: an adapter reading

@@ -155,8 +155,39 @@ function nonEmptyRecord<T extends z.ZodType>(value: T, label: string) {
 /**
  * DTCG's dimension shape, plus `em`, which DTCG's own `dimension` type does not accept.
  * `tracking-scale.ts` records why tracking needs it and what it costs the DTCG adapter.
+ *
+ * Non-negative, and `SignedDimensionSchema` below is the exception a slot opts into rather than
+ * this being the permissive default. A dimension that admits `-1rem` for a border radius is not
+ * describing a dimension, it is describing a number wearing a unit: it parses, it persists, and it
+ * reaches a stylesheet as a declaration the browser drops.
+ *
+ * The ten dimension slots in this file split evenly, so the default is chosen on cost rather than
+ * on count. A slot wrongly unsigned fails loudly the first time a real negative reaches it, and a
+ * slot wrongly signed ships CSS nobody can see is broken. The tenth slot someone adds should
+ * inherit the one that fails loudly.
  */
 export const DimensionSchema = z.strictObject({
+	value: z.number().min(0),
+	unit: z.enum(['px', 'rem', 'em']),
+});
+
+/**
+ * The same shape at the five slots where CSS reads a sign as a direction rather than an error.
+ *
+ * A shadow's `offsetX` and `offsetY` point up and left at negative values, and its `spread` pulls
+ * the shadow in: this repo's own scale runs 0 to -5px there. Tracking is negative at the tight end
+ * of every feel, three steps of five under a `tight` seed and two under the others.
+ * `outline-offset` takes a negative to draw the ring inside the element's edge.
+ *
+ * Blur is the one shadow dimension that stays unsigned, because CSS rejects a negative blur radius
+ * outright rather than treating it as a direction.
+ *
+ * The split binds at parse time only. Both schemas infer to the same TypeScript type, so a
+ * producer annotated `Dimension` while emitting negatives still compiles, and the schema is what
+ * catches it. Naming `SignedDimension` at the producing site is documentation rather than
+ * enforcement, which is worth knowing before relying on the compiler here.
+ */
+export const SignedDimensionSchema = z.strictObject({
 	value: z.number(),
 	unit: z.enum(['px', 'rem', 'em']),
 });
@@ -185,10 +216,10 @@ export const ShadowColorSchema = OklchChannelsSchema.extend({
 
 export const ShadowSchema = z.strictObject({
 	color: ShadowColorSchema,
-	offsetX: DimensionSchema,
-	offsetY: DimensionSchema,
+	offsetX: SignedDimensionSchema,
+	offsetY: SignedDimensionSchema,
 	blur: DimensionSchema,
-	spread: DimensionSchema,
+	spread: SignedDimensionSchema,
 });
 
 export const RadiusScaleSchema = derivedCategory(nonEmptyRecord(DimensionSchema, 'radius scale'));
@@ -208,11 +239,18 @@ export const TypographySchema = derivedCategory(
 );
 
 export const TrackingScaleSchema = derivedCategory(
-	nonEmptyRecord(DimensionSchema, 'tracking scale'),
+	nonEmptyRecord(SignedDimensionSchema, 'tracking scale'),
 );
 
 export const ShadowScaleSchema = derivedCategory(nonEmptyRecord(ShadowSchema, 'shadow scale'));
 
+/**
+ * Unsigned, which is the one assignment here that is a judgement rather than a reading of CSS. A
+ * scale fed to `margin` may legally be negative, where one fed to `padding` or `gap` may not.
+ * Tailwind resolves this by keeping the scale non-negative and letting a negative margin reference
+ * it with a `-` prefix, and this follows that: a spacing token is a distance, and the direction
+ * belongs to the property using it.
+ */
 export const SpacingScaleSchema = systemCategory(nonEmptyRecord(DimensionSchema, 'spacing scale'));
 
 export const OpacityScaleSchema = systemCategory(
@@ -232,7 +270,7 @@ export const MotionScaleSchema = systemCategory(
  * variable and overwrites it with a width. No adapter writing a flat list reports the collision.
  */
 export const FocusRingSchema = systemCategory(
-	z.strictObject({ width: DimensionSchema, offset: DimensionSchema }),
+	z.strictObject({ width: DimensionSchema, offset: SignedDimensionSchema }),
 );
 
 export const ZIndexScaleSchema = systemCategory(nonEmptyRecord(z.number().int(), 'z-index scale'));
@@ -360,6 +398,7 @@ export type Scheme = z.infer<typeof SchemeSchema>;
 export type TokenSet = z.infer<typeof TokenSetSchema>;
 
 export type Dimension = z.infer<typeof DimensionSchema>;
+export type SignedDimension = z.infer<typeof SignedDimensionSchema>;
 export type Duration = z.infer<typeof DurationSchema>;
 export type CubicBezier = z.infer<typeof CubicBezierSchema>;
 export type Shadow = z.infer<typeof ShadowSchema>;
