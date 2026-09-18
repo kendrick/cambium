@@ -36,6 +36,16 @@ describe('evaluate harness', () => {
 		// A step-role name, to confirm the harness carries STEP_ROLES through rather than falling
 		// back to the role-less rendering scripts/swatches.mjs uses for Radix and Tailwind.
 		expect(html).toContain('subtle border');
+
+		// The seed fixture's brand key colour, oklch(0.62 0.19 259.8), lands on step 9 unchanged in
+		// both schemes (the scale engine anchors step 9 to the seed exactly). Pinning the rendered
+		// l / c / h triple is what would have caught the earlier bug where hue was measured but
+		// never rendered: a regression that drops h again reverts to "0.620 / 0.190" and this fails.
+		expect(html).toContain('0.620 / 0.190 / 259.8');
+
+		// A WCAG contrast ratio in the "X.XX:1" shape renderCell prints per step, so "relevant
+		// contrast ratios" is pinned as more than a string this test happens not to look for.
+		expect(html).toMatch(/\d+\.\d{2}:1/);
 	});
 
 	it('exits non-zero with a readable message when the seed fails schema validation', async () => {
