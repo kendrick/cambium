@@ -329,12 +329,6 @@ describe('prepareReferenceImage', () => {
 	});
 
 	/**
-	 * `convertToBlob` falls back to PNG wherever the UA cannot encode the type it was handed, and
-	 * reports the fallback on the blob. Declaring `image/webp` regardless put PNG bytes under a WebP
-	 * header, which `app/readers/anthropic-request.ts` forwards to the Messages API as the image's
-	 * media type. This fails if the encode branch ever assumes its own output type again.
-	 */
-	/**
 	 * A file picker caps nothing, so a renamed multi-gigabyte video reaches this function. Reading
 	 * twelve bytes settles it, and buffering the whole file first would allocate all of it to arrive
 	 * at the same rejection. `slice` returns a new Blob, so the instrumented `arrayBuffer` below
@@ -402,6 +396,12 @@ describe('prepareReferenceImage', () => {
 		expect(result.prepared.image.downscaled).toMatch(/^data:image\/webp;base64,/);
 	});
 
+	/**
+	 * `convertToBlob` falls back to PNG wherever the UA cannot encode the type it was handed, and
+	 * reports the fallback on the blob. Declaring `image/webp` regardless put PNG bytes under a WebP
+	 * header, which `app/readers/anthropic-request.ts` forwards to the Messages API as the image's
+	 * media type. This fails if the encode branch ever assumes its own output type again.
+	 */
 	it('labels the encoded blob by what came back, not by what was requested', async () => {
 		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
 		const codec = fakeCodec({

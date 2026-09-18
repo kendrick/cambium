@@ -15,24 +15,47 @@ import { buttonVariants } from '@/components/ui/button';
 const RECORD_PARAM = 'record';
 
 /**
- * `missing` and `unreadable` are separate states because the recovery differs and because
- * collapsing them destroys a signal the system depends on.
+ * Four outcomes rather than two, because each one licenses a different sentence and the wrong
+ * sentence here is expensive.
  *
- * `app/storage/indexed-db-record-store.ts` parses on the way out and throws when a stored record's
- * `schemaVersion` has moved, deliberately: the export archive is the only migration path, and it
- * works only if a mismatch is loud. #9 bumps that number in this same wave. Reporting that throw as
- * "nothing is stored" would take the one incompatibility alarm this system has and answer it with
- * "there was never anything here", on the screen most likely to meet it first.
+ * `missing` is a resolved null and nothing else. `unreadable` is storage answering and refusing
+ * this record: `app/storage/indexed-db-record-store.ts` parses on the way out and throws when a
+ * stored record's `schemaVersion` has moved, deliberately, because the export archive is the only
+ * migration path and it works only if a mismatch is loud. #9 moves that number. Reporting that
+ * throw as "nothing is stored" would take the one incompatibility alarm this system has and answer
+ * it with "there was never anything here", on the screen most likely to meet it first. It is the
+ * same lie this route already stopped telling about dropped tags, about a larger thing: a record
+ * that cannot be read is still on disk, and telling somebody their work is gone is how the work
+ * then actually gets deleted.
  *
- * It is also a lie about a larger thing than the dropped tags this route already stopped lying
- * about. A record that cannot be read is still on disk, and telling somebody their work is gone is
- * how the work then actually gets deleted.
+ * `unavailable` is separate from `unreadable` for the opposite reason. When the database will not
+ * open at all, nothing was read, so nothing is known: there may be no record and no stored data.
+ * Folding it into `unreadable` would assert a record exists on the evidence of an id in the address
+ * bar, which is the overclaim the split above exists to prevent.
  */
 type SavedRecord =
 	| { kind: 'loading' }
 	| { kind: 'found'; imageCount: number }
 	| { kind: 'missing' }
-	| { kind: 'unreadable' };
+	| { kind: 'unreadable' }
+	| { kind: 'unavailable' };
+
+/**
+ * The shape every terminal outcome renders: something to read, and the one way back.
+ *
+ * Extracted at the fifth branch rather than the fourth, which is where the repetition stopped being
+ * cheaper than the indirection.
+ */
+function Outcome({ action, children }: { action: string; children: React.ReactNode }) {
+	return (
+		<div className="flex flex-col items-start gap-4">
+			{children}
+			<Link className={buttonVariants({ variant: 'outline' })} href="/">
+				{action}
+			</Link>
+		</div>
+	);
+}
 
 export function LandingRoute() {
 	const router = useRouter();
@@ -57,26 +80,34 @@ export function LandingRoute() {
 		void (async () => {
 			let result: SavedRecord;
 
+			// Nested because the two failures license different sentences. The outer one is "could this
+			// browser be asked at all", where nothing was read and nothing may exist. The inner one is
+			// "did this record load", where storage answered and refused a row it holds.
+			//
+			// Both used to sit outside any handler. A browser that refuses IndexedDB left the effect
+			// rejecting and the screen on "Looking for that record…" indefinitely. That closes the
+			// rejecting case only: `openDB` in `createIndexedDbRecordStore` passes no `blocked` handler,
+			// so a connection held open by an older tab still neither resolves nor rejects. Closing that
+			// one means a change in `app/storage/`, which this branch does not own.
 			try {
 				// Dynamic for the same reason the save path is: the store imports `BrandRecordSchema`, and
 				// zod costs more than the first-load budget has to give. See ADR-0002.
 				const { createIndexedDbRecordStore } =
 					await import('../../app/storage/indexed-db-record-store');
 				const store = await createIndexedDbRecordStore();
-				const record = await store.get(recordId);
 
-				// Only a resolved null means the record is not there. That is the one answer storage gives
-				// that is actually about absence, and every other outcome below is about failure.
-				result = record ? { kind: 'found', imageCount: record.images.length } : { kind: 'missing' };
+				try {
+					const record = await store.get(recordId);
+
+					// A resolved null is the one answer storage gives that is actually about absence.
+					result = record
+						? { kind: 'found', imageCount: record.images.length }
+						: { kind: 'missing' };
+				} catch {
+					result = { kind: 'unreadable' };
+				}
 			} catch {
-				// A schema mismatch, a corrupt row, an origin that will not open its database at all: the
-				// route cannot tell these apart and does not need to, because the advice is the same for
-				// all of them and is the opposite of the advice for a record that is not there.
-				//
-				// The try also covers opening the store, which used to sit outside any handler. A browser
-				// refusing IndexedDB left the whole effect rejecting and the screen on "Looking for that
-				// record…" forever.
-				result = { kind: 'unreadable' };
+				result = { kind: 'unavailable' };
 			}
 
 			if (live) setLoaded({ id: recordId, result });
@@ -100,35 +131,41 @@ export function LandingRoute() {
 
 	if (saved.kind === 'missing') {
 		return (
-			<div className="flex flex-col items-start gap-4">
+			<Outcome action="Start a new brand">
 				<p className="text-sm">
 					Nothing is stored under that id. Records live in this browser alone, so a link from
 					another machine will not find one.
 				</p>
-				<Link className={buttonVariants({ variant: 'outline' })} href="/">
-					Start again
-				</Link>
-			</div>
+			</Outcome>
 		);
 	}
 
 	if (saved.kind === 'unreadable') {
 		return (
-			<div className="flex flex-col items-start gap-4">
+			<Outcome action="Start a new brand">
 				<p className="text-sm">
-					A record is stored under that id, but this version of Cambium could not read it. A record
-					whose format has moved is refused rather than guessed at, so the usual cause is that a
-					different version of Cambium saved it.
+					A record is stored under that id, but this version of Cambium could not read it. The usual
+					cause is that a different version saved it.
 				</p>
-				{/* The one instruction that matters, because the failure looks like absence and the
-				    reflex it invites is the thing that would make the loss real. */}
+				{/* The one instruction that matters, because this failure looks like absence and the
+				    reflex it invites is what would make the loss real. */}
 				<p className="text-muted-foreground text-sm">
 					It is still in this browser. Clearing your browsing data is what would lose it.
 				</p>
-				<Link className={buttonVariants({ variant: 'outline' })} href="/">
-					Start a new brand
-				</Link>
-			</div>
+			</Outcome>
+		);
+	}
+
+	if (saved.kind === 'unavailable') {
+		return (
+			<Outcome action="Start a new brand">
+				{/* Says nothing about whether the record exists, because nothing was read. Private
+				    browsing and blocked site data are the two causes worth naming. */}
+				<p className="text-sm">
+					This browser would not open its storage, so nothing could be looked up. Private browsing
+					and blocked site data are the usual causes.
+				</p>
+			</Outcome>
 		);
 	}
 
@@ -136,7 +173,7 @@ export function LandingRoute() {
 		saved.imageCount === 1 ? 'One reference image is' : `${saved.imageCount} reference images are`;
 
 	return (
-		<div className="flex flex-col items-start gap-4">
+		<Outcome action="Add another brand">
 			<p className="text-sm">
 				Saved. {count} stored in this browser under{' '}
 				<code className="bg-muted rounded px-1 py-0.5 text-xs">{recordId}</code>.
@@ -151,9 +188,6 @@ export function LandingRoute() {
 				Nothing has been generated from them yet. That takes an API key and a model call, and the
 				workspace that asks for one is still being built.
 			</p>
-			<Link className={buttonVariants({ variant: 'outline' })} href="/">
-				Add another brand
-			</Link>
-		</div>
+		</Outcome>
 	);
 }

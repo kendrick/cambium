@@ -125,21 +125,23 @@ export function describeRejectedBytes(head: Uint8Array): string | null {
 }
 
 /**
- * The largest size that fits inside `maxEdge` on its long side, holding aspect ratio.
+ * The largest size that fits inside `maxEdge` on its long side.
  *
- * Zero or negative input comes back unchanged rather than being divided — a caller passing a broken
- * probe result gets that same broken result back, not `NaN` or `Infinity` laundered through
- * rounding.
+ * Aspect ratio is held everywhere except where holding it would round an edge to zero, which is the
+ * one case that has to give. A 5000x1 strip scales by 0.31 and lands on `{ width: 1568, height: 0 }`,
+ * which reaches `createImageBitmap` as `resizeHeight: 0`; the browser then refuses an image it had
+ * already decoded, and the picker reports a good file as damaged. So a positive edge clamps to 1 and
+ * that strip comes back 1568x1, distorted and readable rather than proportional and rejected.
+ * Nothing downstream reads the ratio, because `prepareReferenceImage` re-measures the encoded
+ * artefact instead of trusting what was asked for.
  *
- * A positive edge never rounds to zero. A 5000x1 strip scales by 0.31 and rounds its short edge to
- * 0, which reaches `createImageBitmap` as `resizeHeight: 0`; the browser then refuses an image it
- * had already decoded, and the picker reports a perfectly good file as damaged. That is the same
- * misleading-failure class `ImageEncodeError` exists to prevent, arriving through a different door.
+ * Zero or negative input comes back unchanged rather than being divided, so a caller passing a
+ * broken probe result gets that same broken result back rather than `NaN` or `Infinity` laundered
+ * through rounding.
  *
- * A strip like that is accepted rather than rejected, which is a decision rather than an oversight.
- * Issue #22 takes reference images "of any kind" and names no minimum dimension, so a floor here
- * would be a number nobody asked for, turning away a wide banner crop or a colour strip that a
- * vision model can read perfectly well. The clamp is what makes accepting it safe.
+ * Accepting such an image at all is a decision rather than an oversight. No acceptance criterion in
+ * #22 names a minimum dimension, so a floor here would be a number nobody asked for, turning away a
+ * banner crop or a colour strip that a vision model reads perfectly well.
  */
 export function fitWithin(
 	width: number,
