@@ -7,9 +7,11 @@ const CATEGORIES = ['spacing', 'opacity', 'motion', 'focusRing', 'zIndex'] as co
 describe('systemConstants', () => {
 	/**
 	 * "No system-constant category varies with the seed", stated as strongly as it can be: a
-	 * function that takes no argument cannot vary with one. `core/derive-non-color.test.ts` asserts
-	 * the same property from the other end, over two different seeds, because a later refactor
-	 * could thread a seed in without anyone noticing this line.
+	 * function that takes no argument cannot vary with one.
+	 *
+	 * `core/derive-non-color.test.ts` asserts the same property behaviourally, over two seeds that
+	 * disagree about everything. That one is a sample and this one is a proof, so both stay: a seed
+	 * threaded in here fails this line, and a constant that drifted some other way fails that one.
 	 */
 	it('takes no input at all', () => {
 		expect(systemConstants).toHaveLength(0);

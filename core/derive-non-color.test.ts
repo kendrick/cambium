@@ -4,7 +4,7 @@ import { type BrandSeed, BrandSeedSchema } from './brand-seed';
 import { deriveNonColor } from './derive-non-color';
 import { createOklchScaleEngine } from './oklch-scale-engine';
 import { BALANCED, type SchemeName } from './scale-engine';
-import { resolveScheme } from './semantic-layer';
+import { resolveScheme } from './resolve-scheme';
 import type { ColorScheme } from './token-set';
 
 const BLANK = {
@@ -123,6 +123,11 @@ describe('deriveNonColor', () => {
 	 * The one read into the colour layer, and what it buys. `SEMANTIC_MAP` aliases `background` to
 	 * `neutral.1`, the token that means "the page", so the shadow is tinted by the surface it falls
 	 * on rather than by black.
+	 *
+	 * The hue match alone would not prove that. A shadow copies the surface hue whether or not any
+	 * chroma survives, so the chroma is the half worth asserting: `neutral.1` is near-achromatic by
+	 * design, and a derivation that passed its own chroma through would ship black while every hue
+	 * assertion here still passed.
 	 */
 	it.each(['light', 'dark'] as const)(
 		'tints the %s shadow with that scheme’s background',
@@ -132,9 +137,22 @@ describe('deriveNonColor', () => {
 			const { color } = deriveNonColor(crisp, schemes).shadow[scheme].values.md!;
 
 			expect(color.h).toBeCloseTo(background.h, 6);
+			expect(color.c).toBeGreaterThan(0.01);
 			expect(color.l).toBeLessThan(background.l);
 		},
 	);
+
+	/**
+	 * The hue half, proved by moving it. Two seeds a long way apart on the circle have to produce
+	 * shadows a reader could tell apart, which is what tinting by the surface is for and what a
+	 * hardcoded tint would fail.
+	 */
+	it('moves the shadow hue when the seed hue moves', () => {
+		const cool = derive(crisp).shadow.light.values.md!.color;
+		const warm = derive(lush).shadow.light.values.md!.color;
+
+		expect(Math.abs(cool.h - warm.h)).toBeGreaterThan(90);
+	});
 
 	/**
 	 * Two independent reasons, which is why both are asserted. `neutral.1` resolves to a different

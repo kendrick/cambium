@@ -55,7 +55,34 @@ describe('shadowScale', () => {
 
 		expect(warm.h).toBeCloseTo(40, 6);
 		expect(cool.h).toBeCloseTo(240, 6);
-		expect(warm.c).toBeGreaterThan(0);
+	});
+
+	/**
+	 * The regression that matters, and the one a chroma read off the surface would pass while
+	 * shipping black. `background` aliases `neutral.1`, which is near-achromatic by design: the
+	 * page backgrounds this derivation actually receives measure 0.00012 to 0.00106. A shadow that
+	 * carried that number forward would satisfy "derives from the surface" and be invisible.
+	 *
+	 * 0.01 is the floor for a tint anyone can see at a shadow's lightness. Asserting a floor rather
+	 * than the constant keeps this a statement about what reaches a stylesheet.
+	 */
+	it('tints a near-achromatic page with a chroma that can actually be seen', () => {
+		const { color } = shadowScale({ l: 0.994, c: 0.000223, h: 259.8 }, tinted).values.md!;
+
+		expect(color.c).toBeGreaterThan(0.01);
+		expect(color.h).toBeCloseTo(259.8, 6);
+	});
+
+	/**
+	 * Hue is meaningless at zero chroma and `core/oklch.ts` canonicalises it to 0 there, so tinting
+	 * from a genuinely achromatic page would paint every shadow red. An interpretation preset that
+	 * leaves the neutral ramp untinted is what reaches this.
+	 */
+	it('leaves a shadow on an achromatic page untinted rather than painting it hue zero', () => {
+		const { color } = shadowScale({ l: 0.99, c: 0, h: 0 }, tinted).values.md!;
+
+		expect(color.c).toBe(0);
+		expect(color.h).toBe(0);
 	});
 
 	/**
@@ -107,10 +134,17 @@ describe('shadowScale', () => {
 		expect(shadowScale(PAGE_LIGHT, null).values.md!.color.c).toBeGreaterThan(0);
 	});
 
-	it('never lets a stacked opacity leave the 0 to 1 range', () => {
+	/**
+	 * The darkness gain multiplies every step's opacity, and the worst case is a page at lightness
+	 * zero. Bounding the top step there is what would catch a raised gain: a shadow at 0.5 over a
+	 * dark page reads as a black box rather than as depth, and the schema's own 0-to-1 bound is far
+	 * too loose to notice.
+	 */
+	it('keeps the darkest page from stacking opacity into a black box', () => {
 		const { values } = shadowScale({ l: 0, c: 0, h: 0 }, tinted);
 
-		expect(STEPS.every((step) => values[step]!.color.alpha <= 1)).toBe(true);
+		expect(values.xl!.color.alpha).toBeLessThan(0.5);
+		expect(STEPS.every((step) => values[step]!.color.alpha > 0)).toBe(true);
 	});
 
 	it('produces the same scale from the same surface', () => {
@@ -122,12 +156,17 @@ describe('shadowScale', () => {
 	 * touches the ramps or the semantic colour layer. The surface arrives already resolved, and
 	 * `core/derive-non-color.ts` owns the single read-only lookup that resolves it. An import added
 	 * here would compile, pass every test above, and quietly undo the split.
+	 *
+	 * Reads the module's import specifiers rather than its whole source, so the docblock stays free
+	 * to name the modules it is explaining its distance from.
 	 */
-	it('imports nothing from the colour layer', () => {
+	it('declares no dependency on the colour layer', () => {
 		const source = readFileSync(new URL('./shadow-scale.ts', import.meta.url), 'utf8');
+		const specifiers = [...source.matchAll(/(?:from|import)\s*\(?\s*'([^']+)'/g)].map((m) => m[1]!);
 
-		for (const forbidden of ['semantic-map', 'semantic-layer', 'scale-engine']) {
-			expect(source).not.toContain(forbidden);
-		}
+		expect(specifiers).not.toHaveLength(0);
+		expect(specifiers.filter((s) => /semantic-map|semantic-layer|scale-engine/.test(s))).toEqual(
+			[],
+		);
 	});
 });

@@ -2,27 +2,9 @@ import type { BrandSeed } from './brand-seed';
 import type { Oklch } from './oklch';
 import type { Shadow, ShadowScale } from './token-set';
 
-/**
- * Issue #7: this derivation "never touches the ramps or the semantic colour layer." The surface
- * arrives here already resolved to a plain OKLCH triple; `core/derive-non-color.ts` owns the
- * single read-only lookup that resolves it against a scheme. That split is what keeps this module
- * from learning what a ramp, an alias, or a scheme is, so it takes no scheme name as an argument:
- * teaching it one would be teaching it a concept it has no business knowing.
- *
- * A shadow is light the surface is not receiving, and the surface's own lightness already carries
- * that information, which is why alpha and blur both rise as the surface darkens: the alpha that
- * reads as depth on a white page reads as nothing at all on a near-black one. The chroma ceiling on
- * a tinted shadow keeps a saturated brand surface from producing a shadow that reads as a coloured
- * glow rather than a shadow.
- *
- * `character.spread` is the seed's word for how far the shadow diffuses, i.e. the blur. It is not
- * the CSS spread radius that `Shadow.spread` carries below; the two share a name by coincidence of
- * English, not by shared meaning.
- */
-
 const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
 
-/** Base geometry and opacity per elevation step, before the diffusion and darkness modifiers. */
+/** Geometry and opacity per elevation step, before the diffusion and darkness modifiers below. */
 const BASE = [
 	{ offsetY: 1, blur: 2, spread: 0, alpha: 0.05 },
 	{ offsetY: 2, blur: 4, spread: -1, alpha: 0.07 },
@@ -31,48 +13,90 @@ const BASE = [
 	{ offsetY: 20, blur: 25, spread: -5, alpha: 0.15 },
 ] as const;
 
-const CHROMA_CEILING = 0.04;
+/**
+ * How much of the surface's lightness a shadow keeps. A shadow is the surface with the light taken
+ * out of it, which is also what keeps a light and a dark page's shadows apart in lightness as well
+ * as in opacity.
+ */
+const SHADOW_LIGHTNESS = 0.15;
 
-/** Null means the seed measured nothing; 1 is the neutral multiplier that leaves blur untouched for it. */
-function diffusionMultiplier(spread: 'tight' | 'diffuse' | undefined): number {
+/**
+ * The chroma a tinted shadow carries, stated rather than read off the surface.
+ *
+ * Reading it off the surface is the obvious implementation and it produces black. `background`
+ * aliases `neutral.1`, and a page background is near-achromatic by design: measured across seven
+ * seeds it runs 0.00012 to 0.00026 in light and 0.00048 to 0.00106 in dark, which is invisible.
+ * Passing that number through would satisfy "derives from the surface" on paper while shipping
+ * exactly the black-at-an-opacity #7 set out to avoid.
+ *
+ * So the surface supplies the hue, which it carries faithfully, and the depth of the tint is a
+ * constant. Subtle on purpose: a shadow that announces its colour stops reading as a shadow.
+ */
+const SHADOW_CHROMA = 0.02;
+
+/** How far opacity and blur climb as the surface darkens, per unit of lightness given up. */
+const DARK_ALPHA_GAIN = 1.5;
+const DARK_BLUR_GAIN = 0.5;
+
+/**
+ * Elevation steps tinted by the surface they fall on.
+ *
+ * The surface arrives already resolved, as three OKLCH channels. That is what keeps this module
+ * from learning what a ramp, an alias, or a scheme is, which is #7's "never touches the ramps or
+ * the semantic colour layer", and it is why the tests here run against two synthetic surfaces
+ * rather than against engine output. `core/derive-non-color.ts` owns the one read that resolves it.
+ *
+ * No scheme name either, for the same reason: the surface's own lightness already says how dark
+ * the page is. A shadow is light the surface is not receiving, so a near-black page has very little
+ * to take away, and the opacity that reads as depth on white reads as nothing there. Opacity and
+ * blur both climb as the surface darkens.
+ *
+ * `character.spread` is the seed's word for how far the shadow diffuses, which is the blur. It is
+ * not the CSS spread radius the same-named `Shadow.spread` dimension carries.
+ */
+export function shadowScale(surface: Oklch, character: BrandSeed['shadowCharacter']): ShadowScale {
+	const diffusion = diffusionFor(character?.spread);
+	const darkness = 1 - surface.l;
+
+	// Hue is meaningless at zero chroma, and `core/oklch.ts` canonicalises it to 0 there, so a
+	// genuinely achromatic page would otherwise hand back a red-tinted shadow. An interpretation
+	// preset that leaves the neutral ramp untinted is the case that reaches this.
+	const tinted = (character?.tintFromSurface ?? true) && surface.c > 0;
+
+	const color = {
+		l: surface.l * SHADOW_LIGHTNESS,
+		c: tinted ? SHADOW_CHROMA : 0,
+		h: tinted ? surface.h : 0,
+	};
+
+	const values = Object.fromEntries(
+		STEPS.map((step, i): [string, Shadow] => {
+			const base = BASE[i]!;
+
+			return [
+				step,
+				{
+					color: { ...color, alpha: base.alpha * (1 + DARK_ALPHA_GAIN * darkness) },
+					offsetX: px(0),
+					offsetY: px(base.offsetY),
+					blur: px(base.blur * diffusion * (1 + DARK_BLUR_GAIN * darkness)),
+					spread: px(base.spread),
+				},
+			];
+		}),
+	) as ShadowScale['values'];
+
+	return { source: 'derived', values };
+}
+
+/** Null is a seed that measured no shadow character, and 1 is the honest multiplier for that. */
+function diffusionFor(spread: 'tight' | 'diffuse' | undefined): number {
 	if (spread === 'tight') return 0.7;
 	if (spread === 'diffuse') return 1.5;
+
 	return 1;
 }
 
 function px(value: number): { value: number; unit: 'px' } {
 	return { value, unit: 'px' };
-}
-
-export function shadowScale(surface: Oklch, character: BrandSeed['shadowCharacter']): ShadowScale {
-	const diffusion = diffusionMultiplier(character?.spread);
-	const darkness = 1 - surface.l;
-	const tinted = character === null ? true : character.tintFromSurface;
-
-	// A shadow is the surface with the light taken out of it, which is also what keeps a light and
-	// a dark surface's shadows apart in lightness as well as in alpha.
-	const l = surface.l * 0.15;
-	const c = tinted ? Math.min(surface.c, CHROMA_CEILING) : 0;
-	const h = tinted ? surface.h : 0;
-
-	const values = Object.fromEntries(
-		STEPS.map((step, i) => {
-			const base = BASE[i];
-
-			const blur = base.blur * diffusion * (1 + 0.5 * darkness);
-			const alpha = Math.min(1, base.alpha * (1 + 1.5 * darkness));
-
-			const shadow: Shadow = {
-				color: { l, c, h, alpha },
-				offsetX: px(0),
-				offsetY: px(base.offsetY),
-				blur: px(blur),
-				spread: px(base.spread),
-			};
-
-			return [step, shadow];
-		}),
-	) as ShadowScale['values'];
-
-	return { source: 'derived', values };
 }

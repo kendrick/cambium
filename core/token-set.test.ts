@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
 import { SchemeSchema, TokenSetSchema } from './token-set';
 
 const ramp = Array.from({ length: 12 }, (_, i) => ({
@@ -9,18 +10,7 @@ const ramp = Array.from({ length: 12 }, (_, i) => ({
 	h: 259.8,
 }));
 
-const shadow = {
-	source: 'derived',
-	values: {
-		md: {
-			color: { l: 0.15, c: 0.01, h: 259.8, alpha: 0.1 },
-			offsetX: { value: 0, unit: 'px' },
-			offsetY: { value: 4, unit: 'px' },
-			blur: { value: 6, unit: 'px' },
-			spread: { value: -1, unit: 'px' },
-		},
-	},
-};
+const shadow = SHADOW_FIXTURE;
 
 /** Shadow is the one non-colour category that differs per scheme, so it is the one a scheme carries. */
 const layer = {
@@ -29,32 +19,7 @@ const layer = {
 	shadow,
 };
 
-const nonColor = {
-	radius: { source: 'derived', values: { lg: { value: 0.625, unit: 'rem' } } },
-	typography: {
-		source: 'derived',
-		values: {
-			size: { base: { value: 1, unit: 'rem' } },
-			weight: { regular: 400 },
-			lineHeight: { normal: 1.5 },
-		},
-	},
-	tracking: { source: 'derived', values: { normal: { value: 0, unit: 'em' } } },
-	spacing: { source: 'system', values: { md: { value: 1, unit: 'rem' } } },
-	opacity: { source: 'system', values: { disabled: 0.5 } },
-	motion: {
-		source: 'system',
-		values: {
-			duration: { fast: { value: 150, unit: 'ms' } },
-			easing: { standard: [0.2, 0, 0, 1] },
-		},
-	},
-	focusRing: {
-		source: 'system',
-		values: { width: { value: 3, unit: 'px' }, offset: { value: 0, unit: 'px' } },
-	},
-	zIndex: { source: 'system', values: { modal: 1300 } },
-};
+const nonColor = NON_COLOR_FIXTURE;
 
 const validTokenSet = {
 	...layer,

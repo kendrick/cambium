@@ -1,6 +1,6 @@
 import type { BrandSeed } from './brand-seed';
 import { deriveNonColor } from './derive-non-color';
-import { contrastFromOklch, type Oklch } from './oklch';
+import { contrastFromOklch } from './oklch';
 import type { RampSet, SchemeName } from './scale-engine';
 import { type ContrastingPair, type SemanticAlias, SEMANTIC_MAP } from './semantic-map';
 import { type ColorScheme, stepForAlias, type TokenSet } from './token-set';
@@ -21,14 +21,12 @@ import { type ColorScheme, stepForAlias, type TokenSet } from './token-set';
  * `SemanticLayerSchema` to accept it.
  *
  * The top level carries light rather than a scheme of its own, matching `app/globals.css` and
- * every shadcn theme: `:root` holds light and `.dark` overrides it. That holds for the shadow
- * scale too, which is the one non-colour category a scheme carries because it is the one that
- * depends on a colour.
+ * every shadcn theme: `:root` holds light and `.dark` overrides it. The shadow scale follows that
+ * rule too; `token-set.ts` records why it is the one non-colour category a scheme carries.
  *
  * The seed comes in alongside the ramps because #7's nine non-colour categories derive from it and
  * the schema requires them, so what this returned before is no longer a `TokenSet`. The colour
- * halves are built first: `deriveNonColor` resolves `background` out of each of them to tint that
- * scheme's shadow.
+ * halves are built first, because `deriveNonColor` resolves `background` out of each of them.
  */
 export function buildTokenSet(schemes: Record<SchemeName, RampSet>, seed: BrandSeed): TokenSet {
 	const light: ColorScheme = { primitives: schemes.light, semantic: semanticFor(schemes.light) };
@@ -85,36 +83,4 @@ function higherContrast(ramps: RampSet, pair: ContrastingPair): SemanticAlias {
 
 	// Ties keep the first candidate, so the same ramps always produce the same token set.
 	return scored[1]!.contrast > scored[0]!.contrast ? scored[1]!.alias : scored[0]!.alias;
-}
-
-/**
- * Every semantic token, flattened to the colour it names.
- *
- * This is what an export adapter consumes: aliases are how the layer is authored and how it stays
- * honest when a ramp moves, but a stylesheet needs values. Returning the three OKLCH channels
- * rather than a formatted string keeps the choice of colour space at the adapter, which is where
- * #7 wants it.
- *
- * Throws instead of skipping. Only a hand-built scheme reaches the throw, because `SchemeSchema`
- * rejects a dangling alias and the map is a compile-time constant. The alternative is a token set
- * with a hole in it, and a hole reaches an adapter looking like a colour.
- *
- * Takes the colour half of a scheme rather than a whole `Scheme`. `deriveNonColor` calls this to
- * tint the shadow that a full `Scheme` then requires, so taking the full shape there would be
- * circular.
- */
-export function resolveScheme(scheme: ColorScheme): Record<string, Oklch> {
-	const resolved: Record<string, Oklch> = {};
-
-	for (const [token, alias] of Object.entries(scheme.semantic)) {
-		const step = stepForAlias(scheme.primitives, alias);
-
-		if (!step) {
-			throw new Error(`semantic token "${token}" aliases ${alias}, which resolves to nothing`);
-		}
-
-		resolved[token] = { l: step.l, c: step.c, h: step.h };
-	}
-
-	return resolved;
 }

@@ -4,7 +4,8 @@ import { type BrandSeed, BrandSeedSchema } from './brand-seed';
 import { createOklchScaleEngine } from './oklch-scale-engine';
 import { contrastFromOklch } from './oklch';
 import { BALANCED, RAMP_NAMES, SCHEME_NAMES } from './scale-engine';
-import { buildTokenSet, resolveScheme } from './semantic-layer';
+import { resolveScheme } from './resolve-scheme';
+import { buildTokenSet } from './semantic-layer';
 import { SEMANTIC_MAP } from './semantic-map';
 import { type Scheme, TokenSetSchema } from './token-set';
 
@@ -40,7 +41,6 @@ function fixtureFor(oklch: [number, number, number], character: Partial<BrandSee
 	return { seed, schemes: result.schemes };
 }
 
-/** `buildTokenSet` takes the seed as well as the ramps, because the non-colour categories derive from it. */
 function build(fixture: ReturnType<typeof fixtureFor>) {
 	return buildTokenSet(fixture.schemes, fixture.seed);
 }
@@ -66,7 +66,7 @@ const SWEEP: [string, [number, number, number]][] = [
 	['light-yellow', [0.9, 0.14, 95]],
 ];
 
-const swept = SWEEP.map(([name, oklch]) => ({ name, ...fixtureFor(oklch) }));
+const swept = SWEEP.map(([name, oklch]) => Object.assign({ name }, fixtureFor(oklch)));
 
 describe('buildTokenSet', () => {
 	it('produces a set the token-set schema accepts', () => {

@@ -1,7 +1,17 @@
 import { z } from 'zod';
 
-export const RampStepSchema = z.strictObject({
-	step: z.number().int().min(1).max(12),
+/**
+ * The three OKLCH channels and their bounds, in one place.
+ *
+ * Hue is an angle, so 360 and 0 name the same colour, and canonicalising here keeps one value from
+ * having two spellings. `BrandSeedSchema` makes the same move at the trust boundary and for the
+ * same reason: identical seeds have to produce identical tokens.
+ *
+ * A ramp step and a shadow colour both build on this rather than restating it. They had the bounds
+ * and the transform written out twice, which is one hue clamp fixed in one place away from a drift
+ * nothing would catch.
+ */
+const OklchChannelsSchema = z.strictObject({
 	l: z.number().min(0).max(1),
 	c: z.number().min(0),
 	h: z
@@ -9,6 +19,10 @@ export const RampStepSchema = z.strictObject({
 		.min(0)
 		.max(360)
 		.transform((h) => h % 360),
+});
+
+export const RampStepSchema = OklchChannelsSchema.extend({
+	step: z.number().int().min(1).max(12),
 });
 
 /**
@@ -139,10 +153,8 @@ function nonEmptyRecord<T extends z.ZodType>(value: T, label: string) {
 }
 
 /**
- * DTCG's dimension shape, with one addition. `em` is outside the `px` and `rem` that DTCG's
- * `dimension` type accepts, and tracking needs it: letter-spacing has to scale with the size it
- * applies to. The DTCG adapter therefore has a conversion to make for tracking rather than a value
- * to copy, which #7 records so the adapter ticket finds it before the format validator does.
+ * DTCG's dimension shape, plus `em`, which DTCG's own `dimension` type does not accept.
+ * `tracking-scale.ts` records why tracking needs it and what it costs the DTCG adapter.
  */
 export const DimensionSchema = z.strictObject({
 	value: z.number(),
@@ -167,14 +179,7 @@ export const CubicBezierSchema = z.tuple([
  * and composited by the consumer; a shadow is the one value whose whole job is to be partly
  * transparent, so an alpha-less shadow colour is a bug rather than a default.
  */
-export const ShadowColorSchema = z.strictObject({
-	l: z.number().min(0).max(1),
-	c: z.number().min(0),
-	h: z
-		.number()
-		.min(0)
-		.max(360)
-		.transform((h) => h % 360),
+export const ShadowColorSchema = OklchChannelsSchema.extend({
 	alpha: z.number().min(0).max(1),
 });
 

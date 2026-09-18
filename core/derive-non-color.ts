@@ -2,7 +2,7 @@ import type { BrandSeed } from './brand-seed';
 import type { Oklch } from './oklch';
 import { radiusScale } from './radius-scale';
 import type { SchemeName } from './scale-engine';
-import { resolveScheme } from './semantic-layer';
+import { resolveScheme } from './resolve-scheme';
 import { shadowScale } from './shadow-scale';
 import { systemConstants } from './system-constants';
 import type {
@@ -16,10 +16,7 @@ import type {
 import { trackingScale } from './tracking-scale';
 import { typeScale } from './type-scale';
 
-/**
- * Shadow is keyed by scheme and nothing else is, because a shadow is the only non-colour value that
- * depends on a colour. The other eight categories hold still across light and dark.
- */
+/** Shadow is keyed by scheme and nothing else is; `token-set.ts` records why. */
 export type NonColorTokens = SystemConstants & {
 	radius: RadiusScale;
 	typography: Typography;
