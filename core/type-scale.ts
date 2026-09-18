@@ -54,7 +54,7 @@ export function typeScale(ratio: BrandSeed['typeScaleRatio']): Typography {
 	/** One seed field for the whole size set, so a stated-vs-fallback ratio is a fact about the call. */
 	const sizeExtensions = ratio
 		? derived('typeScaleRatio', "Scaled from the brand seed's stated type scale ratio")
-		: invented('The seed measured no type scale ratio, so this scale falls back to a minor third.');
+		: invented('The seed measured no type scale ratio, so this scale falls back to a minor third');
 
 	/**
 	 * Unconditional, both of them: a Brand Seed measures a scale ratio and a type classification,

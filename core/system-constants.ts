@@ -15,7 +15,7 @@ import type {
  * every category. Built from the same `*Value` schemas `token-set.ts` exports for exactly this:
  * the untagged half of a `Dimension`, a `SignedDimension`, a `Duration`, and a `CubicBezier`.
  */
-type UntaggedSystemConstants = {
+export type UntaggedSystemConstants = {
 	spacing: { source: 'system'; values: Record<string, DimensionValue> };
 	opacity: { source: 'system'; values: Record<string, number> };
 	motion: {

@@ -26,7 +26,7 @@ export function trackingScale(feel: BrandSeed['trackingFeel']): TrackingScale {
 	const extensions = feel
 		? derived('trackingFeel', "Scaled from the brand seed's stated tracking feel")
 		: invented(
-				"The seed measured no tracking feel, so this scale falls back to Tailwind's normal tracking.",
+				"The seed measured no tracking feel, so this scale falls back to Tailwind's normal tracking",
 			);
 
 	const values = Object.fromEntries(

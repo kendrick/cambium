@@ -45,7 +45,7 @@ export function radiusScale(character: BrandSeed['radiusCharacter']): RadiusScal
 	const extensions = character
 		? derived('radiusCharacter', "Scaled from the brand seed's stated radius character")
 		: invented(
-				'The seed measured no radius character, so this scale falls back to the vendored default.',
+				'The seed measured no radius character, so this scale falls back to the vendored default',
 			);
 
 	const values = Object.fromEntries(

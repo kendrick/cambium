@@ -5,15 +5,11 @@ import { radiusScale } from './radius-scale';
 import type { SchemeName } from './scale-engine';
 import { resolveScheme } from './resolve-scheme';
 import { shadowScale } from './shadow-scale';
-import { systemConstants } from './system-constants';
+import { systemConstants, type UntaggedSystemConstants } from './system-constants';
 import type {
 	ColorScheme,
-	CubicBezierValue,
-	DimensionValue,
-	DurationValue,
 	RadiusScale,
 	ShadowScale,
-	SignedDimensionValue,
 	SystemConstants,
 	TokenExtensions,
 	TrackingScale,
@@ -102,16 +98,7 @@ function tagRecord<T, U>(record: Record<string, T>, tag: (leaf: T) => U): Record
  * that is what `source: 'system'` already means, so this is the single place that fact turns into
  * forty payloads rather than forty hand-written literals inside `system-constants.ts`.
  */
-function tagSystemConstants(raw: {
-	spacing: { source: 'system'; values: Record<string, DimensionValue> };
-	opacity: { source: 'system'; values: Record<string, number> };
-	motion: {
-		source: 'system';
-		values: { duration: Record<string, DurationValue>; easing: Record<string, CubicBezierValue> };
-	};
-	focusRing: { source: 'system'; values: { width: DimensionValue; offset: SignedDimensionValue } };
-	zIndex: { source: 'system'; values: Record<string, number> };
-}): SystemConstants {
+function tagSystemConstants(raw: UntaggedSystemConstants): SystemConstants {
 	return {
 		spacing: {
 			source: 'system',
