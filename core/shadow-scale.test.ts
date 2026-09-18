@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import type { Oklch } from './oklch';
+import { isInSrgb, type Oklch } from './oklch';
 import { shadowScale } from './shadow-scale';
 
 const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
@@ -99,17 +99,18 @@ describe('shadowScale', () => {
 	});
 
 	/**
-	 * Two independent reasons, asserted separately, because either one alone would let the other
-	 * regress silently. The colour moves because the surface moves. The alpha and blur move because
-	 * a shadow is light the surface is not receiving, and a near-black page has very little to take
-	 * away: the alpha that reads as depth on white reads as nothing over a dark page.
+	 * What separates a dark page's shadow from a light one's is mostly opacity, and the ratio is
+	 * where the weight belongs. The colours differ too, but only a little: `SHADOW_MIN_LIGHTNESS` is
+	 * a gamut floor and a dark page already sits close to it, so most of the lightness the surface
+	 * would otherwise carry through is absorbed. Asserting the small difference and calling it the
+	 * headline would pass while the large one regressed.
 	 */
-	it('tints the shadow differently on a light and a dark surface', () => {
-		const light = shadowScale(PAGE_LIGHT, tinted).values.md!.color;
-		const dark = shadowScale(PAGE_DARK, tinted).values.md!.color;
+	it('gives a dark page a different shadow from a light one', () => {
+		const light = shadowScale(PAGE_LIGHT, tinted).values.md!;
+		const dark = shadowScale(PAGE_DARK, tinted).values.md!;
 
-		expect(dark).not.toEqual(light);
-		expect(dark.l).not.toBeCloseTo(light.l, 3);
+		expect(dark.color).not.toEqual(light.color);
+		expect(dark.color.alpha / light.color.alpha).toBeGreaterThan(2);
 	});
 
 	it.each(STEPS)('raises opacity and blur at %s on a dark surface', (step) => {
@@ -147,6 +148,19 @@ describe('shadowScale', () => {
 		expect(STEPS.every((step) => values[step]!.color.alpha > 0)).toBe(true);
 	});
 
+	/**
+	 * A tint outside sRGB is the invisible-tint bug again: the token file reads 0.02 and the browser
+	 * paints whatever it can reach, which on a dark page was 0.0048. Yellow and green bind here, so
+	 * a hue sweep is what makes this catch a change to either constant rather than to one hue.
+	 */
+	it.each([PAGE_LIGHT, PAGE_DARK])('emits a colour a display can actually show', (surface) => {
+		const offGamut = [27, 86, 162.5, 200, 259.8, 300, 340]
+			.map((h) => shadowScale({ ...surface, h }, tinted).values.md!.color)
+			.filter((color) => !isInSrgb(color));
+
+		expect(offGamut).toEqual([]);
+	});
+
 	it('produces the same scale from the same surface', () => {
 		expect(shadowScale(PAGE_LIGHT, tinted)).toEqual(shadowScale({ ...PAGE_LIGHT }, tinted));
 	});
@@ -159,14 +173,17 @@ describe('shadowScale', () => {
 	 *
 	 * Reads the module's import specifiers rather than its whole source, so the docblock stays free
 	 * to name the modules it is explaining its distance from.
+	 *
+	 * An allowlist rather than a list of the three forbidden modules. Naming what is banned disarms
+	 * itself the day one of those files is renamed, and it has to be kept in step with every module
+	 * that ever learns about colour. Naming what is allowed fails on any new import at all, which
+	 * is the moment worth stopping at.
 	 */
-	it('declares no dependency on the colour layer', () => {
+	it('imports only what cannot reach a colour', () => {
 		const source = readFileSync(new URL('./shadow-scale.ts', import.meta.url), 'utf8');
 		const specifiers = [...source.matchAll(/(?:from|import)\s*\(?\s*'([^']+)'/g)].map((m) => m[1]!);
 
 		expect(specifiers).not.toHaveLength(0);
-		expect(specifiers.filter((s) => /semantic-map|semantic-layer|scale-engine/.test(s))).toEqual(
-			[],
-		);
+		expect(new Set(specifiers)).toEqual(new Set(['./brand-seed', './oklch', './token-set']));
 	});
 });

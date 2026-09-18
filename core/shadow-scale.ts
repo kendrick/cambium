@@ -21,6 +21,25 @@ const BASE = [
 const SHADOW_LIGHTNESS = 0.15;
 
 /**
+ * The floor under that, and it is a gamut constraint rather than a taste one.
+ *
+ * A dark page resolves `neutral.1` near lightness 0.188, so the fraction above puts its shadow at
+ * 0.028, and sRGB holds almost no chroma that far down. `SHADOW_CHROMA` would be silently clamped
+ * past by the display, which is the invisible-tint bug again wearing a number that looks right in
+ * the token file.
+ *
+ * Hue 200 binds at every lightness, and swept in two-degree steps it reaches 0.0170 at lightness
+ * 0.10, 0.0204 at 0.12, and 0.0238 at 0.14. So 0.14 is the lowest floor that clears 0.02 at every
+ * hue with room to spare, and a shadow there still sits under a dark page's own lightness.
+ *
+ * The cost is worth stating: a dark page is already near this floor, so the two schemes' shadow
+ * colours end up close together and what really separates them is opacity and blur. #7 records
+ * that. Clamping chroma to the gamut instead would keep the colours far apart and put the dark
+ * scheme back on a tint of 0.0048, which is the black this derivation exists to avoid.
+ */
+const SHADOW_MIN_LIGHTNESS = 0.14;
+
+/**
  * The chroma a tinted shadow carries, stated rather than read off the surface.
  *
  * Reading it off the surface is the obvious implementation and it produces black. `background`
@@ -64,7 +83,7 @@ export function shadowScale(surface: Oklch, character: BrandSeed['shadowCharacte
 	const tinted = (character?.tintFromSurface ?? true) && surface.c > 0;
 
 	const color = {
-		l: surface.l * SHADOW_LIGHTNESS,
+		l: Math.max(SHADOW_MIN_LIGHTNESS, surface.l * SHADOW_LIGHTNESS),
 		c: tinted ? SHADOW_CHROMA : 0,
 		h: tinted ? surface.h : 0,
 	};

@@ -155,10 +155,13 @@ describe('deriveNonColor', () => {
 	});
 
 	/**
-	 * Two independent reasons, which is why both are asserted. `neutral.1` resolves to a different
-	 * colour per scheme, and the derivation separately raises opacity on a dark surface because a
-	 * shadow tuned for a white page is invisible on a near-black one. Either alone would let the
-	 * other regress while this still passed.
+	 * Two reasons, which is why both are asserted: `neutral.1` resolves to a different colour per
+	 * scheme, and the derivation separately raises opacity and blur on a dark surface because a
+	 * shadow tuned for a white page is invisible on a near-black one.
+	 *
+	 * They are not equal partners. `neutral.1` carries the same hue in both schemes, and the gamut
+	 * floor under a shadow's lightness absorbs most of what is left, so the colour difference is
+	 * small and the opacity difference is the one a reader would notice. #7 records that.
 	 */
 	it('gives light and dark different shadows for both of the reasons it should', () => {
 		const { shadow } = derive(crisp);
