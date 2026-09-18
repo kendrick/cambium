@@ -19,10 +19,13 @@ function apcaOf(color, background) {
 /**
  * One step, measured rather than declared. Contrast is stated against step 2 because that is the
  * background Radix states its single published guarantee against, which makes the figures here
- * comparable to the only number Radix actually commits to.
+ * comparable to the only number Radix actually commits to. It is also the background
+ * `core/step-roles.ts` states every floor against, so the same measurement doubles as the
+ * evaluation harness's pass/fail check when `stepRole` is supplied.
  */
-function measureStep(step, color, background) {
+function measureStep(step, color, background, stepRole) {
 	const oklch = readOklch(color);
+	const wcag = contrastFromOklch(oklch, readOklch(background));
 
 	return {
 		step,
@@ -30,9 +33,11 @@ function measureStep(step, color, background) {
 		l: oklch.l,
 		c: oklch.c,
 		h: oklch.h,
-		wcag: contrastFromOklch(oklch, readOklch(background)),
+		wcag,
 		apca: apcaOf(color, background),
 		inSrgb: isInSrgb(oklch),
+		role: stepRole?.role ?? null,
+		failsContrast: stepRole?.minWcagVsStep2 != null && wcag < stepRole.minWcagVsStep2,
 	};
 }
 
@@ -41,11 +46,19 @@ function measureStep(step, color, background) {
  * contrast against the ramp's own step 2. Ramps of other lengths are accepted on purpose: the
  * Tailwind reference runs eleven positional stops and comparing its curve is the entire reason
  * it is rendered at all.
+ *
+ * `stepRoles` is optional and positional, one entry per color at the same index (`STEP_ROLES`
+ * from `core/step-roles.ts` already runs step 1 to 12 in order, so passing it straight through
+ * lines up). Omitting it is what keeps this function's other caller, the Radix/Tailwind taste
+ * reference in `scripts/swatches.mjs`, unchanged: those scales have no step-role table of their
+ * own to check against.
  */
-export function measureRamp(colors) {
+export function measureRamp(colors, stepRoles) {
 	const background = colors[1] ?? colors[0];
 
-	return colors.map((color, index) => measureStep(index + 1, color, background));
+	return colors.map((color, index) =>
+		measureStep(index + 1, color, background, stepRoles?.[index]),
+	);
 }
 
 const cellText = (step) => (step.wcag >= 4.5 ? '#ffffff' : '#111111');
@@ -54,11 +67,14 @@ function renderCell(step) {
 	const l = step.l.toFixed(3);
 	const c = step.c.toFixed(3);
 	const gamut = step.inSrgb ? '' : ' <span class="warn">!</span>';
+	const fail = step.failsContrast ? ' <span class="warn">fails floor</span>' : '';
+	const cellClass = step.failsContrast ? 'cell fail' : 'cell';
 
-	return `<div class="cell" style="background:${step.hex};color:${cellText(step)}">
+	return `<div class="${cellClass}" style="background:${step.hex};color:${cellText(step)}">
 		<b>${step.step}</b>
+		${step.role ? `<span class="role">${step.role}</span>` : ''}
 		<span>${l} / ${c}</span>
-		<span>${step.wcag.toFixed(2)}:1${gamut}</span>
+		<span>${step.wcag.toFixed(2)}:1${gamut}${fail}</span>
 		<span>Lc ${Math.round(step.apca)}</span>
 	</div>`;
 }
@@ -87,6 +103,8 @@ const STYLE = `
 	.cell { flex:1; min-width:0; padding:6px 4px; display:flex; flex-direction:column;
 		gap:1px; font-size:10px; overflow:hidden; }
 	.cell b { font-size:11px; }
+	.cell .role { opacity:0.75; }
+	.cell.fail { outline:2px solid #ff5c5c; outline-offset:-2px; }
 	.warn { color:#ff5c5c; font-weight:700; }
 	@media (max-width:900px) { .cell span { display:none; } }
 `;
