@@ -43,20 +43,23 @@ export const SNIFF_BYTES = 12;
 /**
  * The long edge a reference image is downscaled to before it is stored.
  *
- * This is a cost choice, not an API ceiling, and an earlier version of this comment had that
- * backwards. Every model identifier in this repo is `claude-opus-5`, which the vision documentation
- * puts on the high-resolution tier: long edge up to 2576 px and up to 4784 visual tokens. 1568 is
- * the standard tier's ceiling, for models this project does not use. So the real ceiling here is
- * 2576, and holding to 1568 buys a smaller bill by discarding resolution rather than costing
- * nothing, which is the opposite of what this comment used to claim.
+ * A cost choice, not an API ceiling, and an earlier version of this comment had that backwards.
+ * The vision documentation puts Claude 4.7 and later on a high-resolution tier that takes a long
+ * edge up to 2576 px and up to 4784 visual tokens; every other model gets 1568 px and 1568 tokens.
+ * Which applies is decided by whichever model string the caller runs: `BrandVersionSchema.model` is
+ * `z.string().min(1)` and `SeedRequestInput.model` is a bare `string`, so this module cannot know
+ * the tier and must not assume one.
  *
- * 1568 stays because the consumer reads a brand rather than transcribing it. Colour, type
- * character, radius and shadow all survive it, and the alternative is roughly three times the
- * visual tokens per image on a key the user is paying for.
+ * 1568 is the figure that behaves the same on both. On a standard-tier model it is the ceiling, and
+ * on a high-resolution one it buys a smaller bill by discarding resolution, which is the opposite
+ * of the "costs nothing extra" this comment used to claim. That trade is worth taking because the
+ * consumer reads a brand rather than transcribing it: colour, type character, radius and shadow all
+ * survive 1568, and the alternative is roughly three times the visual tokens per image on a key the
+ * user is paying for.
  *
- * What it costs is worth stating plainly: the discarded detail is gone for good, because only a
- * sha256 of the original is kept. Raising this to 2576 is a one-line change if a screenshot's fine
- * text ever turns out to matter more than the bill.
+ * What it costs is worth stating plainly. The discarded detail is gone for good, because only a
+ * sha256 of the original is kept. Raising this is a one-line change if a screenshot's fine text ever
+ * turns out to matter more than the bill, and it would only help callers already on the higher tier.
  *
  * The research notes' snippet uses 1024, and this still diverges from that on purpose. A UI
  * screenshot is one of the three input kinds issue #22 names, and legible structure is the signal
@@ -73,10 +76,11 @@ export const WEBP_QUALITY = 0.85;
  * alone does not deliver that. A 400x300 PNG is inside the cap and can still carry megabytes of
  * ancillary chunks, so it took the passthrough branch untouched and was stored whole.
  *
- * 5 MB is the strictest of the three documented per-image limits: the Claude API direct allows
- * 10 MB of base64 per image, Bedrock and Vertex allow 5 MB, and a request allows 32 MB in total.
- * Taking the strictest keeps a stored record portable across all three, and nothing this module
- * produces comes near it once an image has actually been re-encoded.
+ * The documentation states two per-image limits, 10 MB of base64 on the Claude API direct and 5 MB
+ * on Bedrock and Vertex, and a separate 32 MB ceiling on a whole request. 5 MB is the smaller of the
+ * two per-image figures, and taking it costs nothing: an image that has actually been re-encoded
+ * lands orders of magnitude under either. Three images at this budget also sit inside the request
+ * ceiling with room to spare, which the per-image figure alone would not guarantee.
  *
  * Exceeding it is not a picker-level refusal first. Re-encoding drops ancillary data along with
  * everything else that is not pixels, so an image that is only fat is fixed rather than turned
@@ -272,7 +276,12 @@ export type IntakeResult =
 			kind: 'too-large';
 			prepared?: never;
 			rejected?: never;
-			/** Both in base64 bytes, which is the unit every documented API limit is stated in. */
+			/**
+			 * Both as stored bytes rather than base64 bytes, so a caller reporting them shows the same
+			 * unit it shows for an image it accepted, and the same one the file has on disk. The budget
+			 * is derived from the documented base64 limit; a person comparing their file against it is
+			 * not.
+			 */
 			oversized: { bytes: number; limit: number };
 	  };
 
@@ -335,11 +344,6 @@ async function sniffStoredType(stored: Blob): Promise<AcceptedImageType> {
 	return sniffed;
 }
 
-/** What `bytes` of binary costs once base64 has padded it to a multiple of four. */
-function base64Length(bytes: number): number {
-	return Math.ceil(bytes / 3) * 4;
-}
-
 /** Decodes only to read a size, so the bitmap is closed before the caller ever sees it. */
 async function decodeSize(
 	codec: ImageCodec,
@@ -389,14 +393,14 @@ export async function prepareReferenceImage(
 	const probe = await decodeSize(codec, file);
 	const fitted = fitWithin(probe.width, probe.height, MAX_EDGE_PX);
 
-	// An image already inside the cap is passed through byte for byte: no resize, no re-encode,
-	// media type unchanged. This is more than an optimisation — `app/readers/local-extract.ts`
-	// samples flat logo regions pixel by pixel to recover a brand colour, and a lossy WebP
-	// re-encode would shift exactly the colour that step is asked to read back.
-	// Inside the pixel cap is not the same as small enough to store. Ancillary PNG chunks carry
-	// arbitrary bytes, so a 400x300 file can be megabytes and would otherwise pass through whole.
-	// Re-encoding keeps the pixels and drops everything else, which fixes that case rather than
-	// refusing it.
+	// Passing a file through untouched needs it to be small on both counts, and the pixel cap is only
+	// one of them. Ancillary PNG chunks carry arbitrary bytes, so a 400x300 file can be megabytes and
+	// would otherwise be stored whole; re-encoding keeps the pixels and drops everything that is not
+	// pixels, which fixes that file rather than refusing it.
+	//
+	// Passing through is worth the second condition rather than always re-encoding, because
+	// `app/readers/local-extract.ts` samples flat logo regions pixel by pixel to recover a brand
+	// colour, and a lossy WebP pass would shift exactly the colour that step is asked to read back.
 	const withinPixelCap = fitted.width === probe.width && fitted.height === probe.height;
 	const passthrough = withinPixelCap && file.size <= MAX_STORED_BYTES;
 	const stored = passthrough ? file : await codec.encode(file, fitted);
@@ -405,10 +409,7 @@ export async function prepareReferenceImage(
 	// this module produces has reached it, and it is here so the limit is enforced rather than
 	// assumed.
 	if (stored.size > MAX_STORED_BYTES) {
-		return {
-			kind: 'too-large',
-			oversized: { bytes: base64Length(stored.size), limit: MAX_ENCODED_BASE64_BYTES },
-		};
+		return { kind: 'too-large', oversized: { bytes: stored.size, limit: MAX_STORED_BYTES } };
 	}
 
 	// Both branches take the type off the bytes being stored, never off the type the encoder was

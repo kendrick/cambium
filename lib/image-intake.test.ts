@@ -536,8 +536,11 @@ describe('prepareReferenceImage', () => {
 
 		expect(result.kind).toBe('too-large');
 		if (result.kind !== 'too-large') return;
-		expect(result.oversized.limit).toBe(MAX_ENCODED_BASE64_BYTES);
-		expect(result.oversized.bytes).toBeGreaterThan(MAX_ENCODED_BASE64_BYTES);
+		// Reported as stored bytes, the unit the accepted-image row uses, rather than as the base64
+		// figure the budget is derived from.
+		expect(result.oversized.bytes).toBe(6_000_000 + WEBP_HEAD.length);
+		expect(result.oversized.bytes).toBeGreaterThan(result.oversized.limit);
+		expect(result.oversized.limit).toBeLessThan(MAX_ENCODED_BASE64_BYTES);
 	});
 
 	it('closes every bitmap the codec hands out', async () => {

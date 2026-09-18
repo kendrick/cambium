@@ -100,12 +100,15 @@ const FAILED_DECODE_BUDGET = MAX_REFERENCE_IMAGES;
  */
 const MAX_SPELLED_OUT_REJECTIONS = 3;
 
-function mB(bytes: number): string {
-	return `${(bytes / 1_000_000).toFixed(1)} MB`;
-}
-
-function kB(bytes: number): string {
-	return `${Math.round(bytes / 1000)} kB`;
+/**
+ * One formatter, because two of them disagreed. The row printed raw blob bytes as kB while the
+ * over-budget message printed base64-inflated bytes as MB, so a 6 MB file was reported as "too big
+ * at 8.0 MB" against a ceiling the user had no way to compare it to.
+ */
+function sizeLabel(bytes: number): string {
+	return bytes >= 1_000_000
+		? `${(bytes / 1_000_000).toFixed(1)} MB`
+		: `${Math.round(bytes / 1000)} kB`;
 }
 
 /**
@@ -218,8 +221,14 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 
 				if (result.kind === 'too-large') {
 					rejected.push(
-						`${file.name} is too big to store at ${mB(result.oversized.bytes)}, against a ${mB(result.oversized.limit)} ceiling.`,
+						`${file.name} is too big to store at ${sizeLabel(result.oversized.bytes)}, against a ${sizeLabel(result.oversized.limit)} ceiling.`,
 					);
+
+					// Spends the budget like a failed decode does, because it cost the same work and more: a
+					// decode, an encode, and a second decode, with no image to show for it. Exempting it left
+					// the run bounded only by how many files were picked, which is the hole this budget was
+					// added to close.
+					failedDecodes += 1;
 					continue;
 				}
 
@@ -363,13 +372,6 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 	return (
 		<form
 			className="flex w-full flex-col gap-6"
-			// The brand site field is `type="url"` for the keyboard it summons on a phone, and native
-			// constraint validation then refused to submit the form over it. That field is optional, is
-			// never fetched, and is not even stored yet, so a typo in it was blocking the one thing this
-			// route exists to do: "acme.com" is how people write a domain, and it left the images
-			// unsaved with no message at all, because `save` never ran. Validation this form actually
-			// relies on is the submit button's own disabled state.
-			noValidate
 			onSubmit={(event) => {
 				event.preventDefault();
 				void save();
@@ -411,7 +413,7 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 							{/* The figures come off the stored blob rather than off the resize that was asked
 							    for, which is the one thing that makes them true. See `lib/image-intake.ts`. */}
 							<span className="text-muted-foreground text-xs tabular-nums">
-								{prepared.width} × {prepared.height}, {kB(prepared.bytes)}
+								{prepared.width} × {prepared.height}, {sizeLabel(prepared.bytes)}
 							</span>
 							<label className="sr-only" htmlFor={`${pickerId}-tag-${index}`}>
 								Type of {name}
@@ -458,7 +460,16 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 					inputMode="url"
 					onChange={(event) => setBrandUrl(event.target.value)}
 					placeholder="https://example.com"
-					type="url"
+					// Deliberately not `type="url"`. That attribute brought native constraint validation with
+					// it, which refused to submit the form over a field that is optional, is never fetched,
+					// and is not even stored yet: "acme.com" is how people write a domain, and typing it left
+					// the images unsaved with no message at all, because `save` never ran. `inputMode` is
+					// what summons the URL keyboard on a phone, so nothing is lost by dropping the type.
+					//
+					// `noValidate` on the form was the first fix and is worse. It would switch validation off
+					// for every field this form ever grows, so the next one added with a real constraint
+					// would fail open and nothing would say so.
+					type="text"
 					value={brandUrl}
 				/>
 				{/* Captured and never fetched. Nothing on this route makes a network call, and crawling a
