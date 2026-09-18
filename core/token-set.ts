@@ -29,6 +29,39 @@ export const RampSchema = z
 /** An alias names a ramp and a step within it, so it can be resolved and checked rather than trusted. */
 const ALIAS_PATTERN = /^([A-Za-z][\w-]*)\.(\d{1,2})$/;
 
+/**
+ * `primitives` is a plain object, so a bare index walks the prototype chain: an alias of
+ * `constructor.1` hands back a truthy function whose `length` is 1, which satisfies both an
+ * existence check and a step bound without any such ramp being declared.
+ *
+ * One copy, here, because `semantic-layer.ts` needs the same guard. It held its own for as long as
+ * this file belonged to an unstarted ticket, and two copies of a trap this quiet are two chances to
+ * fix only one of them.
+ */
+export function declaredRamp<T>(primitives: Record<string, T>, name: string): T | undefined {
+	return Object.hasOwn(primitives, name) ? primitives[name] : undefined;
+}
+
+/**
+ * The step an alias names, or undefined when nothing is there.
+ *
+ * Splits on the last dot rather than re-running `ALIAS_PATTERN`. Form is the schema's job and it
+ * has already run by the time a parsed scheme exists, so the only question left for a caller
+ * holding one is whether the target is present. `checkAliasesResolve` keeps its own walk over
+ * `declaredRamp` instead of calling this, because it has to tell an unknown ramp apart from a step
+ * out of range to report them differently.
+ */
+export function stepForAlias<T>(
+	primitives: Record<string, readonly T[]>,
+	alias: string,
+): T | undefined {
+	const dot = alias.lastIndexOf('.');
+
+	if (dot < 0) return undefined;
+
+	return declaredRamp(primitives, alias.slice(0, dot))?.[Number(alias.slice(dot + 1)) - 1];
+}
+
 export const SemanticLayerSchema = z
 	.record(z.string().min(1), z.string().regex(ALIAS_PATTERN, 'alias must be in ramp.step form'))
 	.refine((layer) => Object.keys(layer).length > 0, { message: 'semantic layer cannot be empty' });
@@ -51,12 +84,7 @@ function checkAliasesResolve(
 		if (!match) continue;
 
 		const [, rampName, rawStep] = match;
-		// `primitives` is a plain object, so a bare index walks the prototype chain: an alias of
-		// `constructor.1` returns a truthy function whose `length` is 1 and satisfies both checks
-		// below without any such ramp being declared.
-		const ramp = Object.hasOwn(value.primitives, rampName!)
-			? value.primitives[rampName!]
-			: undefined;
+		const ramp = declaredRamp(value.primitives, rampName!);
 		const step = Number(rawStep);
 
 		if (!ramp) {
@@ -224,7 +252,7 @@ export const SchemeSchema = z
 	.strictObject({
 		primitives: PrimitiveLayerSchema,
 		semantic: SemanticLayerSchema,
-		shadow: ShadowScaleSchema.optional(),
+		shadow: ShadowScaleSchema,
 	})
 	.superRefine(checkAliasesResolve);
 
@@ -247,15 +275,15 @@ export const TokenSetSchema = z
 		primitives: PrimitiveLayerSchema,
 		semantic: SemanticLayerSchema,
 		schemes: z.strictObject({ light: SchemeSchema, dark: SchemeSchema }),
-		radius: RadiusScaleSchema.optional(),
-		typography: TypographySchema.optional(),
-		tracking: TrackingScaleSchema.optional(),
-		shadow: ShadowScaleSchema.optional(),
-		spacing: SpacingScaleSchema.optional(),
-		opacity: OpacityScaleSchema.optional(),
-		motion: MotionScaleSchema.optional(),
-		focusRing: FocusRingSchema.optional(),
-		zIndex: ZIndexScaleSchema.optional(),
+		radius: RadiusScaleSchema,
+		typography: TypographySchema,
+		tracking: TrackingScaleSchema,
+		shadow: ShadowScaleSchema,
+		spacing: SpacingScaleSchema,
+		opacity: OpacityScaleSchema,
+		motion: MotionScaleSchema,
+		focusRing: FocusRingSchema,
+		zIndex: ZIndexScaleSchema,
 	})
 	.superRefine(checkAliasesResolve);
 

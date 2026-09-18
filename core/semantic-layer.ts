@@ -1,7 +1,9 @@
+import type { BrandSeed } from './brand-seed';
+import { deriveNonColor } from './derive-non-color';
 import { contrastFromOklch, type Oklch } from './oklch';
 import type { RampSet, SchemeName } from './scale-engine';
 import { type ContrastingPair, type SemanticAlias, SEMANTIC_MAP } from './semantic-map';
-import type { Ramp, RampStep, Scheme, TokenSet } from './token-set';
+import { type ColorScheme, type RampStep, stepForAlias, type TokenSet } from './token-set';
 
 /**
  * One map, both schemes, resolved down to one alias per token per scheme.
@@ -19,16 +21,29 @@ import type { Ramp, RampStep, Scheme, TokenSet } from './token-set';
  * `SemanticLayerSchema` to accept it.
  *
  * The top level carries light rather than a scheme of its own, matching `app/globals.css` and
- * every shadcn theme: `:root` holds light and `.dark` overrides it.
+ * every shadcn theme: `:root` holds light and `.dark` overrides it. That holds for the shadow
+ * scale too, which is the one non-colour category a scheme carries because it is the one that
+ * depends on a colour.
+ *
+ * The seed comes in alongside the ramps because #7's nine non-colour categories derive from it and
+ * the schema requires them, so what this returned before is no longer a `TokenSet`. The colour
+ * halves are built first: `deriveNonColor` resolves `background` out of each of them to tint that
+ * scheme's shadow.
  */
-export function buildTokenSet(schemes: Record<SchemeName, RampSet>): TokenSet {
-	const light = { primitives: schemes.light, semantic: semanticFor(schemes.light) };
-	const dark = { primitives: schemes.dark, semantic: semanticFor(schemes.dark) };
+export function buildTokenSet(schemes: Record<SchemeName, RampSet>, seed: BrandSeed): TokenSet {
+	const light: ColorScheme = { primitives: schemes.light, semantic: semanticFor(schemes.light) };
+	const dark: ColorScheme = { primitives: schemes.dark, semantic: semanticFor(schemes.dark) };
+	const { shadow, ...categories } = deriveNonColor(seed, { light, dark });
 
 	return {
 		primitives: light.primitives,
 		semantic: light.semantic,
-		schemes: { light, dark },
+		shadow: shadow.light,
+		schemes: {
+			light: { ...light, shadow: shadow.light },
+			dark: { ...dark, shadow: shadow.dark },
+		},
+		...categories,
 	};
 }
 
@@ -73,29 +88,6 @@ function higherContrast(ramps: RampSet, pair: ContrastingPair): SemanticAlias {
 }
 
 /**
- * Split on the last dot rather than re-running the alias pattern `token-set.ts` keeps private.
- * Form is that schema's job, and it has already run by the time a `Scheme` exists. The only
- * question left here is whether the target is present.
- *
- * `primitives` is a plain object, so a bare index walks the prototype chain and an alias of
- * `constructor.1` hands back a function that reads as a ramp. `checkAliasesResolve` in
- * `token-set.ts` guards the same trap the same way. The two stay separate copies because
- * `token-set.ts` is #7's file and cannot be edited here, so it cannot be pointed at a shared parser
- * either. Fold them together when #7 lands.
- */
-function stepForAlias(primitives: Record<string, Ramp>, alias: string): RampStep | undefined {
-	const dot = alias.lastIndexOf('.');
-
-	if (dot < 0) return undefined;
-
-	const rampName = alias.slice(0, dot);
-
-	if (!Object.hasOwn(primitives, rampName)) return undefined;
-
-	return primitives[rampName]?.[Number(alias.slice(dot + 1)) - 1];
-}
-
-/**
  * Every semantic token, flattened to the colour it names.
  *
  * This is what an export adapter consumes: aliases are how the layer is authored and how it stays
@@ -106,8 +98,12 @@ function stepForAlias(primitives: Record<string, Ramp>, alias: string): RampStep
  * Throws instead of skipping. Only a hand-built scheme reaches the throw, because `SchemeSchema`
  * rejects a dangling alias and the map is a compile-time constant. The alternative is a token set
  * with a hole in it, and a hole reaches an adapter looking like a colour.
+ *
+ * Takes the colour half of a scheme rather than a whole `Scheme`. `deriveNonColor` calls this to
+ * tint the shadow that a full `Scheme` then requires, so taking the full shape there would be
+ * circular.
  */
-export function resolveScheme(scheme: Scheme): Record<string, Oklch> {
+export function resolveScheme(scheme: ColorScheme): Record<string, Oklch> {
 	const resolved: Record<string, Oklch> = {};
 
 	for (const [token, alias] of Object.entries(scheme.semantic)) {
