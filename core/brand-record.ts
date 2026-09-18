@@ -18,8 +18,16 @@ import { TokenSetSchema } from './token-set';
  * each of the two schemes. Without this bump that record claims a version
  * matching the current format and then dies on a Zod issue list, instead of reaching the loud
  * mismatch this number exists to trigger.
+ *
+ * 6 is #9's `$extensions` payload, required on every token in a `TokenSetSchema`: every ramp step,
+ * every semantic entry, and every non-colour leaf. Nothing was removed, but a version-5 archive
+ * carries none of it, so it fails once per token inside `BrandRecordSchema.parse` rather than
+ * anywhere a reader could act on. No migration shim: the payload is computed from the seed and the
+ * derivation path, and a stored set holds neither, so backfilling one would be inventing the very
+ * provenance the field exists to record. `app/storage/indexed-db-record-store.ts` throws on the
+ * mismatch and the export archive stays the migration path.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /**
  * Only the downscaled image actually sent to the model is stored, plus a hash of the
