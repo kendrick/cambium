@@ -332,10 +332,9 @@ export async function prepareReferenceImage(
 		return { kind: 'unsupported', rejected: { detected: describeRejectedBytes(head) } };
 	}
 
-	// Now the whole file, and only now. `originalHash` identifies the file the user actually picked,
-	// so it has to run over every byte; this reorders that read rather than avoiding it.
-	const original = new Uint8Array(await file.arrayBuffer());
-
+	// Decode before buffering anything. A twelve-byte signature only proves the file claims to be a
+	// PNG; a truncated or corrupt one carrying a valid header clears that gate and fails here, and
+	// the decoder settles it from the blob without the whole file being read into memory first.
 	const probe = await decodeSize(codec, file);
 	const fitted = fitWithin(probe.width, probe.height, MAX_EDGE_PX);
 
@@ -362,7 +361,13 @@ export async function prepareReferenceImage(
 	// this second read exists to close, so skipping it on one branch would reopen it there.
 	const landed = await decodeSize(codec, stored);
 
+	// The whole file, last of all. Every way this function can refuse a file has now been tried, and
+	// `decodeSize` closes each bitmap before it returns, so nothing else large is alive while these
+	// bytes are held. `originalHash` identifies the file the user actually picked, so it has to run
+	// over every one of them; this defers that read rather than avoiding it.
+	const original = new Uint8Array(await file.arrayBuffer());
 	const originalHash = `sha256:${await sha256Hex(original)}`;
+
 	// On the passthrough path `stored` is `file`, so its bytes are the ones already in hand. Reading
 	// it again would buffer the whole file a second time, which is the common case: every image
 	// small enough to keep takes this branch.

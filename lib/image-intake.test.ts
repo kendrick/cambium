@@ -350,6 +350,30 @@ describe('prepareReferenceImage', () => {
 		expect(wholeFileReads).toBe(0);
 	});
 
+	/**
+	 * A valid PNG signature in front of a body the decoder cannot read is the case the twelve-byte
+	 * gate cannot catch. Decoding settles it from the blob, so the whole file must not have been
+	 * buffered by the time that failure arrives.
+	 */
+	it('does not buffer the whole file before the decode rejects it', async () => {
+		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
+		let wholeFileReads = 0;
+		const read = file.arrayBuffer.bind(file);
+		file.arrayBuffer = async () => {
+			wholeFileReads += 1;
+
+			return read();
+		};
+		const codec = fakeCodec({
+			async decode() {
+				throw new Error('the source image could not be decoded');
+			},
+		});
+
+		await expect(prepareReferenceImage(file, codec)).rejects.toThrow(/could not be decoded/);
+		expect(wholeFileReads).toBe(0);
+	});
+
 	// The other half of the reorder: an accepted file still gets read in full, once, because
 	// `originalHash` has to run over every byte.
 	it('buffers the whole file once the signature is accepted', async () => {

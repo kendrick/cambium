@@ -28,10 +28,10 @@ const RECORD_PARAM = 'record';
  * that cannot be read is still on disk, and telling somebody their work is gone is how the work
  * then actually gets deleted.
  *
- * `unavailable` is separate from `unreadable` for the opposite reason. When the database will not
- * open at all, nothing was read, so nothing is known: there may be no record and no stored data.
- * Folding it into `unreadable` would assert a record exists on the evidence of an id in the address
- * bar, which is the overclaim the split above exists to prevent.
+ * `unavailable` is separate from `unreadable` for the opposite reason. Where nothing was read,
+ * nothing is known: there may be no record and no stored data. Folding that into `unreadable` would
+ * assert a record exists on the evidence of an id in the address bar, which is the overclaim the
+ * split above exists to prevent.
  */
 type SavedRecord =
 	| { kind: 'loading' }
@@ -46,6 +46,26 @@ type SavedRecord =
  * Extracted at the fifth branch rather than the fourth, which is where the repetition stopped being
  * cheaper than the indirection.
  */
+/**
+ * Whether a read failed because a row came back and would not parse.
+ *
+ * `RecordStore.get` awaits the row and then runs `BrandRecordSchema.parse` on it inside one
+ * promise, so a rejection on its own says nothing about whether a row exists: an aborted
+ * transaction rejects the same way. Only a schema rejection is evidence that storage handed
+ * something over, and that evidence is exactly what `unreadable` spends when it tells somebody
+ * their record is still there and not to clear it.
+ *
+ * Matched by name rather than by `instanceof`, because importing zod to narrow one error would put
+ * 93 kB into a bundle ADR-0002 leaves about 5 kB in. `app/storage/storage-estimate.ts` argues for
+ * name matching already; the reason is stronger here.
+ *
+ * It fails toward claiming less. If zod ever renames its error, every read failure reads as
+ * `unavailable`, which says nothing about existence rather than saying something false.
+ */
+function isSchemaRejection(error: unknown): boolean {
+	return error instanceof Error && error.name === 'ZodError';
+}
+
 function Outcome({ action, children }: { action: string; children: React.ReactNode }) {
 	return (
 		<div className="flex flex-col items-start gap-4">
@@ -103,8 +123,13 @@ export function LandingRoute() {
 					result = record
 						? { kind: 'found', imageCount: record.images.length }
 						: { kind: 'missing' };
-				} catch {
-					result = { kind: 'unreadable' };
+				} catch (error) {
+					// A rejection here is not proof a record exists. `get` reads the row and parses it in
+					// one promise, so an aborted transaction rejects exactly like a row that will not
+					// parse, and only the second one means anything came back. Sending both to
+					// `unreadable` would put "it is still in this browser" in front of somebody on no
+					// evidence, which is the original bug inverted rather than fixed.
+					result = isSchemaRejection(error) ? { kind: 'unreadable' } : { kind: 'unavailable' };
 				}
 			} catch {
 				result = { kind: 'unavailable' };
@@ -159,11 +184,12 @@ export function LandingRoute() {
 	if (saved.kind === 'unavailable') {
 		return (
 			<Outcome action="Start a new brand">
-				{/* Says nothing about whether the record exists, because nothing was read. Private
-				    browsing and blocked site data are the two causes worth naming. */}
+				{/* Says nothing about whether the record exists, because nothing came back. This covers a
+				    database that would not open and a read that failed partway, and neither one proves
+				    anything is stored. */}
 				<p className="text-sm">
-					This browser would not open its storage, so nothing could be looked up. Private browsing
-					and blocked site data are the usual causes.
+					Cambium could not reach its storage, so nothing could be looked up. Private browsing and
+					blocked site data are the usual causes.
 				</p>
 			</Outcome>
 		);
