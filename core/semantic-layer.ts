@@ -3,7 +3,7 @@ import { deriveNonColor } from './derive-non-color';
 import { contrastFromOklch, type Oklch } from './oklch';
 import type { RampSet, SchemeName } from './scale-engine';
 import { type ContrastingPair, type SemanticAlias, SEMANTIC_MAP } from './semantic-map';
-import { type ColorScheme, type RampStep, stepForAlias, type TokenSet } from './token-set';
+import { type ColorScheme, stepForAlias, type TokenSet } from './token-set';
 
 /**
  * One map, both schemes, resolved down to one alias per token per scheme.

@@ -81,8 +81,8 @@ describe('deriveNonColor', () => {
 	it('emits four derived categories and five constants', () => {
 		const tokens = derive(crisp);
 
-		expect(Object.keys(tokens).sort()).toEqual(
-			['radius', 'typography', 'tracking', 'shadow', ...SYSTEM].sort(),
+		expect(new Set(Object.keys(tokens))).toEqual(
+			new Set(['radius', 'typography', 'tracking', 'shadow', ...SYSTEM]),
 		);
 	});
 

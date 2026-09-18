@@ -1,4 +1,4 @@
-import type { CubicBezier, Dimension, Duration, SystemConstants } from './token-set';
+import type { SystemConstants } from './token-set';
 
 /**
  * Five design system categories that #7 names exhaustively and that no seed informs.

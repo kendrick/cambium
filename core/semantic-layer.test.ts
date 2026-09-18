@@ -338,26 +338,24 @@ describe('foregrounds that sit on a solid fill', () => {
  * carries.
  */
 describe('buildTokenSet non-colour categories', () => {
-	const COLOUR_KEYS = ['primitives', 'semantic', 'schemes'];
+	const COLOUR_KEYS = new Set(['primitives', 'semantic', 'schemes']);
 
 	it('carries every category an export adapter reads by name', () => {
 		const tokenSet = build(blue);
 
-		expect(
-			Object.keys(tokenSet)
-				.filter((key) => !COLOUR_KEYS.includes(key))
-				.sort(),
-		).toEqual([
-			'focusRing',
-			'motion',
-			'opacity',
-			'radius',
-			'shadow',
-			'spacing',
-			'tracking',
-			'typography',
-			'zIndex',
-		]);
+		expect(new Set(Object.keys(tokenSet).filter((key) => !COLOUR_KEYS.has(key)))).toEqual(
+			new Set([
+				'focusRing',
+				'motion',
+				'opacity',
+				'radius',
+				'shadow',
+				'spacing',
+				'tracking',
+				'typography',
+				'zIndex',
+			]),
+		);
 	});
 
 	/**
@@ -370,7 +368,7 @@ describe('buildTokenSet non-colour categories', () => {
 		const tokenSet = build(blue) as unknown as Record<string, { source?: string }>;
 
 		for (const [key, value] of Object.entries(tokenSet)) {
-			if (COLOUR_KEYS.includes(key)) continue;
+			if (COLOUR_KEYS.has(key)) continue;
 
 			expect(['derived', 'system']).toContain(value.source);
 		}
