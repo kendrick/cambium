@@ -595,6 +595,53 @@ describe('the workspace store', () => {
 		expect(store.getState().draftSeed).toEqual(seedWith(77));
 	});
 
+	it('commits the draft that was requested, not the one that arrives before its turn', async () => {
+		const { store, writeInFlight, releaseWrite } = gatedWorkspace();
+
+		store.getState().open(makeRecord());
+
+		const first = store.getState().commit();
+
+		// The second commit waits behind the first write. What it persists has to be the draft that was
+		// on screen when it was asked for, not whatever the user typed while it sat in the queue, or the
+		// provenance handed to it describes a seed nobody attached it to.
+		await writeInFlight;
+
+		const second = store.getState().commit(PROVENANCE);
+
+		store.getState().editSeed({ keyColors: seedWith(42).keyColors });
+		releaseWrite();
+
+		await first;
+
+		const next = await second;
+
+		expect(next.versions).toHaveLength(3);
+		expect(next.versions[2]).toMatchObject({ seed: seedWith(259.8), ...PROVENANCE });
+	});
+
+	it('refuses to follow a version stamped ahead of this clock', async () => {
+		// A record imported from a device whose clock ran ahead. `BrandRecordSchema` rejects a version
+		// stamped before its predecessor, so this commit cannot be written however it is stamped. The
+		// store says so itself rather than letting a schema rejection surface from inside `put`.
+		const ahead = makeRecord([makeVersion({ createdAt: '2027-01-01T00:00:00.000Z' })]);
+		const { store, recordStore } = openWorkspace(ahead);
+
+		await expect(store.getState().commit()).rejects.toThrow(/clock/);
+		expect(recordStore.puts).toHaveLength(0);
+		expect(store.getState().record).toBe(ahead);
+	});
+
+	it('carries provenance from the version each commit was requested against', async () => {
+		const { store } = openWorkspace();
+
+		const [, second] = await Promise.all([store.getState().commit(), store.getState().commit()]);
+
+		// Both were asked for while version 1 was active, so both carry version 1's model and neither
+		// claims a response, whatever the record looked like by the time each one ran.
+		expect(second.versions[2]).toMatchObject({ model: 'claude-opus-5', rawResponse: null });
+	});
+
 	it('closes a record without touching storage', () => {
 		const { store, recordStore } = openWorkspace();
 

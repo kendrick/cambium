@@ -38,6 +38,23 @@ export type CommitProvenance = Pick<
 	'provider' | 'model' | 'promptVersion' | 'rawResponse' | 'fontTable'
 >;
 
+/**
+ * A commit frozen at the moment it was requested: what the new version holds, plus the two counters
+ * that decide afterwards whether the finished write still belongs to the workspace on screen.
+ * `session` and `selection` are bookkeeping and reach no stored field.
+ *
+ * Only the record a commit appends to is read later, because that has to reflect any commit that
+ * got there first.
+ */
+type CommitRequest = {
+	provenance: CommitProvenance | undefined;
+	session: number;
+	selection: number;
+	activeOrdinal: number | null;
+	draftSeed: BrandSeed | null;
+	preset: Interpretation;
+};
+
 export type WorkspaceState = {
 	/** The open record, as last written to storage. Never holds uncommitted edits. */
 	record: BrandRecord | null;
@@ -235,20 +252,22 @@ export function createWorkspaceStore({
 	now = () => new Date().toISOString(),
 }: WorkspaceStoreOptions): StoreApi<WorkspaceState> {
 	return createStore<WorkspaceState>()((set, get) => {
-		async function appendVersion(
-			provenance: CommitProvenance | undefined,
-			requestedIn: number,
-		): Promise<BrandRecord> {
-			// A queued commit belongs to the workspace that asked for it. `commit` captures the session
+		async function appendVersion(request: CommitRequest): Promise<BrandRecord> {
+			const { provenance, activeOrdinal, draftSeed, preset } = request;
+
+			// A queued commit belongs to the workspace that asked for it. `commit` captures the request
 			// synchronously and this body runs a turn later at the earliest, so by now the workspace can
 			// be somewhere else entirely, and appending here would write the commit into whichever
 			// record happens to be open, provenance and all.
-			if (session !== requestedIn) {
+			if (session !== request.session) {
 				throw new Error('the workspace moved on before this commit ran, so nothing was written');
 			}
 
-			const selectedIn = selection;
-			const { record, activeOrdinal, draftSeed, preset } = get();
+			// The record is the one thing read fresh rather than captured, because it says where the
+			// version goes rather than what it holds. A commit queued behind another has to count its
+			// ordinal off what that one wrote, which is the whole reason the queue exists. Ordinals are
+			// stable under appending, so the requested `activeOrdinal` still names the same version here.
+			const { record } = get();
 
 			if (!record) {
 				throw new Error('nothing to commit: no record is open');
@@ -278,9 +297,29 @@ export function createWorkspaceStore({
 				resolved = carryProvenance(active);
 			}
 
+			const previous = record.versions.at(-1);
+			const createdAt = now();
+
+			// `BrandRecordSchema` rejects a version stamped before the one it follows, so a record whose
+			// newest version is stamped ahead of this clock cannot be committed to at all. Refusing here
+			// rather than letting the schema reject inside `put` is the trade the quota error makes one
+			// screen down: a caller can only explain a clock conflict it can tell apart from a
+			// malformed record.
+			//
+			// Stamping the previous instant instead lets the commit through, and was the first fix
+			// tried. It writes a `createdAt` that does not say when the version was made, which is the
+			// one thing that field is for, and it compounds, because every later commit then clamps to
+			// the same future instant until the clock catches up. Letting a record be committed to after
+			// its clock is corrected is a repair on the stored record, which `core/` owns.
+			if (previous && Date.parse(createdAt) < Date.parse(previous.createdAt)) {
+				throw new Error(
+					`this record's newest version is stamped ${previous.createdAt}, ahead of this device's clock, so nothing can follow it yet`,
+				);
+			}
+
 			const version: BrandVersion = {
 				...resolved,
-				createdAt: now(),
+				createdAt,
 				ordinal: record.versions.length + 1,
 				seed: draftSeed,
 				// Derived tokens are recomputed, never stored. Writing them would put the same facts in
@@ -305,12 +344,12 @@ export function createWorkspaceStore({
 			// reinstating this record afterwards would pair it with a newer record's draft and preset:
 			// one workspace showing two records at once. The write itself stands either way, which is
 			// why the finished record still goes back to the caller.
-			if (session === requestedIn) {
+			if (session === request.session) {
 				// Taking the record is always right, because it is the one just written. Moving the active
 				// version is not: re-pointing the view stays inside the session, so it can land mid-write,
 				// and overriding it would leave the workspace naming the new version while showing the
 				// seed and preset of the version the user actually chose.
-				const reselected = selection !== selectedIn;
+				const reselected = selection !== request.selection;
 
 				// A partial `set` rather than `workspaceFor`, which every other path here uses. That helper
 				// rebuilds the draft from a version, and `editSeed` can land mid-write, so rebuilding
@@ -417,15 +456,25 @@ export function createWorkspaceStore({
 			},
 
 			commit(provenance) {
-				// Captured here rather than at the queue's turn, which is already too late: `open` and
-				// `close` run in between, and a commit that read the session then would follow the
-				// workspace instead of the request that created it.
-				const requestedIn = session;
+				// Captured here rather than at the queue's turn, which is already too late. Everything a
+				// commit persists belongs to the moment it was asked for: the user can select another
+				// version or keep typing while this waits behind an earlier write, and a commit that read
+				// the workspace then would persist that instead, under provenance describing a seed it
+				// never saw.
+				const { activeOrdinal, draftSeed, preset } = get();
+				const request: CommitRequest = {
+					provenance,
+					session,
+					selection,
+					activeOrdinal,
+					draftSeed,
+					preset,
+				};
 
 				// Both arms run the commit: a rejected one must not wedge every commit behind it.
 				const run = queue.then(
-					() => appendVersion(provenance, requestedIn),
-					() => appendVersion(provenance, requestedIn),
+					() => appendVersion(request),
+					() => appendVersion(request),
 				);
 
 				// Swallowed for the queue's own bookkeeping only. `run` still rejects for the caller.
