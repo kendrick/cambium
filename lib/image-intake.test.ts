@@ -18,6 +18,8 @@ const GIF_HEAD = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0, 0, 0, 0, 0, 0];
 const SVG_HEAD = Array.from('<svg xmlns').map((char) => char.charCodeAt(0));
 const HEIC_HEAD = [0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63];
 const AVIF_HEAD = [0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66];
+const HEIF_MIF1_HEAD = [0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31];
+const HEIF_MSF1_HEAD = [0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x73, 0x66, 0x31];
 const PDF_HEAD = Array.from('%PDF-1.7').map((char) => char.charCodeAt(0));
 
 function bytes(values: number[]): Uint8Array<ArrayBuffer> {
@@ -86,6 +88,13 @@ describe('describeRejectedBytes', () => {
 
 	it('names AVIF', () => {
 		expect(describeRejectedBytes(bytes(AVIF_HEAD))).toBe('AVIF');
+	});
+
+	// mif1 and msf1 are the generic HEIF container brands and carry no codec claim, so calling them
+	// HEIC names a format the file may not be.
+	it('names a generic HEIF container HEIF rather than HEIC', () => {
+		expect(describeRejectedBytes(bytes(HEIF_MIF1_HEAD))).toBe('HEIF');
+		expect(describeRejectedBytes(bytes(HEIF_MSF1_HEAD))).toBe('HEIF');
 	});
 
 	it('names SVG', () => {
@@ -291,6 +300,71 @@ describe('prepareReferenceImage', () => {
 		expect(result.prepared.width).toBe(1566);
 		expect(result.prepared.height).toBe(1174);
 		expect(fitWithin(4000, 3000, MAX_EDGE_PX)).toEqual({ width: 1568, height: 1176 });
+	});
+
+	/**
+	 * `convertToBlob` falls back to PNG wherever the UA cannot encode the type it was handed, and
+	 * reports the fallback on the blob. Declaring `image/webp` regardless put PNG bytes under a WebP
+	 * header, which `app/readers/anthropic-request.ts` forwards to the Messages API as the image's
+	 * media type. This fails if the encode branch ever assumes its own output type again.
+	 */
+	it('labels the encoded blob by what came back, not by what was requested', async () => {
+		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
+		const codec = fakeCodec({
+			async decode(blob) {
+				return blob === file
+					? { width: 4000, height: 3000, close() {} }
+					: { width: 1568, height: 1176, close() {} };
+			},
+			// A browser that cannot encode WebP from a canvas hands back PNG and says so.
+			async encode() {
+				return new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
+			},
+		});
+
+		const result = await prepareReferenceImage(file, codec);
+
+		expect(result.kind).toBe('prepared');
+		if (result.kind !== 'prepared') return;
+		expect(result.prepared.mediaType).toBe('image/png');
+		expect(result.prepared.image.downscaled).toMatch(/^data:image\/png;base64,/);
+	});
+
+	// A blob with no type at all still has to be labelled honestly, and only its bytes can say.
+	it('falls back to the encoded bytes when the blob carries no type', async () => {
+		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
+		const codec = fakeCodec({
+			async decode(blob) {
+				return blob === file
+					? { width: 4000, height: 3000, close() {} }
+					: { width: 1568, height: 1176, close() {} };
+			},
+			async encode() {
+				return new Blob([bytes(WEBP_HEAD)]);
+			},
+		});
+
+		const result = await prepareReferenceImage(file, codec);
+
+		expect(result.kind).toBe('prepared');
+		if (result.kind !== 'prepared') return;
+		expect(result.prepared.mediaType).toBe('image/webp');
+	});
+
+	it('refuses to store an encoded blob it cannot name', async () => {
+		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
+		const codec = fakeCodec({
+			async decode(blob) {
+				return blob === file
+					? { width: 4000, height: 3000, close() {} }
+					: { width: 1568, height: 1176, close() {} };
+			},
+			async encode() {
+				return new Blob([bytes(GIF_HEAD)]);
+			},
+		});
+
+		await expect(prepareReferenceImage(file, codec)).rejects.toThrow(/not a PNG, JPEG, or WebP/);
 	});
 
 	it('closes every bitmap the codec hands out', async () => {

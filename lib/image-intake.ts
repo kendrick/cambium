@@ -19,6 +19,12 @@ import type { ReferenceImage } from '../core/brand-record';
 
 export type AcceptedImageType = 'image/png' | 'image/jpeg' | 'image/webp';
 
+export const ACCEPTED_IMAGE_TYPES: readonly AcceptedImageType[] = [
+	'image/png',
+	'image/jpeg',
+	'image/webp',
+];
+
 /**
  * Twelve, because that is where the longest signature this module reads actually ends: WebP's
  * `WEBP` fourcc sits at offset 8, and an ISO base media brand (`heic`, `avif`) sits at 8 as well,
@@ -44,6 +50,10 @@ const JPEG_SIGNATURE = [0xff, 0xd8, 0xff];
 const RIFF = [0x52, 0x49, 0x46, 0x46];
 const WEBP_FOURCC = [0x57, 0x45, 0x42, 0x50];
 
+function isAcceptedImageType(value: string): value is AcceptedImageType {
+	return (ACCEPTED_IMAGE_TYPES as readonly string[]).includes(value);
+}
+
 function matchesAt(head: Uint8Array, offset: number, bytes: number[]): boolean {
 	if (head.length < offset + bytes.length) return false;
 
@@ -66,7 +76,14 @@ export function sniffImageType(head: Uint8Array): AcceptedImageType | null {
 	return null;
 }
 
-const HEIC_BRANDS = new Set(['heic', 'heix', 'hevc', 'mif1', 'msf1']);
+/**
+ * `heic` and friends declare HEVC-coded images; `mif1` and `msf1` are the generic HEIF image and
+ * image-sequence brands and say nothing about the codec. Reporting the second pair as HEIC names a
+ * format the file may not be, in a message whose only job is to tell somebody what they just
+ * handed over.
+ */
+const HEIC_BRANDS = new Set(['heic', 'heix', 'hevc', 'hevx']);
+const HEIF_BRANDS = new Set(['mif1', 'msf1']);
 const AVIF_BRANDS = new Set(['avif', 'avis']);
 
 function asciiAt(head: Uint8Array, offset: number, length: number): string {
@@ -91,6 +108,7 @@ export function describeRejectedBytes(head: Uint8Array): string | null {
 	if (matchesAt(head, 4, [0x66, 0x74, 0x79, 0x70])) {
 		const brand = asciiAt(head, 8, 4);
 		if (HEIC_BRANDS.has(brand)) return 'HEIC';
+		if (HEIF_BRANDS.has(brand)) return 'HEIF';
 		if (AVIF_BRANDS.has(brand)) return 'AVIF';
 	}
 
@@ -208,6 +226,31 @@ function toBase64(bytes: Uint8Array): string {
 	return btoa(binary);
 }
 
+/**
+ * What the encoder actually produced, read the same way an incoming file is read.
+ *
+ * `Blob.type` is consulted first because it is free and right almost always, and the bytes are the
+ * tiebreak, because a blob can arrive with an empty or unfamiliar type and only its first twelve
+ * bytes settle it. Throwing when neither answers is deliberate: there is no honest media type to
+ * store, and storing a guess is the defect this function exists to close.
+ */
+async function sniffStoredType(stored: Blob): Promise<AcceptedImageType> {
+	if (isAcceptedImageType(stored.type)) {
+		return stored.type;
+	}
+
+	const head = new Uint8Array(await stored.slice(0, SNIFF_BYTES).arrayBuffer());
+	const sniffed = sniffImageType(head);
+
+	if (!sniffed) {
+		throw new Error(
+			`the encoder returned a ${stored.type || 'typeless'} blob that is not a PNG, JPEG, or WebP`,
+		);
+	}
+
+	return sniffed;
+}
+
 /** Decodes only to read a size, so the bitmap is closed before the caller ever sees it. */
 async function decodeSize(
 	codec: ImageCodec,
@@ -258,7 +301,16 @@ export async function prepareReferenceImage(
 	// re-encode would shift exactly the colour that step is asked to read back.
 	const passthrough = fitted.width === probe.width && fitted.height === probe.height;
 	const stored = passthrough ? file : await codec.encode(file, fitted);
-	const mediaType: AcceptedImageType = passthrough ? sniffed : 'image/webp';
+
+	// Both branches take the type off the bytes being stored, never off the type the encoder was
+	// asked for. `convertToBlob` falls back to PNG wherever the UA cannot encode what it was handed,
+	// so a hardcoded `image/webp` here stamps that fallback as WebP. Nothing downstream re-checks it:
+	// `app/readers/anthropic-request.ts` splits this data URL and sends the header to the Messages
+	// API as the image's media type, so the mislabelling leaves the browser inside a paid call.
+	//
+	// Same discipline as the re-decode below, which is what made this worth catching: the size was
+	// already measured off the artefact while the type beside it was still being assumed.
+	const mediaType = passthrough ? sniffed : await sniffStoredType(stored);
 
 	// Measured off the artefact that is actually about to be stored, never off `fitted`. A resize
 	// request is a hint the platform can round or clamp on its own terms, and the passthrough path

@@ -301,8 +301,17 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 							<label className="sr-only" htmlFor={`${pickerId}-tag-${index}`}>
 								Type of {name}
 							</label>
+							{/* Both controls follow the submit button into `disabled` while a save runs, and that
+							    is the whole fix for a real defect rather than tidiness. `save` closes over the
+							    `picked` of the render that created it, which is correct: that array is what the
+							    user meant when they pressed the button. What was wrong is that the interface
+							    went on offering edits across the awaited dynamic imports, so a Remove clicked
+							    during "Working…" redrew the list and changed nothing about the record being
+							    written. Offering an action whose effect cannot land is the bug; reading the
+							    array later is not, and locking it earlier would change nothing. */}
 							<select
-								className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+								className="h-8 rounded-md border border-border bg-background px-2 text-sm disabled:opacity-50"
+								disabled={busy}
 								id={`${pickerId}-tag-${index}`}
 								onChange={(event) => retag(index, event.target.value as ImageTag)}
 								value={tag}
@@ -313,7 +322,13 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 									</option>
 								))}
 							</select>
-							<Button onClick={() => remove(index)} size="sm" type="button" variant="ghost">
+							<Button
+								disabled={busy}
+								onClick={() => remove(index)}
+								size="sm"
+								type="button"
+								variant="ghost"
+							>
 								Remove
 							</Button>
 						</li>
