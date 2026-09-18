@@ -71,6 +71,35 @@ const GUIDANCE_COPY: Record<GuidanceKey, string> = {
 
 const OVER_LIMIT_NOTICE = 'Three images is the limit, so the rest were left out.';
 
+const UNEXAMINED_NOTICE =
+	'Too many files in a row could not be read, so the rest were left unchecked.';
+
+/**
+ * How many files may cost a full decode and fail before the picker stops looking.
+ *
+ * `<input multiple>` has no cap, so the dialog can hand over hundreds. A file that clears the
+ * twelve-byte signature and then fails to decode pays a whole `createImageBitmap` without ever
+ * filling a slot, so nothing in the loop advances and the work is bounded only by how many files
+ * were picked. `files.slice(0, room)` used to bound it, and dropping that slice is what let a usable
+ * file sit behind an unusable one; this restores the bound without going back to that trade.
+ *
+ * Only decodes are budgeted. A file refused on its signature costs twelve bytes, so a wall of GIFs
+ * still cannot stop a PNG behind them from being found.
+ *
+ * Three, matching the slot count, because this guards a mis-picked handful rather than a deliberate
+ * flood, and somebody whose fourth file in a row will not decode has a problem this picker cannot
+ * solve for them.
+ */
+const FAILED_DECODE_BUDGET = MAX_REFERENCE_IMAGES;
+
+/**
+ * How many per-file rejections are spelled out before the rest are counted.
+ *
+ * Same uncapped picker: one sentence per rejected file turns a mis-selected folder into a wall of
+ * text nobody reads.
+ */
+const MAX_SPELLED_OUT_REJECTIONS = 3;
+
 function kB(bytes: number): string {
 	return `${Math.round(bytes / 1000)} kB`;
 }
@@ -124,6 +153,8 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 			const accepted: PickedImage[] = [];
 
 			let overflowed = 0;
+			let unexamined = 0;
+			let failedDecodes = 0;
 
 			for (const file of files) {
 				// Counted against the limit only once a file has proved usable. Slicing the list to `room`
@@ -134,6 +165,14 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				// when the limit had not been reached.
 				if (accepted.length >= room) {
 					overflowed += 1;
+					continue;
+				}
+
+				// The bound `files.slice(0, room)` used to give, restored where it costs nothing. Only a
+				// file that reaches the decoder spends this budget, so a wall of GIFs still cannot hide a
+				// PNG behind it.
+				if (failedDecodes >= FAILED_DECODE_BUDGET) {
+					unexamined += 1;
 					continue;
 				}
 
@@ -161,7 +200,12 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 					return null;
 				});
 
-				if (!result) continue;
+				// A decode was attempted and lost. `unsupported` below never reaches the decoder, so it
+				// costs twelve bytes and spends nothing.
+				if (!result) {
+					failedDecodes += 1;
+					continue;
+				}
 
 				if (result.kind === 'unsupported') {
 					rejected.push(rejectionNotice(file.name, result.rejected.detected));
@@ -173,8 +217,14 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 
 			if (accepted.length > 0) setPicked((current) => [...current, ...accepted]);
 
-			const messages = [...rejected];
+			// Spelled out up to a point, then counted. One sentence per file turns a mis-selected folder
+			// into a wall nobody reads.
+			const extra = rejected.length - MAX_SPELLED_OUT_REJECTIONS;
+			const messages = rejected.slice(0, MAX_SPELLED_OUT_REJECTIONS);
+
+			if (extra > 0) messages.push(`${extra} more ${extra === 1 ? 'file' : 'files'} were refused.`);
 			if (overflowed > 0) messages.push(OVER_LIMIT_NOTICE);
+			if (unexamined > 0) messages.push(UNEXAMINED_NOTICE);
 
 			setNotice(messages.length > 0 ? messages.join(' ') : null);
 		} finally {
