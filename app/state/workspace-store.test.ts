@@ -111,7 +111,7 @@ function countingRecordStore(): RecordStore & { puts: BrandRecord[] } {
 		delete: (id) => inner.delete(id),
 		async put(record) {
 			puts.push(record);
-			await inner.put(record);
+			return inner.put(record);
 		},
 	};
 }
@@ -137,7 +137,7 @@ function gatedWorkspace() {
 			async put(record) {
 				writeHasStarted();
 				await released;
-				await inner.put(record);
+				return inner.put(record);
 			},
 		},
 		engine: createOklchScaleEngine(),
@@ -736,7 +736,7 @@ describe('the workspace store', () => {
 	});
 
 	it('commits a record recreated under an id this store already wrote', async () => {
-		const { store, writeInFlight, releaseWrite } = gatedWorkspace();
+		const { store, records, writeInFlight, releaseWrite } = gatedWorkspace();
 		const original = makeRecord();
 
 		store.getState().open(original);
@@ -748,7 +748,10 @@ describe('the workspace store', () => {
 		await first;
 
 		// Deleted and made again under the same id, which a caller can do and this store cannot see.
-		// A different record that happens to reuse an id has been written past by nothing.
+		// A different record that happens to reuse an id has been written past by nothing. The delete
+		// has to reach storage, not just the workspace: since #67 the store compares against what it
+		// holds, so a record still sitting there would refuse this commit, and rightly.
+		await records.delete(original.id);
 		store.getState().open(makeRecord());
 
 		const next = await store.getState().commit();

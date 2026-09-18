@@ -1,6 +1,6 @@
 import { type BrandRecord, BrandRecordSchema } from '../../core/brand-record';
 
-import type { RecordStore } from './record-store';
+import { type RecordStore, StaleRecordWriteError, extendsStoredHistory } from './record-store';
 
 /**
  * Backed by a `Map` keyed on record id. Every record entering or leaving it round-trips through
@@ -24,7 +24,26 @@ export function createInMemoryRecordStore(): RecordStore {
 		},
 
 		async put(record) {
-			records.set(record.id, BrandRecordSchema.parse(record));
+			// Parsed before the map is consulted, so a record that is both malformed and stale reads
+			// as malformed. Validation is the trust boundary; staleness is a fact about a valid
+			// record's place in a history.
+			const validated = BrandRecordSchema.parse(record);
+			const stored = records.get(validated.id);
+
+			if (stored && !extendsStoredHistory(stored.versions, validated.versions)) {
+				throw new StaleRecordWriteError(
+					validated.id,
+					stored.versions.length,
+					validated.versions.length,
+				);
+			}
+
+			records.set(validated.id, validated);
+
+			// A second parse rather than the object just stored. `put` hands a record back now, and
+			// the map must be no more reachable through that than through the caller's own input.
+			// Everything above runs synchronously, so nothing can write between the check and the set.
+			return BrandRecordSchema.parse(validated);
 		},
 
 		async delete(id) {

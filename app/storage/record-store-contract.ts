@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/brand-record';
+import type { BrandSeed } from '../../core/brand-seed';
 
-import type { RecordStore } from './record-store';
+import { type RecordStore, StaleRecordWriteError } from './record-store';
 
 function makeVersion(overrides: Partial<BrandVersion> = {}): BrandVersion {
 	return {
@@ -28,6 +29,79 @@ function makeRecord(overrides: Partial<BrandRecord> = {}): BrandRecord {
 		images: [],
 		versions: [makeVersion()],
 		...overrides,
+	};
+}
+
+const REFERENCE_IMAGE_ID = 'img-1';
+
+/**
+ * A seed carrying one key colour at the hue it was given. Only the hue matters here: it is the one
+ * seed field with two spellings for the same value, so it is where a caller adopting its own input
+ * instead of what the store returned can be caught holding something storage does not have.
+ */
+function makeSeedWithHue(hue: number): BrandSeed {
+	return {
+		keyColors: [
+			{
+				oklch: [0.62, 0.18, hue],
+				proposedRole: 'brand',
+				sourceImageId: REFERENCE_IMAGE_ID,
+				sourceRegion: null,
+			},
+		],
+		neutralTemperature: null,
+		surfacePolarity: null,
+		radiusCharacter: null,
+		shadowCharacter: null,
+		trackingFeel: null,
+		typeClassification: null,
+		suggestedPairing: null,
+		typeScaleRatio: null,
+		imageClassifications: null,
+		expressive: null,
+	};
+}
+
+/**
+ * Seed provenance is checked against the images a record actually holds, so a record carrying a key
+ * colour has to carry the image that colour was read off.
+ */
+function makeRecordWithHue(hue: number): BrandRecord {
+	return makeRecord({
+		images: [
+			{
+				id: REFERENCE_IMAGE_ID,
+				downscaled: 'data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==',
+				originalHash: 'sha256:abc',
+			},
+		],
+		versions: [makeVersion({ seed: makeSeedWithHue(hue) })],
+	});
+}
+
+/** Fails the test rather than the assertion when a record that should be there is not. */
+async function read(store: RecordStore, id: string): Promise<BrandRecord> {
+	const record = await store.get(id);
+
+	if (!record) {
+		throw new Error(`expected a record stored under ${id}`);
+	}
+
+	return record;
+}
+
+/** The commit a caller makes from whatever copy of a record it is holding. */
+function appended(record: BrandRecord, overrides: Partial<BrandVersion> = {}): BrandRecord {
+	return {
+		...record,
+		versions: [
+			...record.versions,
+			makeVersion({
+				ordinal: record.versions.length + 1,
+				createdAt: '2026-01-02T00:00:00.000Z',
+				...overrides,
+			}),
+		],
 	};
 }
 
@@ -93,18 +167,247 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			expect(await store.get(withSmuggledKey.id)).toBeNull();
 		});
 
-		it('overwrites the record already stored under the same id', async () => {
+		// A second write under an id already taken replaces that record rather than filing a second
+		// one beside it. The history has to grow for the write to be accepted at all, so this says
+		// it with an append; what a write on an unchanged history does is the staleness rule below.
+		it('replaces the record already stored under the same id rather than storing a second', async () => {
 			const record = makeRecord();
 			await store.put(record);
 
-			const replaced: BrandRecord = {
-				...record,
-				versions: [makeVersion({ interpretation: 'expressive' })],
-			};
-			await store.put(replaced);
+			const committed = appended(record, { interpretation: 'expressive' });
+			await store.put(committed);
 
-			expect(await store.get(record.id)).toEqual(replaced);
+			expect(await store.get(record.id)).toEqual(committed);
 			expect(await store.list()).toHaveLength(1);
+		});
+
+		// The defect this contract exists to close, in the shape #67 reports it: two readers load
+		// the same record, both append their own version 2, and the second write replaces the whole
+		// record. The first reader's version is gone, and nothing failed.
+		it('rejects a write derived from a copy read before another write landed', async () => {
+			const record = makeRecord();
+			await store.put(record);
+
+			const readByOne = await read(store, record.id);
+			const readByAnother = await read(store, record.id);
+
+			const landed = appended(readByOne);
+			await store.put(landed);
+
+			await expect(
+				store.put(appended(readByAnother, { interpretation: 'expressive' })),
+			).rejects.toBeInstanceOf(StaleRecordWriteError);
+
+			expect((await read(store, record.id)).versions).toEqual(landed.versions);
+		});
+
+		// One reader is enough, which is what the two-tab framing misses. `get` hands back a fresh
+		// object graph every read, so a re-read copy is a different object holding the same old
+		// history: every check above this seam that keys on object identity misses it, and every
+		// check that keys on the id alone refuses a record recreated under that id forever. Only the
+		// store knows what the store holds.
+		it('rejects a write built on a re-read copy after the reader wrote past it', async () => {
+			const record = makeRecord();
+			await store.put(record);
+
+			const reRead = await read(store, record.id);
+
+			await store.put(appended(record));
+
+			await expect(
+				store.put(appended(reRead, { interpretation: 'expressive' })),
+			).rejects.toBeInstanceOf(StaleRecordWriteError);
+		});
+
+		// A caller's own copy of a record is not always what storage holds. `put` parses, and
+		// `BrandSeedSchema` canonicalises a hue of 360 to 0, so a caller that kept the object it
+		// passed in still spells that hue 360. Its next write carries that spelling in the earlier
+		// versions, and the write has to be accepted, because the history genuinely continued.
+		//
+		// What makes that safe is the order inside `put`: it parses before it compares, so both
+		// sides of the comparison are parse outputs and the caller's spelling never reaches it.
+		// Comparing the incoming record before parsing would turn a caller holding a stale spelling
+		// into a record that can never be saved again, which is worse than the divergence itself.
+		it('accepts an extension built from a copy whose values the store canonicalised', async () => {
+			const committed = makeRecordWithHue(360);
+			const stored = await store.put(committed);
+
+			expect(stored.versions[0]?.seed?.keyColors?.[0]?.oklch[2]).toBe(0);
+			expect(committed.versions[0]?.seed?.keyColors?.[0]?.oklch[2]).toBe(360);
+
+			// Built from the caller's object, not from what `put` handed back.
+			await expect(store.put(appended(committed))).resolves.toMatchObject({ id: committed.id });
+
+			expect((await read(store, committed.id)).versions).toHaveLength(2);
+		});
+
+		// Counting alone lets this one through. A writer that read `[v1]` and committed twice
+		// arrives holding three versions while storage holds two, so its history is longer and
+		// still derived from a copy that never saw the version that landed. The ordinals are
+		// well formed either way, which is exactly why a count cannot tell the two apart.
+		it('rejects a longer history that diverges from the stored one', async () => {
+			const first = makeVersion({ ordinal: 1, createdAt: '2026-01-01T00:00:00.000Z' });
+			const record = makeRecord({ versions: [first] });
+			await store.put(record);
+
+			const landed = makeVersion({ ordinal: 2, createdAt: '2026-01-02T00:00:00.000Z' });
+			await store.put({ ...record, versions: [first, landed] });
+
+			const divergent: BrandRecord = {
+				...record,
+				versions: [
+					first,
+					makeVersion({
+						ordinal: 2,
+						createdAt: '2026-01-02T00:00:00.000Z',
+						interpretation: 'expressive',
+					}),
+					makeVersion({
+						ordinal: 3,
+						createdAt: '2026-01-03T00:00:00.000Z',
+						interpretation: 'faithful',
+					}),
+				],
+			};
+
+			await expect(store.put(divergent)).rejects.toBeInstanceOf(StaleRecordWriteError);
+
+			expect((await read(store, record.id)).versions).toEqual([first, landed]);
+		});
+
+		// The shorter-history half. A write that drops versions is as lossy as one that recounts an
+		// ordinal, and a caller that arrives with less than storage holds is behind either way.
+		it('rejects a write whose history is shorter than the stored one', async () => {
+			const record = makeRecord();
+			await store.put(record);
+			const committed = appended(record);
+			await store.put(committed);
+
+			await expect(store.put(record)).rejects.toBeInstanceOf(StaleRecordWriteError);
+
+			expect((await read(store, record.id)).versions).toEqual(committed.versions);
+		});
+
+		// A rejection a caller can act on: which record to reload, and how far behind it is. The
+		// counts are the store's to report, because the store is the only thing that knows them.
+		it('names the record and both version counts when it rejects a stale write', async () => {
+			const record = makeRecord();
+			await store.put(record);
+			await store.put(appended(record));
+
+			await expect(
+				store.put(appended(record, { interpretation: 'expressive' })),
+			).rejects.toMatchObject({
+				kind: 'stale-record-write',
+				recordId: record.id,
+				storedVersions: 2,
+				incomingVersions: 2,
+			});
+		});
+
+		// A known limit, pinned here so that fixing it fails a test instead of going unnoticed. The
+		// rule compares version counts, and `images` carries no counter of its own, so a write that
+		// adds an image without appending a version reads as stale. #77 puts an image tag and a
+		// brand URL in the same position. #78 owns closing it, with a revision covering the whole
+		// record, which is a schema change this seam does not own.
+		it('refuses a write that changes only a field outside versions, a known limit', async () => {
+			const record = makeRecord({
+				images: [
+					{
+						id: REFERENCE_IMAGE_ID,
+						downscaled: 'data:image/png;base64,AA==',
+						originalHash: 'sha256:a',
+					},
+				],
+			});
+			await store.put(record);
+
+			const withAnotherImage: BrandRecord = {
+				...record,
+				images: [
+					...record.images,
+					{ id: 'img-2', downscaled: 'data:image/png;base64,BB==', originalHash: 'sha256:b' },
+				],
+			};
+
+			await expect(store.put(withAnotherImage)).rejects.toBeInstanceOf(StaleRecordWriteError);
+		});
+
+		// #21's first attempt at this rule keyed on record id plus version count and refused a
+		// record deleted and recreated under the same id, forever: a shorter history under a
+		// familiar id is indistinguishable from a stale one by count alone. Deleting is what tells
+		// them apart, and it has to keep working.
+		it('accepts a record recreated under an id whose longer history was deleted', async () => {
+			const original = makeRecord({
+				versions: [
+					makeVersion({ ordinal: 1, createdAt: '2026-01-01T00:00:00.000Z' }),
+					makeVersion({ ordinal: 2, createdAt: '2026-01-02T00:00:00.000Z' }),
+					makeVersion({ ordinal: 3, createdAt: '2026-01-03T00:00:00.000Z' }),
+				],
+			});
+			await store.put(original);
+			await store.delete(original.id);
+
+			const recreated = makeRecord({ id: original.id });
+
+			await expect(store.put(recreated)).resolves.toEqual(recreated);
+			expect((await read(store, original.id)).versions).toHaveLength(1);
+		});
+
+		// Two commits issued without awaiting between them, which is what a double click or two
+		// generations racing actually looks like. The compare and the write have to be one atomic
+		// step: a store that reads in one transaction and writes in another leaves a gap the other
+		// write lands in, and then both resolve and a version is gone. Which of the two wins is the
+		// implementation's business, so this only says that exactly one does.
+		it('lets only one of two writes issued together win', async () => {
+			const record = makeRecord();
+			await store.put(record);
+
+			const outcomes = await Promise.allSettled([
+				store.put(appended(record)),
+				store.put(appended(record, { interpretation: 'expressive' })),
+			]);
+			const rejections = outcomes.flatMap((outcome) =>
+				outcome.status === 'rejected' ? [outcome.reason] : [],
+			);
+
+			expect(rejections).toHaveLength(1);
+			expect(rejections[0]).toBeInstanceOf(StaleRecordWriteError);
+			expect((await read(store, record.id)).versions).toHaveLength(2);
+		});
+
+		// The isolation both existing directions already assert, in the direction `put` only opened
+		// by resolving with something. A store that hands back its own stored object lets a caller
+		// reach into it without calling it again.
+		it('is not affected by a caller mutating the record put resolved with', async () => {
+			const record = makeRecord();
+
+			const stored = await store.put(record);
+			const versionsBeforeMutation = [...stored.versions];
+			stored.versions.push(makeVersion({ ordinal: 2, interpretation: 'faithful' }));
+
+			expect((await read(store, record.id)).versions).toEqual(versionsBeforeMutation);
+		});
+
+		// `put` parses, and `BrandSeedSchema` canonicalises: a hue committed as 360 is stored as 0,
+		// because 360 and 0 name the same angle and one value may not have two spellings. So a
+		// caller that adopts the object it passed in holds a record storage does not have.
+		//
+		// Checked against what `get` resolves rather than against a re-parse of the input, which
+		// would only prove the code equals itself, and byte for byte rather than by deep equality,
+		// because a caller that adopts this value goes on to serialise it.
+		it('resolves with the record as stored, identical to what a later get resolves', async () => {
+			const committed = makeRecordWithHue(360);
+
+			const stored = await store.put(committed);
+			const fetched = await read(store, committed.id);
+
+			expect(stored.versions[0]?.seed?.keyColors?.[0]?.oklch[2]).toBe(0);
+			// The caller's own object is untouched, which is exactly why it cannot be trusted as a
+			// record of what was stored.
+			expect(committed.versions[0]?.seed?.keyColors?.[0]?.oklch[2]).toBe(360);
+
+			expect(JSON.stringify(stored)).toBe(JSON.stringify(fetched));
 		});
 
 		// A real backend serializes on the way in (structured clone, JSON over the wire); an
