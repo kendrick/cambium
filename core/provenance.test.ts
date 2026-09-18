@@ -203,15 +203,15 @@ describe('token provenance', () => {
 	});
 
 	/**
-	 * The rule the whole table generalises: a category is `derived` on the seed field that governs
-	 * it when that field was stated, and `invented` when the field was null and the module
-	 * substituted a value of its own.
+	 * The three categories that genuinely fall back to a module constant. Each is `derived` on its
+	 * own seed field when the seed stated it, and `invented` when it did not, because nothing in the
+	 * seed reaches the fallback. Shadow used to sit here and no longer does: its tint traces to the
+	 * brand key colour even with no character stated, so it moved to the table below.
 	 */
 	it.each([
 		['radius', (set: TokenSet) => set.radius.values.lg, 'radiusCharacter'],
 		['type scale', (set: TokenSet) => set.typography.values.size.base, 'typeScaleRatio'],
 		['tracking', (set: TokenSet) => set.tracking.values.normal, 'trackingFeel'],
-		['shadow', (set: TokenSet) => set.shadow.values.md, 'shadowCharacter'],
 	])('marks %s against the seed field that governs it', (_name, read, seedField) => {
 		expect(payloadOf(read(tokenSetFor(STATED_SEED)))).toMatchObject({
 			provenance: 'derived',
@@ -230,9 +230,10 @@ describe('token provenance', () => {
 	 * amendment on that issue records why it was overturned.
 	 */
 	it.each([
-		['neutral', (set: TokenSet) => set.primitives.neutral?.[5], 'neutralTemperature'],
-		['accent', (set: TokenSet) => set.primitives.accent?.[5], 'keyColors'],
-	])('derives a fallback %s ramp from the brand key colour', (_name, read, statedField) => {
+		['neutral ramp', (set: TokenSet) => set.primitives.neutral?.[5], 'neutralTemperature'],
+		['accent ramp', (set: TokenSet) => set.primitives.accent?.[5], 'keyColors'],
+		['shadow', (set: TokenSet) => set.shadow.values.md, 'shadowCharacter'],
+	])('derives a fallback %s from the brand key colour', (_name, read, statedField) => {
 		expect(payloadOf(read(tokenSetFor(KEYLESS_SEED)))).toMatchObject({
 			provenance: 'derived',
 			seedField: 'keyColors',

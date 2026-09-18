@@ -1,6 +1,6 @@
 import type { BrandSeed } from './brand-seed';
 import { fitToSrgbGamut, type Oklch } from './oklch';
-import { derived, invented } from './provenance';
+import { derived } from './provenance';
 import type { Shadow, ShadowScale } from './token-set';
 
 const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
@@ -114,19 +114,27 @@ export function shadowScale(surface: Oklch, character: BrandSeed['shadowCharacte
 	const diffusion = diffusionFor(character?.spread);
 	const darkness = 1 - surface.l;
 
-	// A shadow is one DTCG composite token, so it gets one provenance value rather than five. Its
-	// colour is genuinely tinted from the resolved surface every time, but its geometry and
-	// diffusion only trace to the seed when `shadowCharacter` was stated — when it is null they fall
-	// back to the module constants above. Provenance follows the governing field, so a null
-	// character makes the whole token `invented`, and the rationale is where the surviving tint gets
-	// recorded rather than lost.
+	// A shadow is one DTCG composite token, so it gets one provenance value rather than five, and its
+	// colour and its geometry have different ancestries. A token names the field its value traces to
+	// rather than the field that was absent, so the value names the traceable half and the rationale
+	// carries the rest.
+	//
+	// The colour traces every time. `deriveNonColor` resolves `background` off the semantic layer,
+	// which rests on the neutral ramp, and that ramp takes its hue from the brand key colour unless
+	// the seed stated a temperature. So a shadow with no `shadowCharacter` still moves when
+	// `keyColors` moves, and calling it `invented` would tell a consumer no seed field reached it.
+	// Only the geometry falls back to the constants above, and the rationale is where that goes.
+	//
+	// Splitting the token to carry two provenances is ruled out: #9's non-goals stop at the
+	// `$extensions` payload, and the coarseness is the recorded trade rather than an oversight.
 	const extensions = character
 		? derived(
 				'shadowCharacter',
 				'Geometry and diffusion follow the seed while colour still tints from the resolved page surface',
 			)
-		: invented(
-				'Geometry and diffusion fall back to defaults but colour still tints from the resolved page surface',
+		: derived(
+				'keyColors',
+				'Colour tints from the page surface, which resolves off the brand key colour, while depth and blur fall back to the module constants',
 			);
 
 	// Hue is meaningless at zero chroma, and `core/oklch.ts` canonicalises it to 0 there, so a

@@ -205,19 +205,24 @@ describe('shadowScale', () => {
 	});
 
 	/**
-	 * #9 decision 4's uncomfortable row: a null `shadowCharacter` still lets the tint come from the
-	 * resolved page surface, but geometry and diffusion fall back to the module constants above.
-	 * One token gets one provenance value, and the rule that generalises across the plan follows the
-	 * governing seed field rather than the colour — so a null character makes the whole shadow
-	 * `invented`, and the rationale is where the surviving tint gets written down.
+	 * One token, one provenance, two ancestries. A null `shadowCharacter` still lets the tint come
+	 * from the resolved page surface, which rests on the neutral ramp and so moves with the brand
+	 * key colour; only geometry and diffusion fall back to the module constants above. A token names
+	 * the field its value traces to rather than the field that was absent, so this is `derived` from
+	 * `keyColors` and the rationale carries the geometry caveat.
+	 *
+	 * `invented` here would assert that no seed field informed the token, and that is false. Neither
+	 * value tells the whole story, and only one of them lies.
 	 */
-	it('falls back to invented when the seed measured no shadow character, and records the surviving tint', () => {
+	it('traces a shadow with no stated character to the key colour its tint comes from', () => {
 		const shadow = shadowScale(PAGE_LIGHT, null).values.md!;
 		const payload = shadow.$extensions[CAMBIUM_NAMESPACE];
 
-		expect(payload.provenance).toBe('invented');
-		expect(payload.seedField).toBeNull();
+		expect(payload.provenance).toBe('derived');
+		expect(payload.seedField).toBe('keyColors');
 		expect(payload.rationale.toLowerCase()).toContain('surface');
+		// The caveat is the rationale's whole job here, so its absence is a failure.
+		expect(payload.rationale.toLowerCase()).toMatch(/depth|blur|constant/);
 	});
 
 	/**
