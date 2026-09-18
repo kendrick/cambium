@@ -47,6 +47,7 @@
     "dtcg:build": "node scripts/build-dtcg-validator.mjs",
     "swatches": "node --import ./scripts/lib/register-ts.mjs scripts/swatches.mjs",
     "generate": "node --import ./scripts/lib/register-ts.mjs scripts/generate.mjs",
+    "evaluate": "node --import ./scripts/lib/register-ts.mjs scripts/evaluate.mjs",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build && pnpm test:bundle"
   },
   "dependencies": {
