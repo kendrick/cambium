@@ -65,6 +65,63 @@ export class RecordStampedAheadError extends Error {
 }
 
 /**
+ * Thrown when the workspace was pointed somewhere else before a queued commit could run, so nothing
+ * was written.
+ *
+ * Typed for the same reason as the two below, and the reason is worth stating because it is what
+ * separates the three typed errors here from the four bare ones. A bare `Error` marks a call the
+ * interface should not have made: committing with nothing open, committing a first version with no
+ * provenance, committing an edited seed without saying where it came from, selecting an ordinal the
+ * record does not hold. The caller could have avoided each by reading state it already had.
+ *
+ * This is not that. Nobody did anything wrong: the user navigated while a commit was queued, and the
+ * caller needs to tell an abandoned commit from a failed one, because the recovery is to say nothing
+ * at all rather than to report an error.
+ */
+export class CommitAbandonedError extends Error {
+	readonly kind = 'commit-abandoned';
+
+	constructor(options?: { cause?: unknown }) {
+		super('the workspace moved on before this commit ran, so nothing was written', options);
+		this.name = 'CommitAbandonedError';
+	}
+}
+
+/**
+ * Thrown when a commit would append to a record this store has already written further along.
+ *
+ * A workspace can fall behind its own writes. Adoption is skipped whenever the workspace moved
+ * while a write was in flight, so reopening a record from an object held since before that write
+ * leaves the store showing fewer versions than storage holds. Appending from there recounts an
+ * ordinal that already exists, and `put` replaces the whole record, so the finished commit would
+ * disappear without anything failing. That is the lost update #67 describes across tabs, except
+ * inside one store, where the store knows enough to catch it.
+ *
+ * It catches exactly the records this store wrote past, by object identity, so a record deleted and
+ * recreated under the same id is unaffected.
+ *
+ * Typed for the same reason as `RecordStampedAheadError`: the caller has a specific recovery, which
+ * is to reload the record and commit again, and it can only choose it if it can tell this apart
+ * from the misuse the other guards catch. `recordId` says what to reload, and `writtenVersions` how
+ * far along storage already is.
+ */
+export class StaleWorkspaceError extends Error {
+	readonly kind = 'stale-workspace';
+	readonly recordId: string;
+	readonly writtenVersions: number;
+
+	constructor(recordId: string, writtenVersions: number, options?: { cause?: unknown }) {
+		super(
+			`this workspace is behind a write already made to record ${recordId}, which now holds ${writtenVersions} versions, so committing would drop one`,
+			options,
+		);
+		this.name = 'StaleWorkspaceError';
+		this.recordId = recordId;
+		this.writtenVersions = writtenVersions;
+	}
+}
+
+/**
  * A commit frozen at the moment it was requested: what the new version holds, plus the two counters
  * that decide afterwards whether the finished write still belongs to the workspace on screen.
  * `session` and `selection` are bookkeeping and reach no stored field.
@@ -82,7 +139,17 @@ type CommitRequest = {
 };
 
 export type WorkspaceState = {
-	/** The open record, as last written to storage. Never holds uncommitted edits. */
+	/**
+	 * The record as this store last handed it to storage. Never holds uncommitted edits.
+	 *
+	 * Not necessarily byte-identical to what storage holds. A `RecordStore` parses on the way in, and
+	 * `BrandSeedSchema` canonicalises values that have two spellings, so a hue committed as 360 is
+	 * stored as 0 and stays 360 here until the record is reopened. The two describe the same colour
+	 * and derive the same tokens, so nothing downstream can tell; making them identical would mean
+	 * either parsing here, which puts zod back in every client chunk that touches this store, or
+	 * reading the record back after every write. `RecordStore.put` returning what it stored would
+	 * settle it at the seam that already knows.
+	 */
 	record: BrandRecord | null;
 	/**
 	 * An ordinal into `record.versions`, not an index. `BrandRecordSchema` forces ordinals to start
@@ -286,7 +353,7 @@ export function createWorkspaceStore({
 			// be somewhere else entirely, and appending here would write the commit into whichever
 			// record happens to be open, provenance and all.
 			if (session !== request.session) {
-				throw new Error('the workspace moved on before this commit ran, so nothing was written');
+				throw new CommitAbandonedError();
 			}
 
 			// The record is the one thing read fresh rather than captured, because it says where the
@@ -297,6 +364,12 @@ export function createWorkspaceStore({
 
 			if (!record) {
 				throw new Error('nothing to commit: no record is open');
+			}
+
+			const newer = superseded.get(record);
+
+			if (newer) {
+				throw new StaleWorkspaceError(record.id, newer.versions.length);
 			}
 
 			const active = versionAt(record, activeOrdinal);
@@ -363,6 +436,12 @@ export function createWorkspaceStore({
 			// lands, so a rejected commit leaves the workspace showing what storage actually holds.
 			await recordStore.put(next);
 
+			// Recorded whether or not the workspace adopts it below, because what storage holds does not
+			// depend on where the workspace wandered off to while the write was in flight. This record
+			// is now definitively behind storage, and anything that commits from it again would recount
+			// an ordinal that exists and write a record missing a version.
+			superseded.set(record, next);
+
 			// Adopt the write only while the workspace is still the session that started it. `open` and
 			// `close` are synchronous and unqueued, so either can land while `put` is in flight, and
 			// reinstating this record afterwards would pair it with a newer record's draft and preset:
@@ -399,6 +478,20 @@ export function createWorkspaceStore({
 		 * `RecordStore` seam, which is #67.
 		 */
 		let queue: Promise<unknown> = Promise.resolve();
+
+		/**
+		 * Every record this store has appended to, mapped to what superseded it.
+		 *
+		 * Keyed on the record object rather than its id, which matters in both directions. A record
+		 * deleted and recreated under the same id is a different object, so it commits normally, where
+		 * keying on the id would refuse its first commit forever. And an object that has been written
+		 * past stays recognisable however the workspace gets back to it, including through a `close`
+		 * and a fresh `open`, which a check against whatever is currently open would miss.
+		 *
+		 * A `WeakMap` because the entry is only ever reachable through a record somebody still holds,
+		 * so there is nothing to evict and no way for this to grow past what the caller keeps alive.
+		 */
+		const superseded = new WeakMap<BrandRecord, BrandRecord>();
 
 		/**
 		 * Two counters answering two questions a finished commit has to ask.

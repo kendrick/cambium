@@ -11,9 +11,11 @@ import type { RecordStore } from '../storage/record-store';
 import { StorageQuotaExceededError } from '../storage/storage-estimate';
 
 import {
+	CommitAbandonedError,
 	type CommitProvenance,
 	createWorkspaceStore,
 	RecordStampedAheadError,
+	StaleWorkspaceError,
 } from './workspace-store';
 
 function seedWith(hue: number): BrandSeed {
@@ -142,7 +144,7 @@ function gatedWorkspace() {
 		now: () => '2026-06-01T12:00:00.000Z',
 	});
 
-	return { store, writeInFlight, releaseWrite };
+	return { store, records: inner, writeInFlight, releaseWrite };
 }
 
 function openWorkspace(
@@ -509,7 +511,7 @@ describe('the workspace store', () => {
 
 		store.getState().open(second);
 
-		await expect(pending).rejects.toThrow(/moved on/);
+		await expect(pending).rejects.toBeInstanceOf(CommitAbandonedError);
 		expect(recordStore.puts).toHaveLength(0);
 		expect(store.getState().record).toBe(second);
 	});
@@ -703,6 +705,59 @@ describe('the workspace store', () => {
 		// Both were asked for while version 1 was active, so both carry version 1's model and neither
 		// claims a response, whatever the record looked like by the time each one ran.
 		expect(second.versions[2]).toMatchObject({ model: 'claude-opus-5', rawResponse: null });
+	});
+
+	it('refuses a commit from a workspace behind a write this store already made', async () => {
+		const { store, records, writeInFlight, releaseWrite } = gatedWorkspace();
+		const stale = makeRecord();
+
+		store.getState().open(stale);
+
+		const first = store.getState().commit();
+
+		// Reopening the same object is supported and leaves the workspace a version behind the write
+		// still in flight. Appending from there recounts an ordinal that already exists, and `put`
+		// replaces the whole record, so the finished commit would vanish.
+		await writeInFlight;
+		store.getState().open(stale);
+
+		const second = store.getState().commit();
+
+		releaseWrite();
+		await first;
+
+		await expect(second).rejects.toBeInstanceOf(StaleWorkspaceError);
+		await expect(second).rejects.toMatchObject({
+			kind: 'stale-workspace',
+			recordId: stale.id,
+			writtenVersions: 2,
+		});
+
+		const stored = await records.get(stale.id);
+
+		expect(stored?.versions).toHaveLength(2);
+		expect(stored?.versions[1]).toMatchObject({ ordinal: 2 });
+	});
+
+	it('commits a record recreated under an id this store already wrote', async () => {
+		const { store, writeInFlight, releaseWrite } = gatedWorkspace();
+		const original = makeRecord();
+
+		store.getState().open(original);
+
+		const first = store.getState().commit();
+
+		await writeInFlight;
+		releaseWrite();
+		await first;
+
+		// Deleted and made again under the same id, which a caller can do and this store cannot see.
+		// A different record that happens to reuse an id has been written past by nothing.
+		store.getState().open(makeRecord());
+
+		const next = await store.getState().commit();
+
+		expect(next.versions).toHaveLength(2);
 	});
 
 	it('closes a record without touching storage', () => {
