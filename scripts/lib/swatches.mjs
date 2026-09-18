@@ -61,6 +61,11 @@ export function measureRamp(colors, stepRoles) {
 	);
 }
 
+// measureRamp takes anything culori parses; a Cambium ramp step is `{ step, l, c, h }`, one field
+// short of the `{ mode, l, c, h }` shape culori actually wants. Exported here rather than
+// redefined at each call site, since this module already owns the shape measureRamp expects.
+export const asCulori = (step) => ({ mode: 'oklch', l: step.l, c: step.c, h: step.h });
+
 const cellText = (step) => (step.wcag >= 4.5 ? '#ffffff' : '#111111');
 
 function renderCell(step) {

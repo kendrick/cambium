@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import tailwindColors from 'tailwindcss/colors.js';
 import { createOklchScaleEngine } from '../core/oklch-scale-engine.ts';
 import { BALANCED, RAMP_NAMES } from '../core/scale-engine.ts';
-import { measureRamp, renderSwatchPage } from './lib/swatches.mjs';
+import { asCulori, measureRamp, renderSwatchPage } from './lib/swatches.mjs';
 
 // @radix-ui/colors ships CJS with types that only declare `export * from './light'` etc., so any
 // static `import x from` reads to a linter as reaching for a default export that doesn't exist.
@@ -89,10 +89,6 @@ function seedFrom(oklch) {
 		expressive: null,
 	};
 }
-
-// measureRamp takes anything culori parses; a Cambium ramp step is `{ step, l, c, h }`, one
-// field short of the `{ mode, l, c, h }` shape culori actually wants.
-const asCulori = (step) => ({ mode: 'oklch', l: step.l, c: step.c, h: step.h });
 
 const oklchEngine = createOklchScaleEngine();
 
