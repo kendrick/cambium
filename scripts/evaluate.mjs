@@ -12,7 +12,7 @@ const NOTE =
 	'step 2; APCA rides along as advisory and never decides the outline.';
 
 await runCli('evaluate <seed-file.json>', async (seedPath) => {
-	const schemes = await loadSchemes(seedPath);
+	const { schemes } = await loadSchemes(seedPath);
 
 	const groups = SCHEME_NAMES.map((scheme) => ({
 		title: `${scheme} scheme`,

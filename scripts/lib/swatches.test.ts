@@ -50,7 +50,7 @@ describe('measureRamp against a real ramp', () => {
 	// BALANCED, so the success ramp's hue never depends on the seed's own brand colour.
 	it('flags light/success step 11 as failing its rendered floor while its exact colour clears it', async () => {
 		const seedPath = fileURLToPath(new URL('../fixtures/seed.json', import.meta.url));
-		const schemes = await loadSchemes(seedPath);
+		const { schemes } = await loadSchemes(seedPath);
 		const steps = measureRamp(schemes.light.success.map(asCulori), STEP_ROLES) as MeasuredStep[];
 		const step11 = steps[10]!;
 

@@ -24,6 +24,10 @@ function describeEngineError(error) {
  * scripts/generate.mjs and scripts/evaluate.mjs need before they diverge into printing a token
  * set or rendering swatches. Sharing it is what keeps a readable message for an engine rejection
  * from existing in one CLI and not the other.
+ *
+ * Hands back the seed alongside the schemes because `buildTokenSet` needs both: #7's non-colour
+ * categories derive from the seed, not from the ramps. It was parsed here anyway, and returning it
+ * beats making a caller read and validate the same file a second time.
  */
 export async function loadSchemes(seedPath) {
 	const seed = await loadSeed(seedPath);
@@ -31,7 +35,7 @@ export async function loadSchemes(seedPath) {
 
 	if (!result.ok) throw new EngineError(describeEngineError(result.error));
 
-	return result.schemes;
+	return { seed, schemes: result.schemes };
 }
 
 /**
