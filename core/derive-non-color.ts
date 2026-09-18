@@ -74,7 +74,14 @@ const FOCUS_RING_RATIONALE =
 const ZINDEX_RATIONALE =
 	'An invented layering default assigned by role, not read from any seed field';
 
-/** Attaches `$extensions` to a `{ value, unit }` leaf, invented because the category is `system`. */
+/**
+ * Two helpers because the schema has two shapes, and they are not interchangeable.
+ *
+ * A dimension or a duration already carries its own keys, so `$extensions` goes beside them. A bare
+ * number or tuple has nowhere to hang one, so `scalarToken` wraps it under `value` and `tagScalar`
+ * has to mirror that. Tagging either the other way produces a token `TokenSetSchema` rejects, and
+ * the rejection names the leaf rather than the helper that shaped it.
+ */
 function tagValueUnit<T extends { value: number; unit: string }>(
 	leaf: T,
 	rationale: string,
@@ -82,7 +89,6 @@ function tagValueUnit<T extends { value: number; unit: string }>(
 	return { ...leaf, $extensions: invented(rationale) };
 }
 
-/** Attaches `$extensions` to a bare number or tuple, wrapping it the way `scalarToken` does in the schema. */
 function tagScalar<T>(value: T, rationale: string): { value: T; $extensions: TokenExtensions } {
 	return { value, $extensions: invented(rationale) };
 }
