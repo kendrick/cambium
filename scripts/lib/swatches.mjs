@@ -27,14 +27,15 @@ function apcaOf(color, background) {
  * not from `oklch`'s full-precision channels. `core/oklch-scale-engine.ts`'s FLOOR_MARGIN only
  * cushions six-decimal rounding; a step solved just inside that margin can still round to a hex
  * pair that has already dropped below the floor, and this is a harness whose entire job is
- * judging the colour a person actually sees. `exactWcag` keeps the full-precision figure around
- * only to flag the steps where quantization changed the verdict (see `straddlesFloor` below).
+ * judging the colour a person actually sees. The full-precision figure is measured again, lazily,
+ * only when `stepRole` declares a floor to compare it against (see `straddlesFloor` below) — the
+ * Radix and Tailwind taste reference in `scripts/swatches.mjs` calls this with no `stepRoles` at
+ * all, and a second contrast measurement nobody reads on every one of those cells would be waste.
  */
 function measureStep(step, color, background, stepRole) {
 	const oklch = readOklch(color);
 	const hex = formatHex(color);
 	const backgroundHex = formatHex(background);
-	const exactWcag = contrastFromOklch(oklch, readOklch(background));
 	const wcag = contrastFromOklch(readOklch(hex), readOklch(backgroundHex));
 
 	const floor = stepRole?.minWcagVsStep2 ?? null;
@@ -43,7 +44,8 @@ function measureStep(step, color, background, stepRole) {
 	// in a way no amount of looking at this one swatch reveals: the next release of culori, or a
 	// different rounding path, could tip it either way. Surfacing that is worth more than silently
 	// filing it under "fails" or "passes".
-	const straddlesFloor = floor != null && exactWcag < floor !== failsContrast;
+	const exactFails = floor != null && contrastFromOklch(oklch, readOklch(background)) < floor;
+	const straddlesFloor = floor != null && exactFails !== failsContrast;
 
 	return {
 		step,
@@ -139,6 +141,8 @@ const STYLE = `
 		gap:1px; font-size:10px; overflow:hidden; }
 	.cell b { font-size:11px; }
 	.cell .role { opacity:0.75; }
+	/* .fail must stay declared after .straddle: a cell can carry both classes, and same-specificity
+	   source order is what makes the solid red outline win over the dashed amber one when it does. */
 	.cell.straddle { outline:2px dashed #e8b339; outline-offset:-4px; }
 	.cell.fail { outline:2px solid #ff5c5c; outline-offset:-2px; }
 	.warn { color:#ff5c5c; font-weight:700; }
