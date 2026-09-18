@@ -1,0 +1,21 @@
+{
+	"keyColors": [
+		{
+			"oklch": [0.62, 0.19, 259.8],
+			"proposedRole": "brand",
+			"sourceImageId": "img-1",
+			"sourceRegion": null
+		}
+	],
+	"neutralTemperature": null,
+	"surfacePolarity": null,
+	"radiusCharacter": null,
+	"shadowCharacter": null,
+	"trackingFeel": null,
+	"typeClassification": null,
+	"suggestedPairing": null,
+	"typeScaleRatio": null,
+	"imageClassifications": null,
+	"expressive": null,
+	"confidence": 0.9
+}
