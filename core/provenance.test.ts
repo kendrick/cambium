@@ -53,6 +53,22 @@ const STATED_SEED = BrandSeedSchema.parse({
 	typeScaleRatio: 1.25,
 });
 
+/**
+ * A seed that states a neutral temperature and no shadow character, which is the one combination
+ * neither seed above reaches.
+ *
+ * `STATED_SEED` states both fields and `KEYLESS_SEED` states neither, so both take a shadow branch
+ * that answers `keyColors` either by naming it or by inheriting it. Only this shape makes the
+ * surface trace somewhere else, and it is where a shadow claiming `keyColors` outright was wrong
+ * for five review rounds without a test noticing. A regression in the handoff from the semantic
+ * layer through `deriveNonColor` to the shadow is invisible to every other seed in this file.
+ */
+const MIXED_SEED = BrandSeedSchema.parse({
+	...STATED_SEED,
+	neutralTemperature: { hue: 120, chroma: 0.02 },
+	shadowCharacter: null,
+});
+
 function tokenSetFor(seed: BrandSeed): TokenSet {
 	const generated = createOklchScaleEngine().generate(seed, BALANCED);
 
@@ -242,6 +258,25 @@ describe('token provenance', () => {
 			provenance: 'derived',
 			seedField: statedField,
 		});
+	});
+
+	/**
+	 * The full pipeline, not the module in isolation. `core/shadow-scale.test.ts` hands `shadowScale`
+	 * a surface it built itself, so it proves the inheritance and not the wiring that feeds it. This
+	 * runs the real chain: the neutral ramp takes the stated temperature, `background` inherits it
+	 * through the semantic layer, `deriveNonColor` resolves that token, and the shadow carries it.
+	 * Breaking any link hard-codes a seed field and this is the only test that sees it.
+	 */
+	it('carries a stated neutral temperature through the semantic layer into the shadow', () => {
+		const set = tokenSetFor(MIXED_SEED);
+
+		expect(payloadOf(set.semantic.background)).toMatchObject({ seedField: 'neutralTemperature' });
+		expect(payloadOf(set.shadow.values.md)).toMatchObject({
+			provenance: 'derived',
+			seedField: 'neutralTemperature',
+		});
+		// The sentence has to name the field too, because nothing else asserts rationale prose.
+		expect(payloadOf(set.shadow.values.md).rationale).toContain('neutralTemperature');
 	});
 
 	/** Step 9 is the one place a seed's own colour is placed rather than computed from. */
