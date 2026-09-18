@@ -75,17 +75,22 @@ describe('shadowScale', () => {
 
 	/**
 	 * The tint is a ceiling, not a promise, and a dark page is where that shows. A shadow there sits
-	 * near lightness 0.028 and sRGB holds about 0.0048 of chroma that far down, so the tint all but
-	 * disappears. Lifting the lightness until 0.02 fits is the tempting fix and it is the wrong one:
+	 * near lightness 0.028, and sRGB holds between 0.0048 and 0.0194 of chroma that far down
+	 * depending on hue, so the tint all but disappears. Lifting the lightness until 0.02 fits is the tempting fix and it is the wrong one:
 	 * the shadow would stop being darker than the page, which the next test is about.
 	 */
 	it('gives up the tint rather than the darkness on a dark page', () => {
-		const dark = shadowScale(PAGE_DARK, tinted).values.md!.color;
-		const light = shadowScale({ ...PAGE_LIGHT, h: PAGE_DARK.h }, tinted).values.md!.color;
+		const shortfall = [27, 86, 162.5, 200, 259.8, 265, 300].map((h) => {
+			const dark = shadowScale({ ...PAGE_DARK, h }, tinted).values.md!.color;
+			const light = shadowScale({ ...PAGE_LIGHT, h }, tinted).values.md!.color;
 
-		expect(dark.c).toBeGreaterThan(0);
-		expect(dark.c).toBeLessThan(light.c / 1.5);
-		expect(dark.h).toBeCloseTo(PAGE_DARK.h, 6);
+			return { h, dark: dark.c, light: light.c };
+		});
+
+		// Swept rather than measured at one hue. How much chroma survives near black runs from
+		// 0.0048 at hue 200 to 0.0194 at hue 265, so a single hue and a fixed ratio would pass or
+		// fail on which one the fixture happened to carry.
+		expect(shortfall.filter(({ dark, light }) => dark <= 0 || dark >= light)).toEqual([]);
 	});
 
 	/**
@@ -94,18 +99,23 @@ describe('shadowScale', () => {
 	 * shadow's lightness until it was barely darker than the page it fell on. Neither failed a test,
 	 * because every assertion was about the declared colour rather than about what lands on screen.
 	 *
-	 * So this composites the shadow over its own surface at its own opacity and measures what is
-	 * left. The `md` step is the middle of the scale; a floor it clears is one the steps above it
-	 * clear by more.
+	 * So this composites each shadow over its own surface at its own opacity and measures what is
+	 * left. Every step, because the third version of this cleared the bar at `md` and left `xs` on a
+	 * dark page under it, which is the one elevation nobody would think to check.
 	 */
 	it.each([
 		['a light page', PAGE_LIGHT],
 		['a dark page', PAGE_DARK],
-	])('renders visibly darker than %s', (_name, surface) => {
-		const { color } = shadowScale(surface, tinted).values.md!;
-		const rendered = surface.l * (1 - color.alpha) + color.l * color.alpha;
+	])('renders every step visibly darker than %s', (_name, surface) => {
+		const { values } = shadowScale(surface, tinted);
+		const rendered = STEPS.map((step) => {
+			const { color } = values[step]!;
 
-		expect(surface.l - rendered).toBeGreaterThan(0.02);
+			return surface.l - (surface.l * (1 - color.alpha) + color.l * color.alpha);
+		});
+
+		expect(rendered.filter((delta) => delta <= 0.02)).toEqual([]);
+		expect(rendered.every((delta, i) => i === 0 || delta > rendered[i - 1]!)).toBe(true);
 	});
 
 	/**
@@ -171,15 +181,15 @@ describe('shadowScale', () => {
 	});
 
 	/**
-	 * The darkness gain multiplies every step's opacity, and the worst case is a page at lightness
-	 * zero. Bounding the top step there is what would catch a raised gain: a shadow at 0.5 over a
-	 * dark page reads as a black box rather than as depth, and the schema's own 0-to-1 bound is far
-	 * too loose to notice.
+	 * The opacity gain multiplies every step, and the worst case is a page at lightness zero, where
+	 * the top step reaches 0.525. Bounding it is what would catch a gain raised past what the
+	 * smallest step needs: past about 3 the top step turns into a black box, and the schema's own
+	 * 0-to-1 bound is far too loose to notice.
 	 */
 	it('keeps the darkest page from stacking opacity into a black box', () => {
 		const { values } = shadowScale({ l: 0, c: 0, h: 0 }, tinted);
 
-		expect(values.xl!.color.alpha).toBeLessThan(0.5);
+		expect(values.xl!.color.alpha).toBeLessThan(0.6);
 		expect(STEPS.every((step) => values[step]!.color.alpha > 0)).toBe(true);
 	});
 
@@ -219,6 +229,7 @@ describe('shadowScale', () => {
 		const specifiers = [
 			...source.matchAll(/^\s*(?:import|export)\s[^'\n]*from\s*'([^']+)'/gm),
 			...source.matchAll(/^\s*import\s*\(\s*'([^']+)'/gm),
+			...source.matchAll(/^\s*import\s*'([^']+)'/gm),
 		].map((m) => m[1]!);
 
 		expect(specifiers).not.toHaveLength(0);

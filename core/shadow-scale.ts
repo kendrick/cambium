@@ -25,23 +25,32 @@ const SHADOW_LIGHTNESS = 0.15;
  * the surface.
  *
  * Reading it off the surface is the obvious implementation and it produces black. `background`
- * aliases `neutral.1`, and a page background is near-achromatic by design: measured across seven
- * seeds it runs 0.00012 to 0.00026 in light and 0.00048 to 0.00106 in dark, which is invisible.
- * Passing that number through would satisfy "derives from the surface" on paper while shipping
- * exactly the black-at-an-opacity #7 set out to avoid.
+ * aliases `neutral.1`, and a page background is near-achromatic by design: it measures around
+ * 0.0002 in light and 0.0007 in dark, rising with the seed's own chroma and staying far under
+ * 0.002. Passing that number through would satisfy "derives from the surface" on paper while
+ * shipping exactly the black-at-an-opacity #7 set out to avoid.
  *
  * So the surface supplies the hue, which it carries faithfully, and the depth of the tint is a
  * constant. Subtle on purpose: a shadow that announces its colour stops reading as a shadow.
  *
  * It is a ceiling rather than a promise. sRGB holds almost no chroma near black, so a shadow on a
- * dark page reaches only about 0.0048 of it and comes out near-black. That is the honest answer
+ * dark page reaches between 0.0048 at hue 200 and 0.0194 at hue 265, and comes out near-black
+ * whichever hue it lands on. That is the honest answer
  * rather than a shortfall: lifting its lightness until 0.02 fits would leave the shadow barely
  * darker than the page it falls on, which is not a shadow. #7 records the trade.
  */
 const SHADOW_CHROMA = 0.02;
 
-/** How far opacity and blur climb as the surface darkens, per unit of lightness given up. */
-const DARK_ALPHA_GAIN = 1.5;
+/**
+ * How far opacity and blur climb as the surface darkens, per unit of lightness given up.
+ *
+ * The opacity gain is set by the smallest step rather than by the look of the largest. A dark page
+ * resolves at lightness 0.188 and its shadow sits at 0.028, so there is only 0.16 of lightness
+ * between them and opacity is all that is left to carry the difference. At 1.5 the `xs` step moved
+ * a dark page by 0.018 against the light scheme's 0.043, which is the invisible shadow again at the
+ * one elevation nobody would check. At 2.5 every step clears 0.024.
+ */
+const DARK_ALPHA_GAIN = 2.5;
 const DARK_BLUR_GAIN = 0.5;
 
 /**

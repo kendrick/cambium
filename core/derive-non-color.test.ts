@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { type BrandSeed, BrandSeedSchema } from './brand-seed';
 import { deriveNonColor } from './derive-non-color';
+import { isInSrgb } from './oklch';
 import { createOklchScaleEngine } from './oklch-scale-engine';
 import { BALANCED, type SchemeName } from './scale-engine';
 import { resolveScheme } from './resolve-scheme';
@@ -130,7 +131,7 @@ describe('deriveNonColor', () => {
 	 * assertion here still passed.
 	 */
 	it.each(['light', 'dark'] as const)(
-		'tints the %s shadow with that scheme’s background',
+		"tints the %s shadow with that scheme's background",
 		(scheme) => {
 			const schemes = colorSchemesFor(crisp);
 			const background = resolveScheme(schemes[scheme]).background!;
@@ -146,8 +147,8 @@ describe('deriveNonColor', () => {
 	 * The chroma floor belongs to the light scheme alone, and stating it per scheme is what keeps
 	 * this honest. A shadow on a light page sits near lightness 0.15, where sRGB has room for the
 	 * full tint. A dark page puts it near 0.028, where the most any hue can hold is about 0.011 and
-	 * hue 200 only reaches 0.005. Asserting one floor across both schemes passes or fails on which
-	 * hue the fixture seed happens to carry.
+	 * hue 200 reaches only 0.0048 against hue 265's 0.0194. Asserting one floor across both schemes
+	 * passes or fails on which hue the fixture seed happens to carry.
 	 */
 	it('carries a tint anyone can see in the light scheme', () => {
 		expect(derive(crisp).shadow.light.values.md!.color.c).toBeGreaterThan(0.01);
@@ -160,13 +161,35 @@ describe('deriveNonColor', () => {
 	 * it was barely darker than the page. Every assertion was about the declared colour, so neither
 	 * failed anything.
 	 */
-	it.each(['light', 'dark'] as const)('renders visibly darker than the %s page', (scheme) => {
-		const schemes = colorSchemesFor(crisp);
-		const background = resolveScheme(schemes[scheme]).background!;
-		const { color } = deriveNonColor(crisp, schemes).shadow[scheme].values.md!;
-		const rendered = background.l * (1 - color.alpha) + color.l * color.alpha;
+	it.each(['light', 'dark'] as const)(
+		'renders every step visibly darker than the %s page',
+		(scheme) => {
+			const schemes = colorSchemesFor(crisp);
+			const background = resolveScheme(schemes[scheme]).background!;
+			const { values } = deriveNonColor(crisp, schemes).shadow[scheme];
 
-		expect(background.l - rendered).toBeGreaterThan(0.02);
+			const faint = Object.entries(values).filter(([, { color }]) => {
+				const rendered = background.l * (1 - color.alpha) + color.l * color.alpha;
+
+				return background.l - rendered <= 0.02;
+			});
+
+			expect(faint.map(([step]) => step)).toEqual([]);
+		},
+	);
+
+	/**
+	 * The gamut check at the assembled seam as well as inside the module. A shadow colour no display
+	 * can show is invisible in exactly the way a shadow with no chroma is, and nothing between here
+	 * and an export adapter has an opinion about gamut: `ShadowColorSchema` bounds each channel and
+	 * knows nothing about whether the three together land inside sRGB.
+	 */
+	it.each(['light', 'dark'] as const)('emits a %s shadow a display can show', (scheme) => {
+		const offGamut = [crisp, lush]
+			.flatMap((seed) => Object.values(derive(seed).shadow[scheme].values))
+			.filter(({ color }) => !isInSrgb(color));
+
+		expect(offGamut).toEqual([]);
 	});
 
 	/**
