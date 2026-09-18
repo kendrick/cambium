@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { isInSrgb, type Oklch } from './oklch';
-import { shadowScale } from './shadow-scale';
+import { compositeOver, isInSrgb, type Oklch } from './oklch';
+import { MIN_RENDERED_DARKENING, MIN_VISIBLE_SURFACE_LIGHTNESS, shadowScale } from './shadow-scale';
 
 const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
 
@@ -99,9 +99,13 @@ describe('shadowScale', () => {
 	 * shadow's lightness until it was barely darker than the page it fell on. Neither failed a test,
 	 * because every assertion was about the declared colour rather than about what lands on screen.
 	 *
-	 * So this composites each shadow over its own surface at its own opacity and measures what is
-	 * left. Every step, because the third version of this cleared the bar at `md` and left `xs` on a
-	 * dark page under it, which is the one elevation nobody would think to check.
+	 * So this composites each shadow over its own surface the way a browser does, per channel in
+	 * sRGB, and converts back. Mixing the two OKLCH lightnesses instead is the obvious shortcut and
+	 * it overstates the darkening by about 1.8x on a dark page. Four rounds of fixing this defect
+	 * were tuned against that shortcut, so the numbers moved every round and the pixels did not.
+	 *
+	 * Every step, because the round before this cleared the bar at `md` while `xs` and `sm` sat
+	 * under it, which are the two elevations nobody would think to check.
 	 */
 	it.each([
 		['a light page', PAGE_LIGHT],
@@ -111,10 +115,10 @@ describe('shadowScale', () => {
 		const rendered = STEPS.map((step) => {
 			const { color } = values[step]!;
 
-			return surface.l - (surface.l * (1 - color.alpha) + color.l * color.alpha);
+			return surface.l - compositeOver(surface, color, color.alpha).l;
 		});
 
-		expect(rendered.filter((delta) => delta <= 0.02)).toEqual([]);
+		expect(rendered.filter((delta) => delta <= MIN_RENDERED_DARKENING)).toEqual([]);
 		expect(rendered.every((delta, i) => i === 0 || delta > rendered[i - 1]!)).toBe(true);
 	});
 
@@ -155,7 +159,7 @@ describe('shadowScale', () => {
 		const dark = shadowScale(PAGE_DARK, tinted).values.md!;
 
 		expect(dark.color).not.toEqual(light.color);
-		expect(dark.color.alpha / light.color.alpha).toBeGreaterThan(2);
+		expect(dark.color.alpha / light.color.alpha).toBeGreaterThan(3);
 	});
 
 	it.each(STEPS)('raises opacity and blur at %s on a dark surface', (step) => {
@@ -181,15 +185,53 @@ describe('shadowScale', () => {
 	});
 
 	/**
-	 * The opacity gain multiplies every step, and the worst case is a page at lightness zero, where
-	 * the top step reaches 0.525. Bounding it is what would catch a gain raised past what the
-	 * smallest step needs: past about 3 the top step turns into a black box, and the schema's own
-	 * 0-to-1 bound is far too loose to notice.
+	 * The floor under the guarantee, pinned from this end. Whether the generated dark page clears it
+	 * is `core/derive-non-color.test.ts`'s half.
+	 *
+	 * Before this was written down the opacity ramp happened to clear 0.02 down to page lightness
+	 * 0.177 while the scale engine happened to emit 0.188, and nothing connected the two numbers. A
+	 * change to either would have shipped an invisible shadow at the one lightness no fixture
+	 * covered.
+	 */
+	it('clears the floor at every step on the darkest page it claims to support', () => {
+		const surface = { l: MIN_VISIBLE_SURFACE_LIGHTNESS, c: 0.001, h: 200 };
+		const { values } = shadowScale(surface, tinted);
+
+		const faint = STEPS.filter(
+			(step) =>
+				surface.l - compositeOver(surface, values[step]!.color, values[step]!.color.alpha).l <=
+				MIN_RENDERED_DARKENING,
+		);
+
+		expect(faint).toEqual([]);
+	});
+
+	/**
+	 * A shadow is the surface with light taken out of it, so a page with none left cannot show one.
+	 * Recorded rather than guarded: this is why the guarantee above needs a floor at all, and a
+	 * reader who does not know it will read `MIN_VISIBLE_SURFACE_LIGHTNESS` as arbitrary.
+	 */
+	it('cannot darken a page that is already black, at any opacity', () => {
+		const black = { l: 0, c: 0, h: 0 };
+		const { values } = shadowScale(black, tinted);
+
+		for (const step of STEPS) {
+			const { color } = values[step]!;
+
+			expect(compositeOver(black, color, color.alpha).l).toBeCloseTo(0, 10);
+		}
+	});
+
+	/**
+	 * A page at lightness zero takes the on-black ramp exactly, which is where that table is easiest
+	 * to get wrong. Raising it until the smallest step clears on a dark page is the obvious move,
+	 * and it turns the largest into an opaque slab. The schema's own 0-to-1 bound is far too loose
+	 * to notice.
 	 */
 	it('keeps the darkest page from stacking opacity into a black box', () => {
 		const { values } = shadowScale({ l: 0, c: 0, h: 0 }, tinted);
 
-		expect(values.xl!.color.alpha).toBeLessThan(0.6);
+		expect(values.xl!.color.alpha).toBeLessThan(0.9);
 		expect(STEPS.every((step) => values[step]!.color.alpha > 0)).toBe(true);
 	});
 

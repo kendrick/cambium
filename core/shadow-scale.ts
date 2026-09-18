@@ -4,14 +4,63 @@ import type { Shadow, ShadowScale } from './token-set';
 
 const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
 
-/** Geometry and opacity per elevation step, before the diffusion and darkness modifiers below. */
+/** Geometry per elevation step, before the diffusion and darkness modifiers below. */
 const BASE = [
-	{ offsetY: 1, blur: 2, spread: 0, alpha: 0.05 },
-	{ offsetY: 2, blur: 4, spread: -1, alpha: 0.07 },
-	{ offsetY: 4, blur: 6, spread: -1, alpha: 0.1 },
-	{ offsetY: 10, blur: 15, spread: -3, alpha: 0.12 },
-	{ offsetY: 20, blur: 25, spread: -5, alpha: 0.15 },
+	{ offsetY: 1, blur: 2, spread: 0 },
+	{ offsetY: 2, blur: 4, spread: -1 },
+	{ offsetY: 4, blur: 6, spread: -1 },
+	{ offsetY: 10, blur: 15, spread: -3 },
+	{ offsetY: 20, blur: 25, spread: -5 },
 ] as const;
+
+/**
+ * Opacity per step on a white page and on a black one, mixed by how dark the surface actually is.
+ *
+ * Two tables rather than one table and a multiplier, because the two ends need different shapes
+ * and not only different sizes. A dark page resolves near lightness 0.188 and its shadow sits at
+ * 0.028, so there is 0.16 of lightness between them where a white page has 0.85. Scaling the white
+ * ramp up until its smallest step showed drove the largest to an opacity of 0.75, which is a black
+ * slab rather than a shadow. The dark ramp is compressed as well as raised.
+ *
+ * Against the generated schemes these land at 0.05 to 0.15 in light and 0.32 to 0.71 in dark.
+ */
+const ON_WHITE_ALPHA = [0.05, 0.07, 0.1, 0.12, 0.15] as const;
+const ON_BLACK_ALPHA = [0.38, 0.48, 0.6, 0.7, 0.84] as const;
+
+/**
+ * How much darker than its page a shadow has to render before it counts as one, in OKLCH
+ * lightness, measured after real sRGB compositing.
+ *
+ * Exported because `core/shadow-scale.test.ts` and `core/derive-non-color.test.ts` both assert
+ * against it. This module and its tests disagreeing about the bar is how the defect survived four
+ * rounds of fixing, so there is one number and both sides read it.
+ *
+ * 0.02 is a judgement call with one fact under it: the generated dark page sits at byte 19 of 255,
+ * and the smallest step clears it by 7 bytes there. That is a change a display can render and an
+ * eye can find. The largest moves it by 14, and the light scheme runs 12 to 37.
+ *
+ * Measured after compositing in gamma-encoded sRGB, which is what browsers do for ordinary
+ * content. That choice carries weight and is worth stating: compositing in linear light instead
+ * gives smaller numbers, and the light scheme's smallest step reads 0.0175 under it. The dark
+ * scheme clears 0.02 under both models, which is where the floor actually has to hold, because
+ * dark is the scheme with no room to spare.
+ */
+export const MIN_RENDERED_DARKENING = 0.02;
+
+/**
+ * The darkest page these ramps still clear `MIN_RENDERED_DARKENING` on, at every step.
+ *
+ * A shadow is the surface with light taken out of it, so a page with no light left cannot show
+ * one: at lightness 0 every step composites to exactly the page it sits on, whatever its opacity.
+ * The guarantee therefore has a floor under it, and stating the floor is what keeps the guarantee
+ * from being an accident of the one page the scale engine happens to emit.
+ *
+ * It sat at 0.177 against a dark page of 0.188 before this was written down, which is 3% of head
+ * room and nothing pinning the two together. `core/shadow-scale.test.ts` pins the ramps to this
+ * number and `core/derive-non-color.test.ts` pins the generated page above it, so moving either
+ * one fails rather than quietly shipping an invisible shadow.
+ */
+export const MIN_VISIBLE_SURFACE_LIGHTNESS = 0.16;
 
 /**
  * How much of the surface's lightness a shadow keeps. A shadow is the surface with the light taken
@@ -41,16 +90,7 @@ const SHADOW_LIGHTNESS = 0.15;
  */
 const SHADOW_CHROMA = 0.02;
 
-/**
- * How far opacity and blur climb as the surface darkens, per unit of lightness given up.
- *
- * The opacity gain is set by the smallest step rather than by the look of the largest. A dark page
- * resolves at lightness 0.188 and its shadow sits at 0.028, so there is only 0.16 of lightness
- * between them and opacity is all that is left to carry the difference. At 1.5 the `xs` step moved
- * a dark page by 0.018 against the light scheme's 0.043, which is the invisible shadow again at the
- * one elevation nobody would check. At 2.5 every step clears 0.024.
- */
-const DARK_ALPHA_GAIN = 2.5;
+/** How far blur climbs as the surface darkens. Opacity has its own ramp above. */
 const DARK_BLUR_GAIN = 0.5;
 
 /**
@@ -92,7 +132,10 @@ export function shadowScale(surface: Oklch, character: BrandSeed['shadowCharacte
 			return [
 				step,
 				{
-					color: { ...color, alpha: base.alpha * (1 + DARK_ALPHA_GAIN * darkness) },
+					color: {
+						...color,
+						alpha: ON_WHITE_ALPHA[i]! + (ON_BLACK_ALPHA[i]! - ON_WHITE_ALPHA[i]!) * darkness,
+					},
 					offsetX: px(0),
 					offsetY: px(base.offsetY),
 					blur: px(base.blur * diffusion * (1 + DARK_BLUR_GAIN * darkness)),

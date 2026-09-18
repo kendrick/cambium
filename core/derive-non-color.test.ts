@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { type BrandSeed, BrandSeedSchema } from './brand-seed';
 import { deriveNonColor } from './derive-non-color';
-import { isInSrgb } from './oklch';
+import { compositeOver, isInSrgb } from './oklch';
 import { createOklchScaleEngine } from './oklch-scale-engine';
-import { BALANCED, type SchemeName } from './scale-engine';
 import { resolveScheme } from './resolve-scheme';
+import { BALANCED, type SchemeName } from './scale-engine';
+import { MIN_RENDERED_DARKENING, MIN_VISIBLE_SURFACE_LIGHTNESS } from './shadow-scale';
 import type { ColorScheme } from './token-set';
 
 const BLANK = {
@@ -168,15 +169,29 @@ describe('deriveNonColor', () => {
 			const background = resolveScheme(schemes[scheme]).background!;
 			const { values } = deriveNonColor(crisp, schemes).shadow[scheme];
 
-			const faint = Object.entries(values).filter(([, { color }]) => {
-				const rendered = background.l * (1 - color.alpha) + color.l * color.alpha;
-
-				return background.l - rendered <= 0.02;
-			});
+			// Composited the way a browser does, per channel in sRGB. Mixing the two OKLCH lightnesses
+			// instead reads about 1.8x high on a dark page, which is the measurement error that let
+			// four rounds of fixing this pass while the pixels stayed the same.
+			const faint = Object.entries(values).filter(
+				([, { color }]) =>
+					background.l - compositeOver(background, color, color.alpha).l <= MIN_RENDERED_DARKENING,
+			);
 
 			expect(faint.map(([step]) => step)).toEqual([]);
 		},
 	);
+
+	/**
+	 * The other half of the shadow-visibility pin. `core/shadow-scale.test.ts` holds the opacity
+	 * ramps to `MIN_VISIBLE_SURFACE_LIGHTNESS`; this holds the page the scale engine actually emits
+	 * above it. Neither alone is worth much: the ramps cleared 0.02 down to 0.177 against a page at
+	 * 0.188 purely by luck, and nothing would have caught either number moving.
+	 */
+	it.each(['light', 'dark'] as const)('emits a %s page a shadow can be seen on', (scheme) => {
+		const background = resolveScheme(colorSchemesFor(crisp)[scheme]).background!;
+
+		expect(background.l).toBeGreaterThan(MIN_VISIBLE_SURFACE_LIGHTNESS);
+	});
 
 	/**
 	 * The gamut check at the assembled seam as well as inside the module. A shadow colour no display

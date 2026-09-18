@@ -59,6 +59,43 @@ export function readOklch(color: string | Oklch): Oklch {
 	return { l: converted.l ?? 0, c: converted.c ?? 0, h: canonicalHue(converted.h) };
 }
 
+function displayable(channel: number | undefined): number {
+	return Math.max(0, Math.min(1, channel ?? 0));
+}
+
+/**
+ * What a browser actually paints when it lays `source` over `backdrop` at `alpha`.
+ *
+ * Compositing happens per channel in sRGB, so the way to know what a translucent shadow does to
+ * the page under it is to convert both ends, mix the bytes, and convert back. Interpolating the
+ * two OKLCH lightnesses instead is the obvious shortcut and it is wrong in a direction that
+ * matters: OKLCH lightness is roughly a cube root of luminance, so a straight mix of it overstates
+ * the darkening. On a near-white page it reads about 16% high, and on a dark page between 64%
+ * high at the largest step and 88% at the smallest.
+ *
+ * That error is why #7's shadow shipped invisible four times. Every fix was tuned against a
+ * measurement that flattered it by the same factor each round, so the numbers moved and the pixels
+ * did not. Anything asking "how much darker does this actually look" goes through here.
+ */
+export function compositeOver(backdrop: Oklch, source: Oklch, alpha: number): Oklch {
+	const under = toRgb({ mode: 'oklch', ...backdrop })!;
+	const over = toRgb({ mode: 'oklch', ...source })!;
+	// `displayable` clamps before mixing, because a display has no channel outside 0 to 1 to
+	// composite with. An out-of-gamut backdrop otherwise mixes against a value nothing can show and
+	// reports a result a browser would not paint.
+	const mix = (a: number | undefined, b: number | undefined) =>
+		displayable(a) * (1 - alpha) + displayable(b) * alpha;
+
+	const mixed = toOklch({
+		mode: 'rgb',
+		r: mix(under.r, over.r),
+		g: mix(under.g, over.g),
+		b: mix(under.b, over.b),
+	})!;
+
+	return { l: mixed.l ?? 0, c: mixed.c ?? 0, h: canonicalHue(mixed.h) };
+}
+
 export function isInSrgb(color: Oklch): boolean {
 	const rgb = toRgb({ mode: 'oklch', ...color });
 
