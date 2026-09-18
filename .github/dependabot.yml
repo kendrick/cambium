@@ -1,0 +1,37 @@
+# Dependabot keeps the lockfile current so a supply-chain advisory does not sit
+# unnoticed in a repo nobody is actively shipping from.
+#
+# Only the npm ecosystem is declared. Dependabot's `github-actions` ecosystem
+# scans `.github/workflows/`, and this repo has none: CodeQL runs through
+# GitHub's repo-level default setup rather than a workflow file. Add that
+# ecosystem when the first workflow lands, not before.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Batched rather than one PR per bump. Every PR here runs the full verify,
+    # including a build and the 200 kB first-load budget, and forty dependencies
+    # updating singly would spend that budget forty times for one review.
+    groups:
+      production:
+        applies-to: version-updates
+        dependency-type: production
+        update-types: [minor, patch]
+      development:
+        applies-to: version-updates
+        dependency-type: development
+        update-types: [minor, patch]
+      security:
+        applies-to: security-updates
+        patterns: ['*']
+    # A major bump lands alone, because the one thing worth reading closely is
+    # the one most likely to move an API under the code.
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    labels:
+      - ready-for-agent
