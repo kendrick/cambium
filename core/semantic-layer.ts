@@ -121,14 +121,23 @@ function pairEntry(ramps: RampSet, pair: ContrastingPair): SemanticEntry {
 	};
 }
 
-/** `brand.9, the brand ramp's solid fill, the brand colour itself`—where the colour came from and what the step is for. */
+/**
+ * `brand.9, the brand ramp's solid fill`—where the colour came from and what the step is for.
+ *
+ * Step 9's role reads `solid fill, the brand colour itself`, which is two clauses. Pasted whole it
+ * gives the sentence a second appositive and the reader two commas to untangle, so only the part
+ * before the comma is used. What the step 9 aside would have said is already on the payload beside
+ * it: provenance `observed` against `keyColors`.
+ */
 function describe(alias: SemanticAlias, step: RampStep): string {
 	const ramp = alias.slice(0, alias.lastIndexOf('.'));
 
 	// Searched rather than indexed. `RampSchema` pins a ramp to steps 1 through 12 in order, and
 	// nothing pins `STEP_ROLES` to the same order; the `!` holds because the table declares all
 	// twelve steps a `RampStep` can carry.
-	return `${alias}, the ${ramp} ramp's ${STEP_ROLES.find((role) => role.step === step.step)!.role}`;
+	const role = STEP_ROLES.find((entry) => entry.step === step.step)!.role;
+
+	return `${alias}, the ${ramp} ramp's ${role.split(',')[0]}`;
 }
 
 function higherContrast(

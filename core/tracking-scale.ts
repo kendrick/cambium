@@ -24,7 +24,7 @@ export function trackingScale(feel: BrandSeed['trackingFeel']): TrackingScale {
 
 	/** One seed field for the whole scale, so a stated-vs-fallback feel is a fact about the call. */
 	const extensions = feel
-		? derived('trackingFeel', "Scaled from the brand seed's stated tracking feel.")
+		? derived('trackingFeel', "Scaled from the brand seed's stated tracking feel")
 		: invented(
 				"The seed measured no tracking feel, so this scale falls back to Tailwind's normal tracking.",
 			);

@@ -43,7 +43,7 @@ export function radiusScale(character: BrandSeed['radiusCharacter']): RadiusScal
 	 * fell back is a fact about this call, not about any individual step it produces.
 	 */
 	const extensions = character
-		? derived('radiusCharacter', "Scaled from the brand seed's stated radius character.")
+		? derived('radiusCharacter', "Scaled from the brand seed's stated radius character")
 		: invented(
 				'The seed measured no radius character, so this scale falls back to the vendored default.',
 			);

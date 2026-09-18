@@ -53,7 +53,7 @@ export function typeScale(ratio: BrandSeed['typeScaleRatio']): Typography {
 
 	/** One seed field for the whole size set, so a stated-vs-fallback ratio is a fact about the call. */
 	const sizeExtensions = ratio
-		? derived('typeScaleRatio', "Scaled from the brand seed's stated type scale ratio.")
+		? derived('typeScaleRatio', "Scaled from the brand seed's stated type scale ratio")
 		: invented('The seed measured no type scale ratio, so this scale falls back to a minor third.');
 
 	/**
@@ -62,10 +62,10 @@ export function typeScale(ratio: BrandSeed['typeScaleRatio']): Typography {
 	 * whether the ratio itself was stated.
 	 */
 	const weightExtensions = invented(
-		"A Brand Seed measures no weight axis, so this weight is the pipeline's own default.",
+		"A Brand Seed measures no weight axis, so this weight is the pipeline's own default",
 	);
 	const lineHeightExtensions = invented(
-		"A Brand Seed measures no leading, so this line height is the pipeline's own default.",
+		"A Brand Seed measures no leading, so this line height is the pipeline's own default",
 	);
 
 	const size: Record<(typeof STEPS)[number], Dimension> = {} as Record<
