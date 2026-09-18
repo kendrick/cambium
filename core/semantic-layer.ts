@@ -1,7 +1,7 @@
 import type { BrandSeed } from './brand-seed';
 import { deriveNonColor } from './derive-non-color';
 import { contrastFromOklch } from './oklch';
-import { CAMBIUM_NAMESPACE, derived, invented, observed } from './provenance';
+import { CAMBIUM_NAMESPACE, inheritedFrom } from './provenance';
 import type { RampSet, SchemeName } from './scale-engine';
 import { type ContrastingPair, type SemanticAlias, SEMANTIC_MAP } from './semantic-map';
 import { STEP_ROLES } from './step-roles';
@@ -90,12 +90,7 @@ function semanticFor(ramps: RampSet): Record<string, SemanticEntry> {
  * that step.
  */
 function inherit(step: RampStep, rationale: string): TokenExtensions {
-	const payload = step.$extensions[CAMBIUM_NAMESPACE];
-
-	if (payload.provenance === 'observed') return observed(payload.seedField, rationale);
-	if (payload.provenance === 'derived') return derived(payload.seedField, rationale);
-
-	return invented(rationale);
+	return inheritedFrom(step.$extensions[CAMBIUM_NAMESPACE], rationale);
 }
 
 function fixedEntry(ramps: RampSet, alias: SemanticAlias): SemanticEntry {

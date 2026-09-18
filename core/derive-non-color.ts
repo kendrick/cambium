@@ -1,10 +1,9 @@
 import type { BrandSeed } from './brand-seed';
-import type { Oklch } from './oklch';
-import { invented } from './provenance';
+import { CAMBIUM_NAMESPACE, invented } from './provenance';
 import { radiusScale } from './radius-scale';
 import type { SchemeName } from './scale-engine';
 import { resolveScheme } from './resolve-scheme';
-import { shadowScale } from './shadow-scale';
+import { type ShadowSurface, shadowScale } from './shadow-scale';
 import { systemConstants, type UntaggedSystemConstants } from './system-constants';
 import type {
 	ColorScheme,
@@ -136,14 +135,18 @@ function tagSystemConstants(raw: UntaggedSystemConstants): SystemConstants {
  * `SEMANTIC_MAP` declares `background` and `TokenSetSchema` rejects a dangling alias. Kept anyway:
  * a shadow tinted from `undefined` reaches an export looking like a colour somebody chose.
  */
-function surfaceOf(scheme: ColorScheme, name: SchemeName): Oklch {
-	const surface = resolveScheme(scheme).background;
+function surfaceOf(scheme: ColorScheme, name: SchemeName): ShadowSurface {
+	const color = resolveScheme(scheme).background;
+	const entry = scheme.semantic.background;
 
-	if (!surface) {
+	if (!color || !entry) {
 		throw new Error(
 			`the ${name} scheme declares no background token, so a shadow has no surface to take its tint from`,
 		);
 	}
 
-	return surface;
+	// The shadow needs what reached the surface, not just the colour it landed on. `background`
+	// already carries that: a semantic token inherits the provenance of the ramp step it resolves
+	// to, so reading its payload here is reading the neutral ramp's answer one hop back.
+	return { color, provenance: entry.$extensions[CAMBIUM_NAMESPACE] };
 }

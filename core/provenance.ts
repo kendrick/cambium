@@ -1,4 +1,4 @@
-import type { SeedField, TokenExtensions } from './token-set';
+import type { SeedField, TokenExtensions, TokenProvenance } from './token-set';
 
 /**
  * The schema and the types live in `token-set.ts`, beside the tokens that carry them, and are
@@ -38,4 +38,24 @@ export function derived(seedField: SeedField, rationale: string): TokenExtension
  */
 export function invented(rationale: string): TokenExtensions {
 	return { [CAMBIUM_NAMESPACE]: { provenance: 'invented', rationale, seedField: null } };
+}
+
+/**
+ * The provenance a token takes when its value is computed from another token rather than from a
+ * seed field.
+ *
+ * Two places in the pipeline build a token out of an intermediate. A semantic token resolves to a
+ * ramp step and carries that step's colour, and a shadow tints off the resolved page surface. In
+ * both, the seed field that reached the value is whatever reached the intermediate, so reading it
+ * off the source is the only way to name it correctly: a fixed answer is right for whichever seed
+ * it was written against and wrong for the rest.
+ *
+ * The rationale is the caller's own rather than the source's. The source records how its value was
+ * reached; the caller records why it reached for that source.
+ */
+export function inheritedFrom(source: TokenProvenance, rationale: string): TokenExtensions {
+	if (source.provenance === 'observed') return observed(source.seedField, rationale);
+	if (source.provenance === 'derived') return derived(source.seedField, rationale);
+
+	return invented(rationale);
 }

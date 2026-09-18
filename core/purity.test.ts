@@ -167,7 +167,14 @@ describe('core purity', () => {
 		['the tracking scale', () => trackingScale(null).source === 'derived'],
 		[
 			'the shadow scale',
-			() => shadowScale({ l: 0.99, c: 0.004, h: 259.8 }, null).source === 'derived',
+			() =>
+				shadowScale(
+					{
+						color: { l: 0.99, c: 0.004, h: 259.8 },
+						provenance: { provenance: 'derived', seedField: 'keyColors', rationale: 'a page' },
+					},
+					null,
+				).source === 'derived',
 		],
 		['the system constants', () => systemConstants().focusRing.source === 'system'],
 		[

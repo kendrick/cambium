@@ -3,8 +3,13 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { compositeOver, isInSrgb, type Oklch } from './oklch';
-import { CAMBIUM_NAMESPACE } from './provenance';
-import { MIN_RENDERED_DARKENING, MIN_VISIBLE_SURFACE_LIGHTNESS, shadowScale } from './shadow-scale';
+import { CAMBIUM_NAMESPACE, type SeedField } from './provenance';
+import {
+	MIN_RENDERED_DARKENING,
+	MIN_VISIBLE_SURFACE_LIGHTNESS,
+	shadowScale,
+	type ShadowSurface,
+} from './shadow-scale';
 
 const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
 
@@ -15,8 +20,18 @@ const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
  *
  * Both sit at the same hue, so a colour difference between them cannot come from hue alone.
  */
-const PAGE_LIGHT: Oklch = { l: 0.99, c: 0.004, h: 259.8 };
-const PAGE_DARK: Oklch = { l: 0.18, c: 0.012, h: 259.8 };
+/**
+ * A surface carries what reached it as well as what colour it is, because a shadow with no stated
+ * character inherits the surface's provenance rather than naming a field of its own. These two
+ * stand in for a page whose neutral ramp traced to the brand key colour.
+ */
+const pageSurface = (color: Oklch, seedField: SeedField = 'keyColors'): ShadowSurface => ({
+	color,
+	provenance: { provenance: 'derived', seedField, rationale: 'stands in for a resolved page' },
+});
+
+const PAGE_LIGHT = pageSurface({ l: 0.99, c: 0.004, h: 259.8 });
+const PAGE_DARK = pageSurface({ l: 0.18, c: 0.012, h: 259.8 });
 
 const tinted = { spread: 'diffuse', tintFromSurface: true } as const;
 
@@ -51,8 +66,8 @@ describe('shadowScale', () => {
 	// The acceptance criterion: a shadow tinted by the surface reads as part of the system, where
 	// black at an opacity reads as a default nobody chose.
 	it('takes its hue from the surface it sits on', () => {
-		const warm = shadowScale({ l: 0.98, c: 0.01, h: 40 }, tinted).values.md!.color;
-		const cool = shadowScale({ l: 0.98, c: 0.01, h: 240 }, tinted).values.md!.color;
+		const warm = shadowScale(pageSurface({ l: 0.98, c: 0.01, h: 40 }), tinted).values.md!.color;
+		const cool = shadowScale(pageSurface({ l: 0.98, c: 0.01, h: 240 }), tinted).values.md!.color;
 
 		expect(warm.h).toBeCloseTo(40, 6);
 		expect(cool.h).toBeCloseTo(240, 6);
@@ -68,7 +83,8 @@ describe('shadowScale', () => {
 	 * than the constant keeps this a statement about what reaches a stylesheet.
 	 */
 	it('tints a near-achromatic page with a chroma that can actually be seen', () => {
-		const { color } = shadowScale({ l: 0.994, c: 0.000223, h: 259.8 }, tinted).values.md!;
+		const { color } = shadowScale(pageSurface({ l: 0.994, c: 0.000223, h: 259.8 }), tinted).values
+			.md!;
 
 		expect(color.c).toBeGreaterThan(0.01);
 		expect(color.h).toBeCloseTo(259.8, 6);
@@ -82,8 +98,8 @@ describe('shadowScale', () => {
 	 */
 	it('gives up the tint rather than the darkness on a dark page', () => {
 		const shortfall = [27, 86, 162.5, 200, 259.8, 265, 300].map((h) => {
-			const dark = shadowScale({ ...PAGE_DARK, h }, tinted).values.md!.color;
-			const light = shadowScale({ ...PAGE_LIGHT, h }, tinted).values.md!.color;
+			const dark = shadowScale(pageSurface({ ...PAGE_DARK.color, h }), tinted).values.md!.color;
+			const light = shadowScale(pageSurface({ ...PAGE_LIGHT.color, h }), tinted).values.md!.color;
 
 			return { h, dark: dark.c, light: light.c };
 		});
@@ -111,12 +127,12 @@ describe('shadowScale', () => {
 	it.each([
 		['a light page', PAGE_LIGHT],
 		['a dark page', PAGE_DARK],
-	])('renders every step visibly darker than %s', (_name, surface) => {
-		const { values } = shadowScale(surface, tinted);
+	])('renders every step visibly darker than %s', (_name, page) => {
+		const { values } = shadowScale(page, tinted);
 		const rendered = STEPS.map((step) => {
 			const { color } = values[step]!;
 
-			return surface.l - compositeOver(surface, color, color.alpha).l;
+			return page.color.l - compositeOver(page.color, color, color.alpha).l;
 		});
 
 		expect(rendered.filter((delta) => delta <= MIN_RENDERED_DARKENING)).toEqual([]);
@@ -129,7 +145,7 @@ describe('shadowScale', () => {
 	 * leaves the neutral ramp untinted is what reaches this.
 	 */
 	it('leaves a shadow on an achromatic page untinted rather than painting it hue zero', () => {
-		const { color } = shadowScale({ l: 0.99, c: 0, h: 0 }, tinted).values.md!;
+		const { color } = shadowScale(pageSurface({ l: 0.99, c: 0, h: 0 }), tinted).values.md!;
 
 		expect(color.c).toBe(0);
 		expect(color.h).toBe(0);
@@ -214,15 +230,37 @@ describe('shadowScale', () => {
 	 * `invented` here would assert that no seed field informed the token, and that is false. Neither
 	 * value tells the whole story, and only one of them lies.
 	 */
-	it('traces a shadow with no stated character to the key colour its tint comes from', () => {
-		const shadow = shadowScale(PAGE_LIGHT, null).values.md!;
-		const payload = shadow.$extensions[CAMBIUM_NAMESPACE];
+	it.each([
+		['keyColors' as const, 'keyColors'],
+		['neutralTemperature' as const, 'neutralTemperature'],
+	])(
+		'inherits the surface provenance when no character is stated, tracing to %s',
+		(field, expected) => {
+			const payload = shadowScale(pageSurface(PAGE_LIGHT.color, field), null).values.md!
+				.$extensions[CAMBIUM_NAMESPACE];
 
-		expect(payload.provenance).toBe('derived');
-		expect(payload.seedField).toBe('keyColors');
-		expect(payload.rationale.toLowerCase()).toContain('surface');
-		// The caveat is the rationale's whole job here, so its absence is a failure.
-		expect(payload.rationale.toLowerCase()).toMatch(/depth|blur|constant/);
+			expect(payload.provenance).toBe('derived');
+			expect(payload.seedField).toBe(expected);
+			// The sentence has to move with the field, or a corrected payload ships a false rationale.
+			expect(payload.rationale).toContain(expected);
+			expect(payload.rationale.toLowerCase()).toMatch(/depth|blur|constant/);
+		},
+	);
+
+	/**
+	 * A surface nothing in the seed reached hands the shadow the same answer. Unreachable through
+	 * `SEMANTIC_MAP` today, because `background` aliases a neutral ramp that always traces
+	 * somewhere, and pinned anyway so the inheritance is a rule rather than a two-case lookup.
+	 */
+	it('inherits an invented surface rather than inventing a field for it', () => {
+		const orphan: ShadowSurface = {
+			color: PAGE_LIGHT.color,
+			provenance: { provenance: 'invented', seedField: null, rationale: 'nothing reached this' },
+		};
+		const payload = shadowScale(orphan, null).values.md!.$extensions[CAMBIUM_NAMESPACE];
+
+		expect(payload.provenance).toBe('invented');
+		expect(payload.seedField).toBeNull();
 	});
 
 	/**
@@ -235,12 +273,13 @@ describe('shadowScale', () => {
 	 * covered.
 	 */
 	it('clears the floor at every step on the darkest page it claims to support', () => {
-		const surface = { l: MIN_VISIBLE_SURFACE_LIGHTNESS, c: 0.001, h: 200 };
-		const { values } = shadowScale(surface, tinted);
+		const darkest = pageSurface({ l: MIN_VISIBLE_SURFACE_LIGHTNESS, c: 0.001, h: 200 });
+		const { values } = shadowScale(darkest, tinted);
 
 		const faint = STEPS.filter(
 			(step) =>
-				surface.l - compositeOver(surface, values[step]!.color, values[step]!.color.alpha).l <=
+				darkest.color.l -
+					compositeOver(darkest.color, values[step]!.color, values[step]!.color.alpha).l <=
 				MIN_RENDERED_DARKENING,
 		);
 
@@ -253,13 +292,13 @@ describe('shadowScale', () => {
 	 * reader who does not know it will read `MIN_VISIBLE_SURFACE_LIGHTNESS` as arbitrary.
 	 */
 	it('cannot darken a page that is already black, at any opacity', () => {
-		const black = { l: 0, c: 0, h: 0 };
+		const black = pageSurface({ l: 0, c: 0, h: 0 });
 		const { values } = shadowScale(black, tinted);
 
 		for (const step of STEPS) {
 			const { color } = values[step]!;
 
-			expect(compositeOver(black, color, color.alpha).l).toBeCloseTo(0, 10);
+			expect(compositeOver(black.color, color, color.alpha).l).toBeCloseTo(0, 10);
 		}
 	});
 
@@ -270,7 +309,7 @@ describe('shadowScale', () => {
 	 * to notice.
 	 */
 	it('keeps the darkest page from stacking opacity into a black box', () => {
-		const { values } = shadowScale({ l: 0, c: 0, h: 0 }, tinted);
+		const { values } = shadowScale(pageSurface({ l: 0, c: 0, h: 0 }), tinted);
 
 		expect(values.xl!.color.alpha).toBeLessThan(0.9);
 		expect(STEPS.every((step) => values[step]!.color.alpha > 0)).toBe(true);
@@ -281,9 +320,9 @@ describe('shadowScale', () => {
 	 * paints whatever it can reach, which on a dark page was 0.0048. Yellow and green bind here, so
 	 * a hue sweep is what makes this catch a change to either constant rather than to one hue.
 	 */
-	it.each([PAGE_LIGHT, PAGE_DARK])('emits a colour a display can actually show', (surface) => {
+	it.each([PAGE_LIGHT, PAGE_DARK])('emits a colour a display can actually show', (page) => {
 		const offGamut = [27, 86, 162.5, 200, 259.8, 300, 340]
-			.map((h) => shadowScale({ ...surface, h }, tinted).values.md!.color)
+			.map((h) => shadowScale(pageSurface({ ...page.color, h }), tinted).values.md!.color)
 			.filter((color) => !isInSrgb(color));
 
 		expect(offGamut).toEqual([]);
