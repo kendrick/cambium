@@ -371,11 +371,23 @@ function anchorsFor(
  * What informed each ramp, read off the seed and the parameters rather than off the ramp's name.
  *
  * The name is the wrong key for six of the seven. Accent is either a colour the seed placed or a
- * hue rotation the engine chose, neutral is either a stated temperature or the engine's own tint,
+ * hue rotated off the brand, neutral is either a stated temperature or a tint taken from the brand,
  * and the status four are canonical hues until `harmonization` pulls them toward the brand. So a
  * table keyed on the name alone is frozen to whichever seed it was written against, and the one it
  * would be written against is the fixture — leaving the keyless read `createLocalBrandReader`
  * produces claiming evidence that never reached the value.
+ *
+ * A token names the field its value traces to, which is not the same as the field that was absent.
+ * `accentAnchor` copies the brand key colour's lightness and chroma outright and rotates only its
+ * hue, and `neutralAnchor` with no stated temperature takes its chroma and its hue from the brand
+ * too. Both move when `keyColors` moves, so both are derived from `keyColors` rather than invented:
+ * calling them invented would tell a consumer no seed field reached the value, which is false, and
+ * `keyColors` is the one field a keyless read does populate. Marking them invented misreports the
+ * keyless gap rather than showing it.
+ *
+ * The status four are the contrast and the reason a rule keyed on absence is wrong. They carry
+ * their own canonical anchors and borrow the brand hue only when `harmonization` is above zero, so
+ * they alone fall back to something no seed informs.
  *
  * Neutral has no observed step even with a temperature stated, because step 9's lightness comes
  * from `NEUTRAL_ANCHOR_LIGHTNESS`: the seed named a tint, not a colour, so nothing in the ramp is a
@@ -402,9 +414,10 @@ function rampProvenance(
 		brand: placedKeyColor('brand'),
 		accent: accentKey
 			? placedKeyColor('accent')
-			: inventedRamp(
+			: derivedRamp(
 					'accent',
-					'built on a hue rotated off the brand because no key colour in the seed proposed an accent',
+					'keyColors',
+					"taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
 				),
 		neutral: seed.neutralTemperature
 			? derivedRamp(
@@ -412,9 +425,10 @@ function rampProvenance(
 					'neutralTemperature',
 					'tinted by the neutral temperature the seed stated',
 				)
-			: inventedRamp(
+			: derivedRamp(
 					'neutral',
-					"tinted toward the brand hue by the engine's own parameter because the seed stated no neutral temperature",
+					'keyColors',
+					'tinted from the brand key colour, the seed having stated no neutral temperature',
 				),
 		danger: statusProvenance('danger'),
 		warning: statusProvenance('warning'),

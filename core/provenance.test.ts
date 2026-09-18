@@ -224,29 +224,33 @@ describe('token provenance', () => {
 	});
 
 	/**
-	 * The case the comment on #9 rules on directly. `neutralAnchor` treats a stated temperature as
-	 * evidence and overrides its own tinting parameter, so a keyless read leaves the field null on
-	 * purpose, and the tint the engine substitutes is the engine's rather than the brand's.
+	 * A token names the field its value traces to, not the field that was absent. Both rows below
+	 * fall back, and both fall back onto the brand key colour rather than onto a constant, so both
+	 * are derived from `keyColors`. The comment on #9 originally ruled the neutral row invented; an
+	 * amendment on that issue records why it was overturned.
 	 */
-	it('marks a neutral ramp invented when the seed stated no temperature', () => {
-		expect(payloadOf(tokenSetFor(KEYLESS_SEED).primitives.neutral?.[5])).toMatchObject({
-			provenance: 'invented',
-			seedField: null,
-		});
-		expect(payloadOf(tokenSetFor(STATED_SEED).primitives.neutral?.[5])).toMatchObject({
+	it.each([
+		['neutral', (set: TokenSet) => set.primitives.neutral?.[5], 'neutralTemperature'],
+		['accent', (set: TokenSet) => set.primitives.accent?.[5], 'keyColors'],
+	])('derives a fallback %s ramp from the brand key colour', (_name, read, statedField) => {
+		expect(payloadOf(read(tokenSetFor(KEYLESS_SEED)))).toMatchObject({
 			provenance: 'derived',
-			seedField: 'neutralTemperature',
+			seedField: 'keyColors',
+		});
+		expect(payloadOf(read(tokenSetFor(STATED_SEED)))).toMatchObject({
+			provenance: 'derived',
+			seedField: statedField,
 		});
 	});
 
-	/** An accent the image offered is placed the way the brand is. A rotated one was nobody's colour. */
-	it('marks a rotated accent invented and an extracted one observed', () => {
-		expect(payloadOf(tokenSetFor(KEYLESS_SEED).primitives.accent?.[8])).toMatchObject({
-			provenance: 'invented',
-			seedField: null,
-		});
+	/** Step 9 is the one place a seed's own colour is placed rather than computed from. */
+	it('observes an accent the seed placed and derives one it rotated', () => {
 		expect(payloadOf(tokenSetFor(STATED_SEED).primitives.accent?.[8])).toMatchObject({
 			provenance: 'observed',
+			seedField: 'keyColors',
+		});
+		expect(payloadOf(tokenSetFor(KEYLESS_SEED).primitives.accent?.[8])).toMatchObject({
+			provenance: 'derived',
 			seedField: 'keyColors',
 		});
 	});

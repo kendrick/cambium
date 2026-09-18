@@ -281,13 +281,14 @@ describe('createOklchScaleEngine provenance', () => {
 		expect(tracesOf('accent', ACCENT_IN_SEED)).toEqual([anchoredTrace, anchoredTrace]);
 	});
 
-	// The rotation is the engine's own choice of hue, so no field of the seed can be named for it.
-	// This is the case a name-keyed rule gets wrong, and it is the common one: a keyless read
-	// proposes a brand colour and nothing else.
-	it('invents a rotated accent, because no seed field named a second colour', () => {
-		const invented = everyStep('invented:null');
+	// A rotated accent copies the brand key colour's lightness and chroma outright and moves only
+	// its hue, so the whole ramp swings when `keyColors` swings. The absent field is `keyColors`
+	// naming no accent; the field the value traces to is `keyColors` all the same. This is the
+	// common case, because a keyless read proposes a brand colour and nothing else.
+	it('derives a rotated accent from the brand key colour it was rotated off', () => {
+		const derived = everyStep('derived:keyColors');
 
-		expect(tracesOf('accent')).toEqual([invented, invented]);
+		expect(tracesOf('accent')).toEqual([derived, derived]);
 	});
 
 	// Derived across all twelve, never observed. The stated temperature sets hue and chroma; step
@@ -301,11 +302,20 @@ describe('createOklchScaleEngine provenance', () => {
 		]);
 	});
 
-	it('invents the neutral ramp when the seed states no temperature', () => {
-		const invented = everyStep('invented:null');
+	// `neutralAnchor` with no stated temperature takes both its chroma and its hue from the brand,
+	// so the ramp moves with `keyColors`. It holds even at `neutralTinting` 0, where chroma lands at
+	// 0 and the brand hue is still what the step stores.
+	it.each([
+		['under Balanced', BALANCED],
+		['with no tinting at all', { ...BALANCED, neutralTinting: 0 }],
+	])(
+		'derives the neutral ramp from the brand key colour %s when no temperature is stated',
+		(_name, params) => {
+			const derived = everyStep('derived:keyColors');
 
-		expect(tracesOf('neutral')).toEqual([invented, invented]);
-	});
+			expect(tracesOf('neutral', {}, params)).toEqual([derived, derived]);
+		},
+	);
 
 	// Under Balanced `harmonization` is 0 and the status hues are Cambium's constants, untouched by
 	// the seed. Claiming `keyColors` there would be pointing at evidence that never reached the value.
