@@ -100,6 +100,13 @@ export class CommitAbandonedError extends Error {
  * It catches exactly the records this store wrote past, by object identity, so a record deleted and
  * recreated under the same id is unaffected.
  *
+ * It narrows the lost update rather than closing it. Every `RecordStore.get` returns a fresh object
+ * graph, so a stale copy of a record loaded through a separate `get` is a different object holding
+ * the same old history, and nothing here recognises it. One tab is enough to reach that. Closing it
+ * needs a staleness check where the record actually lives, which is the same conclusion the queue
+ * reaches about two tabs a few screens down, and for the same reason: the only authority on what is
+ * stored is storage. #67 owns it.
+ *
  * Typed for the same reason as `RecordStampedAheadError`: the caller has a specific recovery, which
  * is to reload the record and commit again, and it can only choose it if it can tell this apart
  * from the misuse the other guards catch. `recordId` says what to reload, and `writtenVersions` how
@@ -474,8 +481,8 @@ export function createWorkspaceStore({
 		 *
 		 * It serialises this store and nothing else. Two tabs hold two stores and two queues, and
 		 * `RecordStore.put` replaces a whole record with no compare-and-swap, so the same collision
-		 * is still reachable across tabs. Closing that needs optimistic concurrency at the
-		 * `RecordStore` seam, which is #67.
+		 * is still reachable across tabs, and through a stale copy re-read inside one tab. Closing
+		 * either needs optimistic concurrency at the `RecordStore` seam, which is #67.
 		 */
 		let queue: Promise<unknown> = Promise.resolve();
 
@@ -490,6 +497,10 @@ export function createWorkspaceStore({
 		 *
 		 * A `WeakMap` because the entry is only ever reachable through a record somebody still holds,
 		 * so there is nothing to evict and no way for this to grow past what the caller keeps alive.
+		 *
+		 * Object identity is the most this store can key on, and it is not enough on its own. A record
+		 * re-read through `RecordStore.get` arrives as a new object, so a stale copy fetched that way
+		 * slips past. See `StaleWorkspaceError` and #67.
 		 */
 		const superseded = new WeakMap<BrandRecord, BrandRecord>();
 
