@@ -1,6 +1,6 @@
 'use client';
 
-import { type ChangeEvent, useId, useState } from 'react';
+import { type ChangeEvent, useId, useRef, useState } from 'react';
 
 import {
 	chooseGuidance,
@@ -29,8 +29,8 @@ import type { BrandRecord } from '../../core/brand-record';
  * trade: issue #1 makes the export archive the only migration path, and `SCHEMA_VERSION` exists so
  * that a record whose shape moved fails loudly. Metadata the archive cannot see would migrate
  * silently and wrongly, which is worse than metadata that is honestly absent. Closing this properly
- * needs a field on `ReferenceImageSchema` and a `SCHEMA_VERSION` bump, which is `core/` work and a
- * separate ticket.
+ * needs a field on `ReferenceImageSchema` and a `SCHEMA_VERSION` bump, which is `core/` work. #77
+ * owns it and is blocked on this ticket and #9.
  */
 type PickedImage = {
 	name: string;
@@ -94,6 +94,17 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 	const [busy, setBusy] = useState(false);
 	const pickerId = useId();
 	const brandUrlId = useId();
+
+	/**
+	 * Guards the save against re-entry, and a ref rather than `busy` because that is the whole point.
+	 * A state update is not visible until the next render, so two submit events landing in one tick
+	 * both read `busy` as false and both run, however the button is styled. This flag flips
+	 * synchronously.
+	 *
+	 * It is never reset on success. The route swaps this form for the saved panel, and a save that
+	 * has already written must not be allowed to run again while that navigation is in flight.
+	 */
+	const saving = useRef(false);
 
 	const guidance = GUIDANCE_COPY[chooseGuidance(picked.map((image) => image.tag))];
 	const atLimit = picked.length >= MAX_REFERENCE_IMAGES;
@@ -166,9 +177,28 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 		setNotice(null);
 	}
 
+	/**
+	 * Writes one record, once.
+	 *
+	 * `RecordStore.put` rejects a write that is not strictly ahead of what is stored, so putting the
+	 * same record twice fails and the recovery is delete-then-put. This route never needs that
+	 * recovery, and the reason is worth stating because it is the only thing holding: the id is
+	 * minted inside this function and nothing keeps it afterwards, so every save is a record storage
+	 * has not seen and a retry after a failure is a new record rather than a second attempt at the
+	 * old one. Hoisting that `crypto.randomUUID()` out to component state would quietly turn a retry
+	 * into a rejected re-put.
+	 *
+	 * The other two ways in are closed above and below: `saving` stops a double submit reaching this
+	 * twice, and `onSaved` sits outside the catch so a write that landed can never be reported as one
+	 * that did not.
+	 */
 	async function save() {
+		if (saving.current) return;
+		saving.current = true;
 		setBusy(true);
 		setNotice(null);
+
+		let savedId: string;
 
 		try {
 			// Every one of these is dynamic on purpose. `core/brand-record` and the IndexedDB store both
@@ -191,27 +221,35 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 
 			const store = await createIndexedDbRecordStore();
 
-			// The resolved value is ignored rather than assumed absent: #67 is changing `put` to resolve
-			// with the record as stored. Nothing here writes twice, so there is nothing to carry forward.
+			// The resolved value is ignored rather than assumed absent: #67 changes `put` to resolve with
+			// the record as stored. Nothing here writes twice, so there is nothing to carry forward.
 			await store.put(record);
+			savedId = record.id;
 
 			// `storage-estimate.ts` assigns this call to "the flow that saves a brand for the first
 			// time", which is this one, and warns it must not take the save down with it. Firefox answers
 			// with a permission prompt, so it runs after the write rather than before, and a refusal is
 			// not something to report.
 			void storage.requestPersistentStorage().catch(() => undefined);
-
-			// `busy` stays set. The route replaces this form with the saved panel on the same tick, and
-			// clearing it first would flash an enabled button over a form that is already gone.
-			onSaved(record.id);
 		} catch (error) {
+			saving.current = false;
+			setBusy(false);
 			setNotice(
 				error instanceof Error && error.name === 'StorageQuotaExceededError'
 					? 'This browser is out of room, so nothing was saved.'
 					: 'Saving failed, so nothing was stored. Try again.',
 			);
-			setBusy(false);
+
+			return;
 		}
+
+		// Outside the catch on purpose. The record is written by the time this runs, so a failure here
+		// is a failure to navigate, and letting it fall into a handler that says "nothing was stored"
+		// would invite a retry that writes a second copy of work the user already has.
+		//
+		// `busy` stays set. The route replaces this form with the saved panel, and clearing it first
+		// would flash an enabled button over a form that is already gone.
+		onSaved(savedId);
 	}
 
 	return (
@@ -299,9 +337,11 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				{/* Captured and never fetched. Nothing on this route makes a network call, and crawling a
 				    site somebody named would be a different product with a different privacy story.
 				    It reaches no further than this form for now, for the same reason the tag above does:
-				    `BrandRecordSchema` is strict and has no field for it. */}
+				    `BrandRecordSchema` is strict and has no field for it. #77 adds one. */}
+				{/* The copy has to match what actually happens. Saying it is kept "with the record" read
+				    as a promise the strict schema above cannot honour yet. */}
 				<p className="text-muted-foreground text-sm">
-					Context for whoever reads the record later. Cambium never opens it.
+					Cambium never opens it, and it is not saved with the record yet.
 				</p>
 			</div>
 

@@ -94,6 +94,12 @@ export function LandingRoute() {
 				Saved. {count} stored in this browser under{' '}
 				<code className="bg-muted rounded px-1 py-0.5 text-xs">{recordId}</code>.
 			</p>
+			{/* Says what was dropped at the moment the user could otherwise assume everything was kept.
+			    #77 adds the fields; until it lands, silence here would be the bad surprise. */}
+			<p className="text-muted-foreground text-sm">
+				The images are stored. Their type tags and the brand site are not kept yet, so those went
+				when the form closed.
+			</p>
 			<p className="text-muted-foreground text-sm">
 				Nothing has been generated from them yet. That takes an API key and a model call, and the
 				workspace that asks for one is still being built.
