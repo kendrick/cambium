@@ -2,18 +2,26 @@ import { describe, expect, it } from 'vitest';
 
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { BrandSeedSchema } from './brand-seed';
+import { CAMBIUM_NAMESPACE, derived, invented, observed } from './provenance';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
 import { TokenSetSchema } from './token-set';
+
+const stepPayload = derived('keyColors', 'takes the brand hue through the curve at this step');
 
 const ramp = Array.from({ length: 12 }, (_, i) => ({
 	step: i + 1,
 	l: 0.05 + i * 0.08,
 	c: 0.05,
 	h: 259.8,
+	$extensions: stepPayload,
 }));
 const shadow = SHADOW_FIXTURE;
 
-const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' }, shadow };
+const layer = {
+	primitives: { brand: ramp },
+	semantic: { border: { alias: 'brand.6', $extensions: stepPayload } },
+	shadow,
+};
 
 const tokenSet = {
 	...layer,
@@ -63,51 +71,87 @@ const record = {
 	],
 };
 
+/** A set whose first ramp step carries `patch` on top of its own keys, mirrored into both schemes. */
+function patchedStep(patch: Record<string, unknown>) {
+	const annotated = [{ ...ramp[0]!, ...patch }, ...ramp.slice(1)];
+	const patched = { ...layer, primitives: { brand: annotated } };
+
+	return { ...tokenSet, ...patched, schemes: { light: patched, dark: patched } };
+}
+
 /**
  * Zod strips unknown keys by default, which is the wrong failure for a persisted shape. Stripping
  * would lose an unrecognised key on the way to disk without a word, so these schemas reject instead
  * and the ticket that adds the key gets an error naming the file to widen.
  *
- * #7 widened the schema for its nine non-colour categories and moved this guard onto the payload
- * #9 attaches, which is the next category of data with no slot here. The guard is only worth
- * anything while it points at something the schema has not learned yet.
+ * #7 pointed this guard at the payload #9 attaches, and #9 has now landed, so the schema has the
+ * slot. What is left to guard is the spelling: `$extensions` sits on a token under one namespace,
+ * and every other way of writing provenance down is still a key the schema does not declare. A
+ * guard is only worth anything while it points at something the schema has not learned, so what it
+ * points at now is the next payload rather than this one.
  */
 describe('schema strictness', () => {
-	it('rejects a provenance payload rather than dropping it on the way to disk', () => {
-		const withExtensions = {
-			...tokenSet,
-			$extensions: {
-				'com.cambium': {
-					provenance: 'observed',
-					rationale: 'traces to the brand key colour',
-					seedField: 'keyColors',
-				},
-			},
-		};
-
-		const result = TokenSetSchema.safeParse(withExtensions);
-
-		expect(result.success).toBe(false);
+	it('accepts a provenance payload on a ramp step now that the schema declares the slot', () => {
+		expect(TokenSetSchema.safeParse(tokenSet).success).toBe(true);
 	});
 
-	it('rejects provenance attached to a ramp step rather than discarding the evidence', () => {
-		const annotated = [
-			{ ...ramp[0]!, provenance: 'derived', rationale: 'traces to the brand key colour' },
-			...ramp.slice(1),
-		];
+	it('rejects a payload attached to the set rather than to a token', () => {
+		const attached = { ...tokenSet, $extensions: observed('keyColors', 'traces to the brand') };
 
-		const result = TokenSetSchema.safeParse({
-			...tokenSet,
-			primitives: { brand: annotated },
-			schemes: { light: { ...layer, primitives: { brand: annotated } }, dark: layer },
+		expect(TokenSetSchema.safeParse(attached).success).toBe(false);
+	});
+
+	it('rejects provenance written as bare keys beside the value it describes', () => {
+		const bare = patchedStep({ provenance: 'derived', rationale: 'traces to the brand' });
+
+		expect(TokenSetSchema.safeParse(bare).success).toBe(false);
+	});
+
+	it('rejects a payload filed under a namespace nobody reads', () => {
+		const mistyped = patchedStep({
+			$extensions: { 'com.example': stepPayload[CAMBIUM_NAMESPACE] },
 		});
 
-		expect(result.success).toBe(false);
+		expect(TokenSetSchema.safeParse(mistyped).success).toBe(false);
+	});
+
+	/**
+	 * `seedField` is the discriminator's dependent, the same split `FontCandidateSchema` already
+	 * makes between a ranked candidate and an invented one. Allowing any combination would let a
+	 * token nothing in the seed informed point at a field anyway, and provenance that cannot be
+	 * followed still reads as evidence.
+	 */
+	it.each([
+		[
+			'an invented token pointing at a seed field',
+			{
+				...invented('nothing in the seed reached this')[CAMBIUM_NAMESPACE],
+				seedField: 'keyColors',
+			},
+		],
+		[
+			'an observed token pointing at no seed field',
+			{ ...observed('keyColors', 'places the brand colour')[CAMBIUM_NAMESPACE], seedField: null },
+		],
+		[
+			'a token tracing to a field no seed declares',
+			{ ...stepPayload[CAMBIUM_NAMESPACE], seedField: 'vibes' },
+		],
+		[
+			'a rationale running to a second sentence',
+			{ ...stepPayload[CAMBIUM_NAMESPACE], rationale: 'Takes the brand hue. Then solves it.' },
+		],
+		['an empty rationale', { ...stepPayload[CAMBIUM_NAMESPACE], rationale: '' }],
+	])('rejects %s', (_name, payload) => {
+		const patched = patchedStep({ $extensions: { [CAMBIUM_NAMESPACE]: payload } });
+
+		expect(TokenSetSchema.safeParse(patched).success).toBe(false);
 	});
 
 	it.each([
 		['BrandSeedSchema', BrandSeedSchema, seed],
 		['BrandRecordSchema', BrandRecordSchema, record],
+		['TokenSetSchema', TokenSetSchema, tokenSet],
 	])('%s rejects a key it does not declare', (_name, schema, value) => {
 		expect(schema.safeParse({ ...value, somethingNew: true }).success).toBe(false);
 	});
