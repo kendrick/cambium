@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	describeRejectedBytes,
 	fitWithin,
+	ImageEncodeError,
 	MAX_EDGE_PX,
 	prepareReferenceImage,
 	sniffImageType,
@@ -26,6 +27,20 @@ function bytes(values: number[]): Uint8Array<ArrayBuffer> {
 	return new Uint8Array(values);
 }
 
+/**
+ * A stand-in for encoder output, carrying a real WebP signature and padded to `size` bytes.
+ *
+ * The signature is not decoration. `prepareReferenceImage` names the stored blob by sniffing it,
+ * never by its `Blob.type`, so a fake encoder returning arbitrary bytes under a WebP label is
+ * rejected — which is the whole point of that rule and was what these fakes used to lean on.
+ */
+function encodedWebp(size = WEBP_HEAD.length): Blob {
+	const out = new Uint8Array(size);
+	out.set(WEBP_HEAD.slice(0, Math.min(WEBP_HEAD.length, size)));
+
+	return new Blob([out], { type: 'image/webp' });
+}
+
 function inertBitmap(width: number, height: number): DecodedImage {
 	return { width, height, close() {} };
 }
@@ -41,7 +56,7 @@ function fakeCodec(overrides: Partial<ImageCodec> = {}): ImageCodec {
 			return inertBitmap(800, 600);
 		},
 		async encode() {
-			return new Blob([bytes([1])], { type: 'image/webp' });
+			return encodedWebp();
 		},
 		...overrides,
 	};
@@ -145,7 +160,7 @@ describe('prepareReferenceImage', () => {
 					: { width: 1568, height: 1176, close() {} };
 			},
 			async encode() {
-				return new Blob([bytes([9, 9, 9])], { type: 'image/webp' });
+				return encodedWebp();
 			},
 		});
 
@@ -167,7 +182,7 @@ describe('prepareReferenceImage', () => {
 			},
 			async encode() {
 				// Both files resize down to the exact same encoded bytes.
-				return new Blob([bytes([7, 7, 7])], { type: 'image/webp' });
+				return encodedWebp();
 			},
 		});
 
@@ -190,7 +205,7 @@ describe('prepareReferenceImage', () => {
 			},
 			async encode() {
 				encodeCalls += 1;
-				return new Blob([bytes([1])], { type: 'image/webp' });
+				return encodedWebp();
 			},
 		});
 
@@ -227,7 +242,7 @@ describe('prepareReferenceImage', () => {
 		const codec = fakeCodec({
 			async encode() {
 				encodeCalls += 1;
-				return new Blob([bytes([1])], { type: 'image/webp' });
+				return encodedWebp();
 			},
 		});
 
@@ -252,7 +267,7 @@ describe('prepareReferenceImage', () => {
 
 	it('reports bytes from the encoded blob, not from width times height', async () => {
 		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
-		const encodedBlob = new Blob([new Uint8Array(37)], { type: 'image/webp' });
+		const encodedBlob = encodedWebp(37);
 		const codec = fakeCodec({
 			async decode(blob) {
 				return blob === file
@@ -280,7 +295,7 @@ describe('prepareReferenceImage', () => {
 	 */
 	it('reports the dimensions decode returns for the stored blob, not the requested fit', async () => {
 		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
-		const encodedBlob = new Blob([bytes([5, 5])], { type: 'image/webp' });
+		const encodedBlob = encodedWebp();
 		const codec = fakeCodec({
 			async decode(blob) {
 				if (blob === file) return { width: 4000, height: 3000, close() {} };
@@ -308,6 +323,34 @@ describe('prepareReferenceImage', () => {
 	 * header, which `app/readers/anthropic-request.ts` forwards to the Messages API as the image's
 	 * media type. This fails if the encode branch ever assumes its own output type again.
 	 */
+	/**
+	 * The case the first version of this fix would have passed and should not have. `ImageCodec` is
+	 * an injectable seam, so `Blob.type` is a declaration like any other, and trusting it here would
+	 * put WebP bytes into a paid Messages call under a PNG header: the defect the fix exists to
+	 * close, one layer up inside the fix itself.
+	 */
+	it('believes the bytes over the blob type when the two disagree', async () => {
+		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
+		const codec = fakeCodec({
+			async decode(blob) {
+				return blob === file
+					? { width: 4000, height: 3000, close() {} }
+					: { width: 1568, height: 1176, close() {} };
+			},
+			// WebP bytes wearing a PNG label.
+			async encode() {
+				return new Blob([bytes(WEBP_HEAD)], { type: 'image/png' });
+			},
+		});
+
+		const result = await prepareReferenceImage(file, codec);
+
+		expect(result.kind).toBe('prepared');
+		if (result.kind !== 'prepared') return;
+		expect(result.prepared.mediaType).toBe('image/webp');
+		expect(result.prepared.image.downscaled).toMatch(/^data:image\/webp;base64,/);
+	});
+
 	it('labels the encoded blob by what came back, not by what was requested', async () => {
 		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
 		const codec = fakeCodec({
@@ -351,7 +394,9 @@ describe('prepareReferenceImage', () => {
 		expect(result.prepared.mediaType).toBe('image/webp');
 	});
 
-	it('refuses to store an encoded blob it cannot name', async () => {
+	// Typed rather than bare, because the picker gives opposite advice for this and for a file it
+	// could not read, and it can only choose if it can tell them apart.
+	it('refuses to store an encoded blob it cannot name, as a named error', async () => {
 		const file = new Blob([bytes(PNG_HEAD)], { type: 'image/png' });
 		const codec = fakeCodec({
 			async decode(blob) {
@@ -364,7 +409,11 @@ describe('prepareReferenceImage', () => {
 			},
 		});
 
-		await expect(prepareReferenceImage(file, codec)).rejects.toThrow(/not a PNG, JPEG, or WebP/);
+		await expect(prepareReferenceImage(file, codec)).rejects.toThrow(ImageEncodeError);
+		await expect(prepareReferenceImage(file, codec)).rejects.toMatchObject({
+			name: 'ImageEncodeError',
+			kind: 'image-encode-failed',
+		});
 	});
 
 	it('closes every bitmap the codec hands out', async () => {
@@ -386,7 +435,7 @@ describe('prepareReferenceImage', () => {
 				return blob === file ? trackedBitmap(4000, 3000) : trackedBitmap(1568, 1176);
 			},
 			async encode() {
-				return new Blob([bytes([1, 2, 3])], { type: 'image/webp' });
+				return encodedWebp();
 			},
 		};
 

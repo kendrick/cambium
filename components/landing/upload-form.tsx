@@ -12,7 +12,11 @@ import {
 	MIN_REFERENCE_IMAGES,
 } from '@/components/landing/image-set';
 import { Button } from '@/components/ui/button';
-import { type PreparedImage, prepareReferenceImage } from '@/lib/image-intake';
+import {
+	ACCEPTED_IMAGE_TYPES,
+	type PreparedImage,
+	prepareReferenceImage,
+} from '@/lib/image-intake';
 
 import type { BrandRecord } from '../../core/brand-record';
 
@@ -129,12 +133,22 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				// `lib/image-intake.ts` already closes every bitmap to stay under. Three images is a
 				// small enough batch that the wall-clock difference is not worth that risk.
 				// oxlint-disable-next-line no-await-in-loop
-				const result = await prepareReferenceImage(file).catch(() => null);
+				const result = await prepareReferenceImage(file).catch((error: unknown) => {
+					// Matched by name, the convention `app/storage/storage-estimate.ts` argues for, because
+					// these two failures need opposite advice and a message string cannot tell them apart.
+					// An encoder that cannot produce a storable image is not the file's fault: it already
+					// cleared the byte gate and decoded, so blaming it sends somebody off to re-export
+					// something that was never wrong.
+					rejected.push(
+						error instanceof Error && error.name === 'ImageEncodeError'
+							? `${file.name} could not be prepared by this browser. Try again, or convert it to PNG first.`
+							: `${file.name} could not be read. The file may be damaged.`,
+					);
 
-				if (!result) {
-					rejected.push(`${file.name} could not be read. The file may be damaged.`);
-					continue;
-				}
+					return null;
+				});
+
+				if (!result) continue;
 
 				if (result.kind === 'unsupported') {
 					rejected.push(rejectionNotice(file.name, result.rejected.detected));
@@ -268,7 +282,7 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				    `prepareReferenceImage`, which reads magic bytes, because a renamed file satisfies both
 				    the extension filter and `File.type`. */}
 				<input
-					accept="image/png,image/jpeg,image/webp"
+					accept={ACCEPTED_IMAGE_TYPES.join(',')}
 					className="block w-full cursor-pointer rounded-md border border-dashed border-border bg-background p-6 text-sm file:mr-4 file:cursor-pointer file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground"
 					disabled={busy || atLimit}
 					id={pickerId}
@@ -301,14 +315,11 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 							<label className="sr-only" htmlFor={`${pickerId}-tag-${index}`}>
 								Type of {name}
 							</label>
-							{/* Both controls follow the submit button into `disabled` while a save runs, and that
-							    is the whole fix for a real defect rather than tidiness. `save` closes over the
-							    `picked` of the render that created it, which is correct: that array is what the
-							    user meant when they pressed the button. What was wrong is that the interface
-							    went on offering edits across the awaited dynamic imports, so a Remove clicked
-							    during "Working…" redrew the list and changed nothing about the record being
-							    written. Offering an action whose effect cannot land is the bug; reading the
-							    array later is not, and locking it earlier would change nothing. */}
+							{/* Both controls follow the submit button into `disabled` while a save runs. `save`
+							    closes over the `picked` of the render that created it, which is the array the
+							    user meant when they pressed the button; the defect was an interface that went
+							    on offering edits whose effect could not reach the record already being
+							    written. */}
 							<select
 								className="h-8 rounded-md border border-border bg-background px-2 text-sm disabled:opacity-50"
 								disabled={busy}
@@ -353,8 +364,6 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				    site somebody named would be a different product with a different privacy story.
 				    It reaches no further than this form for now, for the same reason the tag above does:
 				    `BrandRecordSchema` is strict and has no field for it. #77 adds one. */}
-				{/* The copy has to match what actually happens. Saying it is kept "with the record" read
-				    as a promise the strict schema above cannot honour yet. */}
 				<p className="text-muted-foreground text-sm">
 					Cambium never opens it, and it is not saved with the record yet.
 				</p>

@@ -19,6 +19,14 @@ import type { ReferenceImage } from '../core/brand-record';
 
 export type AcceptedImageType = 'image/png' | 'image/jpeg' | 'image/webp';
 
+/**
+ * What the picker takes, and the file dialog's `accept` list is built from this rather than
+ * restating it.
+ *
+ * Deliberately three where `ACCEPTED_IMAGE_MEDIA_TYPES` in `app/readers/anthropic-request.ts` is
+ * four: the Messages API also takes GIF, and issue #22 names three formats for upload. The lists
+ * are related, not the same one, and collapsing them would quietly widen the picker.
+ */
 export const ACCEPTED_IMAGE_TYPES: readonly AcceptedImageType[] = [
 	'image/png',
 	'image/jpeg',
@@ -49,10 +57,6 @@ const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const JPEG_SIGNATURE = [0xff, 0xd8, 0xff];
 const RIFF = [0x52, 0x49, 0x46, 0x46];
 const WEBP_FOURCC = [0x57, 0x45, 0x42, 0x50];
-
-function isAcceptedImageType(value: string): value is AcceptedImageType {
-	return (ACCEPTED_IMAGE_TYPES as readonly string[]).includes(value);
-}
 
 function matchesAt(head: Uint8Array, offset: number, bytes: number[]): boolean {
 	if (head.length < offset + bytes.length) return false;
@@ -227,25 +231,43 @@ function toBase64(bytes: Uint8Array): string {
 }
 
 /**
- * What the encoder actually produced, read the same way an incoming file is read.
+ * Thrown when the encoder returns something that is none of the three accepted types.
  *
- * `Blob.type` is consulted first because it is free and right almost always, and the bytes are the
- * tiebreak, because a blob can arrive with an empty or unfamiliar type and only its first twelve
- * bytes settle it. Throwing when neither answers is deliberate: there is no honest media type to
- * store, and storing a guess is the defect this function exists to close.
+ * A class carrying a `kind`, following `StorageQuotaExceededError` in
+ * `app/storage/storage-estimate.ts`, because the caller has different advice to give here than for
+ * a file it could not read, and matching a message string is not telling them apart. The file was
+ * fine: it cleared the byte gate and decoded. Blaming it sends somebody off to re-export something
+ * that was never wrong.
+ */
+export class ImageEncodeError extends Error {
+	readonly kind = 'image-encode-failed';
+
+	constructor(producedType: string, options?: { cause?: unknown }) {
+		super(
+			`the encoder returned a ${producedType || 'typeless'} blob that is not a PNG, JPEG, or WebP`,
+			options,
+		);
+		this.name = 'ImageEncodeError';
+	}
+}
+
+/**
+ * What the encoder actually produced, read the way every other byte in this module is read.
+ *
+ * `Blob.type` is deliberately not consulted, not even as a fast path. `convertToBlob` is required to
+ * report the format it really used, PNG fallback included, so for the platform codec the label
+ * would be true. But `ImageCodec` is an injectable seam, and a codec handing back
+ * `new Blob([webpBytes], { type: 'image/png' })` would put those bytes into a paid Messages call
+ * under a PNG header: the defect this function exists to close, reappearing one layer up inside the
+ * fix for it. Twelve bytes is not a price worth an exception to the rule stated at `sniffImageType`,
+ * which is that a declaration never decides anything here.
  */
 async function sniffStoredType(stored: Blob): Promise<AcceptedImageType> {
-	if (isAcceptedImageType(stored.type)) {
-		return stored.type;
-	}
-
 	const head = new Uint8Array(await stored.slice(0, SNIFF_BYTES).arrayBuffer());
 	const sniffed = sniffImageType(head);
 
 	if (!sniffed) {
-		throw new Error(
-			`the encoder returned a ${stored.type || 'typeless'} blob that is not a PNG, JPEG, or WebP`,
-		);
+		throw new ImageEncodeError(stored.type);
 	}
 
 	return sniffed;
