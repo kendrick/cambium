@@ -89,10 +89,22 @@ export const asCulori = (step) => ({ mode: 'oklch', l: step.l, c: step.c, h: ste
 
 const cellText = (step) => (step.wcag >= 4.5 ? '#ffffff' : '#111111');
 
+/**
+ * `toFixed` rounds, so a `wcag` of 4.4997 prints "4.50" against a 4.5 floor: a cell the floor
+ * check already marked failing would read as clearing it. Every floor `STEP_ROLES` declares is
+ * exact at two decimal places, so truncating toward zero instead of rounding is what guarantees
+ * the printed figure can never land on the far side of a floor the value itself didn't clear.
+ */
+const truncate = (value, places) => {
+	const factor = 10 ** places;
+	return Math.floor(value * factor) / factor;
+};
+
 function renderCell(step) {
 	const l = step.l.toFixed(3);
 	const c = step.c.toFixed(3);
 	const h = step.h.toFixed(1);
+	const wcag = truncate(step.wcag, 2).toFixed(2);
 	const gamut = step.inSrgb ? '' : ' <span class="warn">!</span>';
 	const fail = step.failsContrast ? ' <span class="warn">fails floor</span>' : '';
 	const straddle = step.straddlesFloor
@@ -110,7 +122,7 @@ function renderCell(step) {
 		<b>${step.step}</b>
 		${step.role ? `<span class="role">${step.role}</span>` : ''}
 		<span>${l} / ${c} / ${h}</span>
-		<span>${step.wcag.toFixed(2)}:1${gamut}${fail}</span>
+		<span>${wcag}:1${gamut}${fail}</span>
 		<span>Lc ${Math.round(step.apca)}</span>
 		${straddle}
 	</div>`;

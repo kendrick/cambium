@@ -112,4 +112,31 @@ describe('renderSwatchPage', () => {
 		// paragraph explaining what the marker means.
 		expect(html.match(/quantization-sensitive/g)).toHaveLength(3);
 	});
+
+	// toFixed(2) rounds 4.4997 up to "4.50", which reads as clearing a 4.5 floor on a cell the
+	// floor check already marked failing: a self-contradicting cell that reads as a bug in the
+	// tool even though the verdict is right. The printed figure has to stay on the same side of
+	// the floor as the mark.
+	it('never prints a ratio that reads as clearing a floor the mark says it missed', () => {
+		const failingStraddle = {
+			step: 11,
+			hex: '#37815a',
+			l: 0.544,
+			c: 0.096,
+			h: 157.7,
+			apca: 69,
+			inSrgb: true,
+			role: 'low-contrast text',
+			wcag: 4.4997,
+			failsContrast: true,
+			straddlesFloor: true,
+		};
+
+		const html = renderSwatchPage([
+			{ title: 'probe', rows: [{ label: 'row', steps: [failingStraddle] }] },
+		]);
+
+		expect(html).toContain('4.49:1');
+		expect(html).not.toContain('4.50:1');
+	});
 });
