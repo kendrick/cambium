@@ -19,7 +19,11 @@ import type { ReferenceImage } from '../core/brand-record';
 
 export type AcceptedImageType = 'image/png' | 'image/jpeg' | 'image/webp';
 
-/** Bytes `sniffImageType` and `describeRejectedBytes` need. */
+/**
+ * Twelve, because that is where the longest signature this module reads actually ends: WebP's
+ * `WEBP` fourcc sits at offset 8, and an ISO base media brand (`heic`, `avif`) sits at 8 as well,
+ * right after `ftyp` at 4. A shorter head would make both of those unreadable.
+ */
 export const SNIFF_BYTES = 12;
 
 /**
@@ -204,6 +208,20 @@ function toBase64(bytes: Uint8Array): string {
 	return btoa(binary);
 }
 
+/** Decodes only to read a size, so the bitmap is closed before the caller ever sees it. */
+async function decodeSize(
+	codec: ImageCodec,
+	blob: Blob,
+): Promise<{ width: number; height: number }> {
+	const bitmap = await codec.decode(blob);
+
+	try {
+		return { width: bitmap.width, height: bitmap.height };
+	} finally {
+		bitmap.close();
+	}
+}
+
 async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 	const digest = await crypto.subtle.digest('SHA-256', bytes);
 
@@ -231,29 +249,22 @@ export async function prepareReferenceImage(
 		return { kind: 'unsupported', rejected: { detected: describeRejectedBytes(head) } };
 	}
 
-	const probe = await codec.decode(file);
-	const probeWidth = probe.width;
-	const probeHeight = probe.height;
-	probe.close();
-
-	const fitted = fitWithin(probeWidth, probeHeight, MAX_EDGE_PX);
+	const probe = await decodeSize(codec, file);
+	const fitted = fitWithin(probe.width, probe.height, MAX_EDGE_PX);
 
 	// An image already inside the cap is passed through byte for byte: no resize, no re-encode,
 	// media type unchanged. This is more than an optimisation — `app/readers/local-extract.ts`
 	// samples flat logo regions pixel by pixel to recover a brand colour, and a lossy WebP
 	// re-encode would shift exactly the colour that step is asked to read back.
-	const passthrough = fitted.width === probeWidth && fitted.height === probeHeight;
+	const passthrough = fitted.width === probe.width && fitted.height === probe.height;
 	const stored = passthrough ? file : await codec.encode(file, fitted);
 	const mediaType: AcceptedImageType = passthrough ? sniffed : 'image/webp';
 
 	// Measured off the artefact that is actually about to be stored, never off `fitted`. A resize
-	// request is a hint the platform can round or clamp on its own terms — even the passthrough
-	// path re-decodes, because the "requested vs. actual" gap is exactly what this method exists
-	// to close, not a shortcut worth special-casing away.
-	const landed = await codec.decode(stored);
-	const width = landed.width;
-	const height = landed.height;
-	landed.close();
+	// request is a hint the platform can round or clamp on its own terms, and the passthrough path
+	// re-decodes for the same reason: the gap between what was asked for and what landed is what
+	// this second read exists to close, so skipping it on one branch would reopen it there.
+	const landed = await decodeSize(codec, stored);
 
 	const originalHash = `sha256:${await sha256Hex(original)}`;
 	const storedBytes = new Uint8Array(await stored.arrayBuffer());
@@ -263,6 +274,6 @@ export async function prepareReferenceImage(
 
 	return {
 		kind: 'prepared',
-		prepared: { image, mediaType, width, height, bytes: stored.size },
+		prepared: { image, mediaType, width: landed.width, height: landed.height, bytes: stored.size },
 	};
 }

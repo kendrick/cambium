@@ -22,9 +22,15 @@ import type { BrandRecord } from '../../core/brand-record';
  *
  * `tag` lives here and nowhere else. `ReferenceImageSchema` is a `z.strictObject` holding an id, a
  * downscaled data URL, and a hash of the original, with no slot for a tag, so a tag drives the
- * guidance below and then dies with the page. That is a gap in the record schema rather than a
- * decision this form gets to make; closing it needs a field on `ReferenceImageSchema` and a
- * `SCHEMA_VERSION` bump, which is `core/` work and a separate ticket.
+ * guidance below and then dies with the page.
+ *
+ * Storing it beside the record rather than in it was considered and rejected. `app/storage/` could
+ * hold a second object store keyed by image id without touching `core/`, and that is the wrong
+ * trade: issue #1 makes the export archive the only migration path, and `SCHEMA_VERSION` exists so
+ * that a record whose shape moved fails loudly. Metadata the archive cannot see would migrate
+ * silently and wrongly, which is worse than metadata that is honestly absent. Closing this properly
+ * needs a field on `ReferenceImageSchema` and a `SCHEMA_VERSION` bump, which is `core/` work and a
+ * separate ticket.
  */
 type PickedImage = {
 	name: string;
@@ -92,7 +98,7 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 	const guidance = GUIDANCE_COPY[chooseGuidance(picked.map((image) => image.tag))];
 	const atLimit = picked.length >= MAX_REFERENCE_IMAGES;
 
-	async function acceptFiles(files: FileList) {
+	async function acceptFiles(files: File[]) {
 		setBusy(true);
 		setNotice(null);
 
@@ -102,7 +108,7 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 			const rejected: string[] = [];
 			const accepted: PickedImage[] = [];
 
-			for (const file of [...files].slice(0, room)) {
+			for (const file of files.slice(0, room)) {
 				// A file whose signature is right and whose body is truncated still throws out of the
 				// decoder. One bad file must not take the rest of the batch with it, and the picker is
 				// the last place anyone can do anything about it.
@@ -139,13 +145,16 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 	}
 
 	function onPick(event: ChangeEvent<HTMLInputElement>) {
-		const { files } = event.target;
+		// Copied out before the input is cleared, and that order is the whole point. A `FileList` is a
+		// live view of the input, so clearing the input empties the same object this holds. Reading it
+		// afterwards found zero files and silently picked nothing.
+		const files = Array.from(event.target.files ?? []);
 
-		// Cleared before the await so picking the same file twice running still fires a change event.
-		// The input holds nothing worth keeping: `picked` is the record of what was accepted.
+		// Cleared so picking the same file twice running still fires a change event. The input holds
+		// nothing worth keeping: `picked` is the record of what was accepted.
 		event.target.value = '';
 
-		if (files && files.length > 0) void acceptFiles(files);
+		if (files.length > 0) void acceptFiles(files);
 	}
 
 	function retag(index: number, tag: ImageTag) {
@@ -240,29 +249,29 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 
 			{picked.length > 0 && (
 				<ul className="flex flex-col gap-3">
-					{picked.map((image, index) => (
+					{picked.map(({ name, tag, prepared }, index) => (
 						<li
 							className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3"
-							key={image.prepared.image.id}
+							key={prepared.image.id}
 						>
-							<span className="min-w-0 flex-1 truncate text-sm">{image.name}</span>
+							<span className="min-w-0 flex-1 truncate text-sm">{name}</span>
 							{/* The figures come off the stored blob rather than off the resize that was asked
 							    for, which is the one thing that makes them true. See `lib/image-intake.ts`. */}
 							<span className="text-muted-foreground text-xs tabular-nums">
-								{image.prepared.width} × {image.prepared.height}, {kB(image.prepared.bytes)}
+								{prepared.width} × {prepared.height}, {kB(prepared.bytes)}
 							</span>
 							<label className="sr-only" htmlFor={`${pickerId}-tag-${index}`}>
-								Type of {image.name}
+								Type of {name}
 							</label>
 							<select
 								className="h-8 rounded-md border border-border bg-background px-2 text-sm"
 								id={`${pickerId}-tag-${index}`}
 								onChange={(event) => retag(index, event.target.value as ImageTag)}
-								value={image.tag}
+								value={tag}
 							>
-								{IMAGE_TAGS.map((tag) => (
-									<option key={tag} value={tag}>
-										{TAG_LABELS[tag]}
+								{IMAGE_TAGS.map((option) => (
+									<option key={option} value={option}>
+										{TAG_LABELS[option]}
 									</option>
 								))}
 							</select>
