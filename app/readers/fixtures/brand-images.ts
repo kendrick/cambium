@@ -174,12 +174,10 @@ function drawPhotograph(): PixelSample {
  * A dark interface chromed in Tailwind slate, drawn twice: once with a brand button and once
  * without.
  *
- * Slate is the regression case. It is the most chromatic neutral family in common use, and the
- * exact palette values real interfaces ship put seven of its steps between 0.035 and 0.041
- * chroma, which is close enough to a washed-out brand colour to have cleared an earlier version
- * of `MIN_BRAND_CHROMA`. The variant with no button is the one that caught it: with every slate
- * step surviving the floor, the extractor returned `#64748b` body text as the brand colour of an
- * interface that has no brand colour at all.
+ * Slate is the regression case, because it is the one neutral family chromatic enough to reach a
+ * plausible floor; `MIN_BRAND_CHROMA` carries the measurements. The variant with no button is the
+ * one that caught the bug, because an interface holding no brand colour is the only image where a
+ * surviving neutral has nothing to lose to.
  */
 function drawSlateUi(withButton: boolean): PixelSample {
 	const sample = fill(SIDE, SIDE, '#0f172a');

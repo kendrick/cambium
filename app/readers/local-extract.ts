@@ -66,34 +66,26 @@ export type LocalExtraction =
  * floor", and they are one gate rather than two: a candidate under this floor is grey, and grey is
  * what a page background and a paragraph of text are made of.
  *
- * Set from the measured ceiling of the neutrals real interfaces actually ship. Tailwind slate is
- * the binding family by a wide margin, and slate-500 (`#64748b`) is its most chromatic step at
- * 0.0407, with slate-950 at 0.0406 and five more steps between 0.035 and 0.040. Every other
- * neutral family is far below: gray peaks at 0.0318, zinc at 0.0146, stone at 0.0116, and neutral
- * is achromatic throughout. So slate-500 fixes the lower edge and the floor clears it by 0.0043.
+ * Set from the measured ceiling of the neutrals real interfaces ship. Tailwind slate binds it:
+ * slate-500 (`#64748b`) reads 0.0407 and slate-950 reads 0.0406, with five more steps between
+ * 0.035 and 0.040. Every other family sits far below, gray peaking at 0.0318, zinc at 0.0146,
+ * stone at 0.0116, and neutral achromatic throughout. So this clears slate-500 by more than 0.004,
+ * where a floor of 0.04 did not clear it at all: `SLATE_CHROME_FIXTURE` is the interface that held
+ * no brand colour and got its own body text returned as one.
  *
- * A floor of 0.04 did not clear it, and the failure was real rather than theoretical. Slate-500
- * and slate-950 both survived, and `SLATE_CHROME_FIXTURE` is what it looked like: an interface
- * with no brand colour in it returned its own body text as the brand. `local-extract.test.ts`
- * pins both slate cases now.
+ * What the floor cannot do is separate slate from every slate-like colour, and no value here
+ * would. The neutral band runs to 0.041 and washed-out brand colours start around 0.046, so a
+ * dusty teal (`#4a7c7c`) at 0.054 and a muted blue-grey (`#5b7c8d`) at 0.046 sit just above a
+ * band that three bytes per channel of drift on slate-500 already reaches (0.0494). The guard is
+ * exact against the palette values interfaces paste in and a heuristic against everything else.
+ * Where the two error modes are returning a page background and returning nothing, it prefers
+ * nothing: a background presented as a brand colour is a wrong answer the user cannot see, and a
+ * null is a gap they can.
  *
- * What this floor does not do is separate slate from every slate-like colour, and no value in
- * this region would. The neutral band runs to 0.041 and the washed-out brand colours start around
- * 0.046, so the two are adjacent: a dusty teal (`#4a7c7c`) reads 0.054 and a muted blue-grey
- * (`#5b7c8d`) reads 0.046, and raising the floor far enough to be safe against drift would start
- * rejecting those. Perturbing slate-500 by three bytes per channel reaches 0.0494, past any floor
- * that leaves a brand colour alive. So the guard is exact against the palette values interfaces
- * ship, which is what designers paste in, and is a heuristic against everything else.
- *
- * Where the two error modes are "return the page background" and "return nothing", this prefers
- * nothing. A background presented as a brand colour is a wrong answer the user cannot see, and a
- * null is a gap the user can see and fill in, which is the whole reason the seed's fields are
- * nullable.
- *
- * No lightness cap sits beside this, deliberately. Near-white and near-black fall out for free,
- * because the sRGB gamut pinches to zero chroma at both ends of lightness. A cap would instead
- * reject the colours it pinches around: pure yellow is a legitimate brand colour at 0.968
- * lightness, and any cap low enough to catch `#fafafa` catches it too.
+ * No lightness cap sits beside this. Near-white and near-black fall out for free, because the sRGB
+ * gamut pinches to zero chroma at both ends of lightness, and a cap would instead reject the
+ * colours it pinches around: pure yellow is a brand colour at 0.968 lightness, and any cap low
+ * enough to catch `#fafafa` catches it too.
  */
 export const MIN_BRAND_CHROMA = 0.045;
 
@@ -103,10 +95,10 @@ export const MIN_BRAND_CHROMA = 0.045;
  * Wide on purpose, because the gate does not arbitrate between two plausible readings. It catches
  * the case where one library found structure the other never saw.
  *
- * The margin is asserted rather than asserted-about: `local-extract.test.ts` pins the two
- * libraries to under two degrees of each other on every fixture, which is where the room between
- * that figure and this one comes from. Both are median-cut quantizers reading identical pixels, so
- * close agreement is the expected case and this bound is the alarm.
+ * `local-extract.test.ts` pins the two libraries to under two degrees of each other on every
+ * fixture that offers a candidate at all, which is where the room between that figure and this one
+ * comes from. Both are median-cut quantizers reading identical pixels, so close agreement is the
+ * expected case and this bound is the alarm.
  */
 export const MAX_HUE_DISAGREEMENT = 15;
 
@@ -311,27 +303,36 @@ function toTriple(color: Oklch): OklchTriple {
  * decisions in it. Every rule the ticket states lands here, and a test can drive it with two
  * candidate lists instead of an image that happens to provoke the branch.
  *
- * Candidates compete across images rather than per image. A visitor uploading a logo and a
- * screenshot of the same product is offering two views of one brand, not two brands.
+ * Candidates compete across images once their own image is trusted. A visitor uploading a logo
+ * and a screenshot of the same product is offering two views of one brand, not two brands.
  */
 export function chooseKeyColors(opinions: readonly ImageOpinions[]): LocalExtraction {
-	const ranked = opinions
+	const offered = opinions.filter((image) => image.primary.length > 0);
+
+	if (offered.length === 0) return { kind: 'no-brand-color', reason: 'all-neutral' };
+
+	// Corroboration is scoped to one image, because that is the scope ADR-0002 gives it:
+	// disagreement means "the image has no clear brand colour". So an image whose own strongest
+	// candidate is one only colorthief saw contributes nothing and the rest of the upload carries
+	// on without it.
+	//
+	// Both halves of that matter. Within an image there is still no falling through to a
+	// runner-up, which would hide the murk the ADR asks to have surfaced. Across images, refusing
+	// a logo's corroborated colour because a screenshot beside it was ambiguous would discard
+	// evidence without surfacing anything, since the envelope cannot say why it refused.
+	const trusted = offered.filter((image) => corroborates(image.primary[0]!, image.secondOpinion));
+
+	if (trusted.length === 0) return { kind: 'no-brand-color', reason: 'uncorroborated' };
+
+	const ranked = trusted
 		.flatMap((image) => image.primary.map((candidate) => ({ candidate, image })))
 		// Fresh from `flatMap`, so nothing outside this function sees the mutation.
 		// oxlint-disable-next-line unicorn/no-array-sort
 		.sort((a, b) => b.candidate.score - a.candidate.score);
 
-	const best = ranked[0];
-
-	if (!best) return { kind: 'no-brand-color', reason: 'all-neutral' };
-
-	// No falling through to the runner-up when the strongest signal in the whole upload is one
-	// only a single library saw. ADR-0002 is explicit that disagreement means the image has no
-	// clear brand colour and that this "is worth surfacing rather than hiding", and quietly
-	// promoting the next candidate would hide exactly that.
-	if (!corroborates(best.candidate, best.image.secondOpinion)) {
-		return { kind: 'no-brand-color', reason: 'uncorroborated' };
-	}
+	// The global maximum is also its own image's maximum, so it is one of the corroborated
+	// candidates the filter above kept.
+	const best = ranked[0]!;
 
 	const keyColors: KeyColor[] = [
 		{

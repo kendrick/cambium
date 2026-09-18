@@ -75,11 +75,15 @@ describe('local extraction', () => {
 	 * Pins the figure `MAX_HUE_DISAGREEMENT` is set against. That constant is the alarm, and this
 	 * is the room between the alarm and where the two libraries actually sit, so a library update
 	 * that moves them apart fails here first and says by how much.
+	 *
+	 * Every fixture that offers a candidate at all is covered. The two that offer none cannot be:
+	 * agreement about nothing is not agreement.
 	 */
 	it.each([
 		['a logo', LOGO_FIXTURE],
 		['a photograph', PHOTOGRAPH_FIXTURE],
 		['an application screenshot', SCREENSHOT_FIXTURE],
+		['a slate interface', SLATE_UI_FIXTURE],
 	])('has both libraries agreeing on %s to within two degrees of hue', async (_kind, fixture) => {
 		const { primary, secondOpinion } = await readImageOpinions(fixture.id, fixture.sample);
 		const nearest = Math.min(
@@ -87,7 +91,6 @@ describe('local extraction', () => {
 		);
 
 		expect(nearest).toBeLessThan(2);
-		expect(nearest).toBeLessThan(MAX_HUE_DISAGREEMENT);
 	});
 
 	it.each([
@@ -120,11 +123,7 @@ describe('local extraction', () => {
 		expect(distanceFromHex(brand, '#111827')).toBeGreaterThan(0.3);
 	});
 
-	/**
-	 * Slate is the regression case, because it is the one neutral family chromatic enough to reach
-	 * a plausible floor. A floor of 0.04 let slate-500 and slate-950 through, and this fixture is
-	 * what that cost: an interface with no brand colour returned its own body text as one.
-	 */
+	/** The regression `MIN_BRAND_CHROMA` was raised for. Its docblock carries the measurements. */
 	it('claims no brand colour from an interface chromed entirely in slate', async () => {
 		const extraction = await extract(SLATE_CHROME_FIXTURE);
 
@@ -135,13 +134,17 @@ describe('local extraction', () => {
 	/**
 	 * Only the primary list can be claimed, which is what makes the asymmetry below safe.
 	 *
-	 * Vibrant quantizes in RGB, and on dark slate its centroid comes out more chromatic than
-	 * either colour that went into it: averaging slate-900 (0.0398) and slate-800 (0.0368) lands
-	 * at 0.0496, past the floor. colorthief quantizes in OKLCH and does not do this. The inflated
-	 * swatch is harmless because `chooseKeyColors` ranks primary candidates alone and consults the
-	 * second opinion only to corroborate one, so a colour the primary list never offered cannot be
-	 * promoted into the seed. Asserted rather than described, because it is the kind of asymmetry
-	 * a later reader would otherwise read as a bug.
+	 * Vibrant's quantizer bins each channel to five bits and reconstructs a bin as its midpoint,
+	 * `(bin + 0.5) * 8`, so the colour it reports need not be a colour the image holds. Slate-900
+	 * is `(15, 23, 42)`, which bins to `(1, 2, 5)` and comes back as `(12, 20, 44)`, or `#0c142c`:
+	 * three lower in red and two higher in blue, which lifts chroma from 0.0398 to 0.0496 and past
+	 * the floor. It arrives as `DarkVibrant` with a population of 21,432, so it is not one of the
+	 * generator's invented swatches either. colorthief quantizes in OKLCH and does not do this.
+	 *
+	 * Harmless, because `chooseKeyColors` ranks primary candidates alone and consults the second
+	 * opinion only to corroborate one, so a colour the primary list never offered cannot reach the
+	 * seed. Asserted rather than described, because a later reader would otherwise take it for a
+	 * bug.
 	 */
 	it('offers no claimable slate candidate, whatever the second opinion inflates', async () => {
 		const read = await readImageOpinions(SLATE_CHROME_FIXTURE.id, SLATE_CHROME_FIXTURE.sample);
@@ -164,16 +167,15 @@ describe('local extraction', () => {
 	});
 
 	/**
-	 * Pins the margin the floor is set from, so a future edit to either number has to face the
-	 * other. slate-500 is the most chromatic step of the most chromatic neutral family that real
-	 * interfaces ship.
+	 * Pins the floor between the two measurements that set it, so moving either has to face the
+	 * other. slate-500 is the ceiling of the most chromatic neutral family interfaces ship, and
+	 * the two colours below are the washed-out end of what a brand would still claim.
 	 */
-	it('sits clear of the most chromatic neutral in common use', () => {
+	it('sits between the most chromatic neutral and the least saturated brand colour', () => {
 		const slate500 = readOklch('#64748b');
 
 		expect(slate500.c).toBeLessThan(MIN_BRAND_CHROMA);
-		expect(MIN_BRAND_CHROMA - slate500.c).toBeGreaterThanOrEqual(0.004);
-		// And still below the washed-out end of what a brand would claim.
+		expect(MIN_BRAND_CHROMA - slate500.c).toBeGreaterThan(0.004);
 		expect(MIN_BRAND_CHROMA).toBeLessThan(readOklch('#4a7c7c').c);
 		expect(MIN_BRAND_CHROMA).toBeLessThan(readOklch('#5b7c8d').c);
 	});
@@ -246,6 +248,33 @@ describe('the corroboration rule', () => {
 		expect(extraction.kind).toBe('no-brand-color');
 	});
 
+	/**
+	 * ADR-0002 scopes disagreement to an image, so one murky upload cannot veto a clear one beside
+	 * it. The screenshot's violet is corroborated and the logo's green is not, so the violet is
+	 * the brand colour and nothing from the logo reaches the seed at all.
+	 */
+	it('drops only the image whose own strongest colour went uncorroborated', () => {
+		const extraction = chooseKeyColors([
+			opinions('img-logo', [candidate('#0b6e4f', 0.9)], [candidate('#b5451f', 0.9)]),
+			opinions('img-shot', [candidate('#7c3aed', 0.3)], [candidate('#7c3aed', 0.3)]),
+		]);
+
+		expect(extraction.keyColors).toHaveLength(1);
+		expect(extraction.keyColors?.[0]).toMatchObject({
+			proposedRole: 'brand',
+			sourceImageId: 'img-shot',
+		});
+	});
+
+	it('refuses the whole upload when no image corroborates its own strongest colour', () => {
+		const extraction = chooseKeyColors([
+			opinions('img-1', [candidate('#0b6e4f', 0.9)], [candidate('#b5451f', 0.9)]),
+			opinions('img-2', [candidate('#7c3aed', 0.3)], [candidate('#16a34a', 0.3)]),
+		]);
+
+		expect(extraction).toEqual({ kind: 'no-brand-color', reason: 'uncorroborated' });
+	});
+
 	it('accepts a second opinion that agrees on hue while disagreeing on lightness', () => {
 		// Vibrant bands its palette roles by HSL lightness, so its reading of one brand colour
 		// routinely arrives lighter or darker than the colour itself.
@@ -260,7 +289,7 @@ describe('the corroboration rule', () => {
 		const brand = readOklch('#7c3aed');
 		const near = readOklch('#3a7ced');
 
-		expect(Math.abs(((near.h - brand.h + 540) % 360) - 180)).toBeGreaterThan(MAX_HUE_DISAGREEMENT);
+		expect(hueDistance(near.h, brand.h)).toBeGreaterThan(MAX_HUE_DISAGREEMENT);
 		expect(
 			chooseKeyColors([opinions('img-1', [candidate('#7c3aed', 0.4)], [candidate('#3a7ced', 0.4)])])
 				.kind,
@@ -273,7 +302,7 @@ describe('the accent rule', () => {
 		const brand = readOklch('#0b6e4f');
 		const tint = readOklch('#14a375');
 
-		expect(Math.abs(((tint.h - brand.h + 540) % 360) - 180)).toBeLessThan(MIN_ACCENT_SEPARATION);
+		expect(hueDistance(tint.h, brand.h)).toBeLessThan(MIN_ACCENT_SEPARATION);
 
 		const extraction = chooseKeyColors([
 			opinions(
