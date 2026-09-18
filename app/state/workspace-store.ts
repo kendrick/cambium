@@ -109,22 +109,24 @@ export class CommitAbandonedError extends Error {
  *
  * Typed for the same reason as `RecordStampedAheadError`: the caller has a specific recovery, which
  * is to reload the record and commit again, and it can only choose it if it can tell this apart
- * from the misuse the other guards catch. `recordId` says what to reload, and `writtenVersions` how
- * far along storage already is.
+ * from the misuse the other guards catch. `recordId` says what to reload, and is all this carries.
+ *
+ * It deliberately reports no version count. Anything this store could offer would be what it wrote
+ * rather than what storage holds, and by the gap above it would be right only when the workspace is
+ * exactly one write behind and quietly approximate otherwise, which a caller cannot tell apart. The
+ * reload is what learns the truth, from the only place it exists.
  */
 export class StaleWorkspaceError extends Error {
 	readonly kind = 'stale-workspace';
 	readonly recordId: string;
-	readonly writtenVersions: number;
 
-	constructor(recordId: string, writtenVersions: number, options?: { cause?: unknown }) {
+	constructor(recordId: string, options?: { cause?: unknown }) {
 		super(
-			`this workspace is behind a write already made to record ${recordId}, which now holds ${writtenVersions} versions, so committing would drop one`,
+			`this workspace is behind a write already made to record ${recordId}, so committing would drop one`,
 			options,
 		);
 		this.name = 'StaleWorkspaceError';
 		this.recordId = recordId;
-		this.writtenVersions = writtenVersions;
 	}
 }
 
@@ -373,10 +375,8 @@ export function createWorkspaceStore({
 				throw new Error('nothing to commit: no record is open');
 			}
 
-			const newer = superseded.get(record);
-
-			if (newer) {
-				throw new StaleWorkspaceError(record.id, newer.versions.length);
+			if (superseded.has(record)) {
+				throw new StaleWorkspaceError(record.id);
 			}
 
 			const active = versionAt(record, activeOrdinal);

@@ -727,11 +727,7 @@ describe('the workspace store', () => {
 		await first;
 
 		await expect(second).rejects.toBeInstanceOf(StaleWorkspaceError);
-		await expect(second).rejects.toMatchObject({
-			kind: 'stale-workspace',
-			recordId: stale.id,
-			writtenVersions: 2,
-		});
+		await expect(second).rejects.toMatchObject({ kind: 'stale-workspace', recordId: stale.id });
 
 		const stored = await records.get(stale.id);
 
@@ -758,6 +754,24 @@ describe('the workspace store', () => {
 		const next = await store.getState().commit();
 
 		expect(next.versions).toHaveLength(2);
+	});
+
+	it('refuses a commit from a workspace several writes behind, without guessing how far', async () => {
+		const original = makeRecord();
+		const { store, recordStore } = openWorkspace(original);
+
+		await store.getState().commit();
+		await store.getState().commit();
+
+		store.getState().open(original);
+
+		// No version count: what this store wrote is not what storage holds, and a number right only
+		// when the workspace is exactly one write behind is one a caller cannot use.
+		await expect(store.getState().commit()).rejects.toMatchObject({
+			kind: 'stale-workspace',
+			recordId: original.id,
+		});
+		expect(recordStore.puts).toHaveLength(2);
 	});
 
 	it('closes a record without touching storage', () => {
