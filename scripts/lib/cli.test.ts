@@ -6,10 +6,13 @@ const FIXTURES = fileURLToPath(new URL('../fixtures/', import.meta.url));
 
 describe('loadSchemes', () => {
 	it('runs a valid seed through the scale engine', async () => {
-		const schemes = await loadSchemes(`${FIXTURES}seed.json`);
+		const { seed, schemes } = await loadSchemes(`${FIXTURES}seed.json`);
 
 		expect(schemes.light.brand).toHaveLength(12);
 		expect(schemes.dark.brand).toHaveLength(12);
+		// Returned alongside the schemes because `buildTokenSet` needs it for the non-colour
+		// categories, and this pipeline is the only place it gets parsed.
+		expect(seed.keyColors).not.toHaveLength(0);
 	});
 
 	// The scale engine rejects a seed with no key colours the same way it rejects an unreachable

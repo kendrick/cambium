@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { BrandSeedSchema } from './brand-seed';
+import { type BrandSeed, BrandSeedSchema } from './brand-seed';
 import { createOklchScaleEngine } from './oklch-scale-engine';
 import { contrastFromOklch } from './oklch';
 import { BALANCED, RAMP_NAMES, SCHEME_NAMES } from './scale-engine';
-import { buildTokenSet, resolveScheme } from './semantic-layer';
+import { resolveScheme } from './resolve-scheme';
+import { buildTokenSet } from './semantic-layer';
 import { SEMANTIC_MAP } from './semantic-map';
 import { type Scheme, TokenSetSchema } from './token-set';
 
@@ -16,7 +17,7 @@ import { type Scheme, TokenSetSchema } from './token-set';
  * Yellow rides along because it is the seed that breaks the monotonic lightness chain at steps 9
  * and 10, which is where the semantic layer reaches for `primary`.
  */
-function rampsFor(oklch: [number, number, number]) {
+function fixtureFor(oklch: [number, number, number], character: Partial<BrandSeed> = {}) {
 	const seed = BrandSeedSchema.parse({
 		keyColors: [{ oklch, proposedRole: 'brand', sourceImageId: 'img-1', sourceRegion: null }],
 		neutralTemperature: null,
@@ -29,6 +30,7 @@ function rampsFor(oklch: [number, number, number]) {
 		typeScaleRatio: null,
 		imageClassifications: null,
 		expressive: null,
+		...character,
 	});
 
 	const result = createOklchScaleEngine().generate(seed, BALANCED);
@@ -36,11 +38,15 @@ function rampsFor(oklch: [number, number, number]) {
 	if (!result.ok)
 		throw new Error(`the scale engine rejected the fixture seed: ${result.error.kind}`);
 
-	return result.schemes;
+	return { seed, schemes: result.schemes };
 }
 
-const blue = rampsFor([0.6231, 0.188, 259.8]);
-const yellow = rampsFor([0.7952, 0.1617, 86.0]);
+function build(fixture: ReturnType<typeof fixtureFor>) {
+	return buildTokenSet(fixture.schemes, fixture.seed);
+}
+
+const blue = fixtureFor([0.6231, 0.188, 259.8]);
+const yellow = fixtureFor([0.7952, 0.1617, 86.0]);
 
 /**
  * Ten seeds across the hue circle and, more to the point, across lightness 0.20 to 0.90. Hue alone
@@ -60,15 +66,15 @@ const SWEEP: [string, [number, number, number]][] = [
 	['light-yellow', [0.9, 0.14, 95]],
 ];
 
-const swept = SWEEP.map(([name, oklch]) => ({ name, schemes: rampsFor(oklch) }));
+const swept = SWEEP.map(([name, oklch]) => Object.assign({ name }, fixtureFor(oklch)));
 
 describe('buildTokenSet', () => {
 	it('produces a set the token-set schema accepts', () => {
-		expect(() => TokenSetSchema.parse(buildTokenSet(blue))).not.toThrow();
+		expect(() => TokenSetSchema.parse(build(blue))).not.toThrow();
 	});
 
 	it('carries every ramp the scale engine generated, in both schemes', () => {
-		const tokenSet = buildTokenSet(blue);
+		const tokenSet = build(blue);
 
 		for (const scheme of SCHEME_NAMES) {
 			expect(new Set(Object.keys(tokenSet.schemes[scheme].primitives))).toEqual(
@@ -83,7 +89,7 @@ describe('buildTokenSet', () => {
 	 * clean and ships a theme that loses its focus ring the moment someone switches scheme.
 	 */
 	it('gives light and dark the same semantic key set', () => {
-		const { schemes } = buildTokenSet(blue);
+		const { schemes } = build(blue);
 
 		expect(new Set(Object.keys(schemes.dark.semantic))).toEqual(
 			new Set(Object.keys(schemes.light.semantic)),
@@ -93,7 +99,7 @@ describe('buildTokenSet', () => {
 	// Every fixed assignment holds across both schemes; only a contrasting pair is free to differ,
 	// and it differs because step 9 keeps one colour while step 1 swaps ends.
 	it('keeps every fixed assignment identical across the two schemes', () => {
-		const { schemes } = buildTokenSet(blue);
+		const { schemes } = build(blue);
 
 		for (const [token, assignment] of Object.entries(SEMANTIC_MAP)) {
 			if (typeof assignment !== 'string') continue;
@@ -106,7 +112,7 @@ describe('buildTokenSet', () => {
 	// A scheme's semantic layer is what an export adapter reads, so every value in it has to be a
 	// plain alias. Leaking a pair through would hand the adapter an object where a colour goes.
 	it('resolves each contrasting pair down to one plain alias per scheme', () => {
-		const { schemes } = buildTokenSet(blue);
+		const { schemes } = build(blue);
 
 		for (const scheme of SCHEME_NAMES) {
 			for (const value of Object.values(schemes[scheme].semantic)) {
@@ -118,7 +124,7 @@ describe('buildTokenSet', () => {
 	// `:root` carries light and `.dark` overrides it, in this repo's own stylesheet and in every
 	// shadcn theme. So the unprefixed top level is the light scheme rather than a scheme of its own.
 	it('takes light as the unprefixed default at the top level', () => {
-		const tokenSet = buildTokenSet(blue);
+		const tokenSet = build(blue);
 
 		expect(tokenSet.primitives).toEqual(tokenSet.schemes.light.primitives);
 		expect(tokenSet.semantic).toEqual(tokenSet.schemes.light.semantic);
@@ -127,7 +133,7 @@ describe('buildTokenSet', () => {
 
 describe('resolveScheme', () => {
 	it.each(SCHEME_NAMES)('resolves every %s alias to a literal, leaving none dangling', (scheme) => {
-		const resolved = resolveScheme(buildTokenSet(blue).schemes[scheme]);
+		const resolved = resolveScheme(build(blue).schemes[scheme]);
 
 		expect(new Set(Object.keys(resolved))).toEqual(new Set(Object.keys(SEMANTIC_MAP)));
 
@@ -142,7 +148,7 @@ describe('resolveScheme', () => {
 	});
 
 	it('returns the ramp step the alias names, channel for channel', () => {
-		const { schemes } = buildTokenSet(blue);
+		const { schemes } = build(blue);
 		const resolved = resolveScheme(schemes.light);
 		const { l, c, h } = schemes.light.primitives.neutral[5];
 
@@ -153,7 +159,7 @@ describe('resolveScheme', () => {
 	// `primary` reaches straight into the pair that floats with it.
 	it('carries the seed colour through to primary in both schemes', () => {
 		for (const scheme of SCHEME_NAMES) {
-			const built = buildTokenSet(yellow).schemes[scheme];
+			const built = build(yellow).schemes[scheme];
 			const { l, c, h } = built.primitives.brand[8];
 
 			expect(resolveScheme(built).primary).toEqual({ l, c, h });
@@ -163,7 +169,7 @@ describe('resolveScheme', () => {
 	// Dark is generated independently against the same step roles rather than inverted from light,
 	// so the shared map has to land on different colours.
 	it('resolves the same token to different colours in each scheme', () => {
-		const { schemes } = buildTokenSet(blue);
+		const { schemes } = build(blue);
 		const light = resolveScheme(schemes.light);
 		const dark = resolveScheme(schemes.dark);
 
@@ -177,7 +183,7 @@ describe('resolveScheme', () => {
 	 * an export adapter looking like a colour.
 	 */
 	it('throws rather than emitting a hole when an alias resolves to nothing', () => {
-		const { schemes } = buildTokenSet(blue);
+		const { schemes } = build(blue);
 		const broken = { ...schemes.light, semantic: { border: 'missing.6' } };
 
 		expect(() => resolveScheme(broken)).toThrow(/missing\.6/);
@@ -209,16 +215,16 @@ describe('foregrounds that sit on a solid fill', () => {
 			const assignment = SEMANTIC_MAP[token];
 			const worse: string[] = [];
 
-			for (const { name, schemes } of swept) {
+			for (const fixture of swept) {
 				for (const scheme of SCHEME_NAMES) {
-					const built = buildTokenSet(schemes).schemes[scheme];
+					const built = build(fixture).schemes[scheme];
 					const fill = stepOf(built, assignment.on);
 					const reached = contrastFromOklch(resolveScheme(built)[token]!, fill);
 					const best = Math.max(
 						...assignment.candidates.map((c) => contrastFromOklch(stepOf(built, c), fill)),
 					);
 
-					if (reached < best) worse.push(`${name}/${scheme}`);
+					if (reached < best) worse.push(`${fixture.name}/${scheme}`);
 				}
 			}
 
@@ -236,15 +242,15 @@ describe('foregrounds that sit on a solid fill', () => {
 		const assignment = SEMANTIC_MAP[token];
 		const belowFloor: string[] = [];
 
-		for (const { name, schemes } of swept) {
+		for (const fixture of swept) {
 			for (const scheme of SCHEME_NAMES) {
-				const built = buildTokenSet(schemes).schemes[scheme];
+				const built = build(fixture).schemes[scheme];
 				const reached = contrastFromOklch(
 					resolveScheme(built)[token]!,
 					stepOf(built, assignment.on),
 				);
 
-				if (reached < 3) belowFloor.push(`${name}/${scheme} at ${reached.toFixed(2)}:1`);
+				if (reached < 3) belowFloor.push(`${fixture.name}/${scheme} at ${reached.toFixed(2)}:1`);
 			}
 		}
 
@@ -264,12 +270,12 @@ describe('foregrounds that sit on a solid fill', () => {
 	it.each(['ring', 'sidebar-ring'])('%s clears 3:1 against the page on every seed', (token) => {
 		const failures: string[] = [];
 
-		for (const { name, schemes } of swept) {
+		for (const fixture of swept) {
 			for (const scheme of SCHEME_NAMES) {
-				const resolved = resolveScheme(buildTokenSet(schemes).schemes[scheme]);
+				const resolved = resolveScheme(build(fixture).schemes[scheme]);
 				const reached = contrastFromOklch(resolved[token]!, resolved.background!);
 
-				if (reached < 3) failures.push(`${name}/${scheme} at ${reached.toFixed(2)}:1`);
+				if (reached < 3) failures.push(`${fixture.name}/${scheme} at ${reached.toFixed(2)}:1`);
 			}
 		}
 
@@ -291,12 +297,12 @@ describe('foregrounds that sit on a solid fill', () => {
 	it('gives destructive a colour that works as body text on the page', () => {
 		const failures: string[] = [];
 
-		for (const { name, schemes } of swept) {
+		for (const fixture of swept) {
 			for (const scheme of SCHEME_NAMES) {
-				const resolved = resolveScheme(buildTokenSet(schemes).schemes[scheme]);
+				const resolved = resolveScheme(build(fixture).schemes[scheme]);
 				const reached = contrastFromOklch(resolved.destructive!, resolved.background!);
 
-				if (reached < 4.5) failures.push(`${name}/${scheme} at ${reached.toFixed(2)}:1`);
+				if (reached < 4.5) failures.push(`${fixture.name}/${scheme} at ${reached.toFixed(2)}:1`);
 			}
 		}
 
@@ -312,16 +318,81 @@ describe('foregrounds that sit on a solid fill', () => {
 			const surface = token === 'foreground' ? 'background' : token.slice(0, -'-foreground'.length);
 			const failures: string[] = [];
 
-			for (const { name, schemes } of swept) {
+			for (const fixture of swept) {
 				for (const scheme of SCHEME_NAMES) {
-					const resolved = resolveScheme(buildTokenSet(schemes).schemes[scheme]);
+					const resolved = resolveScheme(build(fixture).schemes[scheme]);
 					const reached = contrastFromOklch(resolved[token]!, resolved[surface]!);
 
-					if (reached < 4.5) failures.push(`${name}/${scheme} at ${reached.toFixed(2)}:1`);
+					if (reached < 4.5) failures.push(`${fixture.name}/${scheme} at ${reached.toFixed(2)}:1`);
 				}
 			}
 
 			expect(failures).toEqual([]);
 		},
 	);
+});
+
+/**
+ * The colour half of `buildTokenSet` is asserted above. This is the other half: the nine non-colour
+ * categories reach the assembled set, and the one that varies by scheme is the only one a scheme
+ * carries.
+ */
+describe('buildTokenSet non-colour categories', () => {
+	const COLOUR_KEYS = new Set(['primitives', 'semantic', 'schemes']);
+
+	it('carries every category an export adapter reads by name', () => {
+		const tokenSet = build(blue);
+
+		expect(new Set(Object.keys(tokenSet).filter((key) => !COLOUR_KEYS.has(key)))).toEqual(
+			new Set([
+				'focusRing',
+				'motion',
+				'opacity',
+				'radius',
+				'shadow',
+				'spacing',
+				'tracking',
+				'typography',
+				'zIndex',
+			]),
+		);
+	});
+
+	/**
+	 * Nothing discovers a new category, so a later ticket could add one that carries no `source` and
+	 * quietly fall outside the "no system-constant category varies with the seed" check, which only
+	 * looks at categories whose source says `system`. Reading the key set rather than a written list
+	 * is what closes that gap.
+	 */
+	it('flags every top-level key that is not part of the colour layer', () => {
+		const tokenSet = build(blue) as unknown as Record<string, { source?: string }>;
+
+		for (const [key, value] of Object.entries(tokenSet)) {
+			if (COLOUR_KEYS.has(key)) continue;
+
+			expect(['derived', 'system']).toContain(value.source);
+		}
+	});
+
+	// `:root` carries light and `.dark` overrides it, so the unprefixed shadow is the light one, the
+	// same way the unprefixed primitives and semantic layer already are.
+	it('takes the light shadow as the unprefixed default', () => {
+		const tokenSet = build(blue);
+
+		expect(tokenSet.shadow).toEqual(tokenSet.schemes.light.shadow);
+	});
+
+	it('gives each scheme its own shadow rather than one value for both', () => {
+		const { schemes } = build(blue);
+
+		expect(schemes.dark.shadow).not.toEqual(schemes.light.shadow);
+	});
+
+	it('takes the radius scale from the seed rather than from a default', () => {
+		const sharp = fixtureFor([0.6231, 0.188, 259.8], {
+			radiusCharacter: { base: 2, progression: 'sharp' },
+		});
+
+		expect(build(sharp).radius).not.toEqual(build(blue).radius);
+	});
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { BrandSeedSchema } from './brand-seed';
+import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
 import { TokenSetSchema } from './token-set';
 
 const ramp = Array.from({ length: 12 }, (_, i) => ({
@@ -10,8 +11,15 @@ const ramp = Array.from({ length: 12 }, (_, i) => ({
 	c: 0.05,
 	h: 259.8,
 }));
-const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' } };
-const tokenSet = { ...layer, schemes: { light: layer, dark: layer } };
+const shadow = SHADOW_FIXTURE;
+
+const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' }, shadow };
+
+const tokenSet = {
+	...layer,
+	schemes: { light: layer, dark: layer },
+	...NON_COLOR_FIXTURE,
+};
 
 const seed = {
 	keyColors: [
@@ -56,16 +64,28 @@ const record = {
 };
 
 /**
- * Zod strips unknown keys by default, which is the wrong failure for a persisted shape. The
- * categories #7 derives and the `$extensions` payload #9 attaches both need slots this schema
- * does not have yet, and stripping would lose them on the way to disk without a word. These
- * schemas reject instead, so the ticket that adds them gets an error naming the file to widen.
+ * Zod strips unknown keys by default, which is the wrong failure for a persisted shape. Stripping
+ * would lose an unrecognised key on the way to disk without a word, so these schemas reject instead
+ * and the ticket that adds the key gets an error naming the file to widen.
+ *
+ * #7 widened the schema for its nine non-colour categories and moved this guard onto the payload
+ * #9 attaches, which is the next category of data with no slot here. The guard is only worth
+ * anything while it points at something the schema has not learned yet.
  */
 describe('schema strictness', () => {
-	it('rejects a non-colour token category rather than dropping it on the way to disk', () => {
-		const withRadius = { ...tokenSet, radius: { sm: '4px', md: '8px' } };
+	it('rejects a provenance payload rather than dropping it on the way to disk', () => {
+		const withExtensions = {
+			...tokenSet,
+			$extensions: {
+				'com.cambium': {
+					provenance: 'observed',
+					rationale: 'traces to the brand key colour',
+					seedField: 'keyColors',
+				},
+			},
+		};
 
-		const result = TokenSetSchema.safeParse(withRadius);
+		const result = TokenSetSchema.safeParse(withExtensions);
 
 		expect(result.success).toBe(false);
 	});
