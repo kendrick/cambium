@@ -10,7 +10,11 @@ import { createInMemoryRecordStore } from '../storage/in-memory-record-store';
 import type { RecordStore } from '../storage/record-store';
 import { StorageQuotaExceededError } from '../storage/storage-estimate';
 
-import { type CommitProvenance, createWorkspaceStore } from './workspace-store';
+import {
+	type CommitProvenance,
+	createWorkspaceStore,
+	RecordStampedAheadError,
+} from './workspace-store';
 
 function seedWith(hue: number): BrandSeed {
 	return {
@@ -627,9 +631,68 @@ describe('the workspace store', () => {
 		const ahead = makeRecord([makeVersion({ createdAt: '2027-01-01T00:00:00.000Z' })]);
 		const { store, recordStore } = openWorkspace(ahead);
 
-		await expect(store.getState().commit()).rejects.toThrow(/clock/);
+		// Typed rather than message-matched, because the comment on the guard rests on a caller being
+		// able to tell a clock conflict from a malformed record.
+		await expect(store.getState().commit()).rejects.toBeInstanceOf(RecordStampedAheadError);
+		await expect(store.getState().commit()).rejects.toMatchObject({
+			kind: 'record-stamped-ahead',
+			stampedAt: '2027-01-01T00:00:00.000Z',
+		});
 		expect(recordStore.puts).toHaveLength(0);
 		expect(store.getState().record).toBe(ahead);
+	});
+
+	it('commits the preset that was selected when the commit was asked for', async () => {
+		const { store } = openWorkspace();
+
+		store.getState().selectPreset('faithful');
+
+		const pending = store.getState().commit();
+
+		// Same queue boundary as the draft and the ordinal: switching presets before the body runs must
+		// not change what the commit already asked to record.
+		store.getState().selectPreset('expressive');
+
+		const next = await pending;
+
+		expect(next.versions[1]).toMatchObject({ interpretation: 'faithful' });
+	});
+
+	it('commits a version that ties the instant of the one before it', async () => {
+		// `BrandRecordSchema` allows two versions to share an instant and lets `ordinal` order them, so
+		// the clock guard has to refuse only what runs backwards, never what stands still.
+		const tied = '2026-06-01T12:00:00.000Z';
+		const { store } = openWorkspace(makeRecord([makeVersion({ createdAt: tied })]));
+
+		const next = await store.getState().commit();
+
+		expect(next.versions[1]).toMatchObject({ ordinal: 2, createdAt: tied });
+	});
+
+	it('carries provenance from the version selected when the commit was asked for', async () => {
+		// Both versions hold the same seed, so the only thing that can differ in the committed version is
+		// which one its provenance came from.
+		const record = makeRecord([
+			makeVersion({ model: 'claude-opus-5' }),
+			makeVersion({
+				createdAt: '2026-02-01T00:00:00.000Z',
+				ordinal: 2,
+				model: 'claude-sonnet-5',
+			}),
+		]);
+		const { store } = openWorkspace(record);
+
+		store.getState().selectVersion(1);
+
+		const pending = store.getState().commit();
+
+		// `commit` queues, so this lands before the body runs. Resolving the ordinal then would carry
+		// version 2's model onto a seed that came from version 1.
+		store.getState().selectVersion(2);
+
+		const next = await pending;
+
+		expect(next.versions[2]).toMatchObject({ model: 'claude-opus-5' });
 	});
 
 	it('carries provenance from the version each commit was requested against', async () => {

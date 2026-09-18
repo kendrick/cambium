@@ -39,6 +39,32 @@ export type CommitProvenance = Pick<
 >;
 
 /**
+ * Thrown when the record's newest version is stamped ahead of this device's clock, which
+ * `BrandRecordSchema` refuses to let anything follow.
+ *
+ * A class rather than a bare `Error` because the throw site's argument for catching this at all
+ * depends on a caller being able to tell it apart, and matching a message string is not telling
+ * apart. `kind` follows the same discriminated-error convention as `StorageQuotaExceededError` in
+ * `app/storage/storage-estimate.ts`.
+ *
+ * `stampedAt` is the instant nothing may precede, which the quota error has no equivalent of. A
+ * caller can say when committing becomes possible again without parsing it out of the message.
+ */
+export class RecordStampedAheadError extends Error {
+	readonly kind = 'record-stamped-ahead';
+	readonly stampedAt: string;
+
+	constructor(stampedAt: string, options?: { cause?: unknown }) {
+		super(
+			`the record's newest version is stamped ${stampedAt}, ahead of this device's clock, so nothing can follow it yet`,
+			options,
+		);
+		this.name = 'RecordStampedAheadError';
+		this.stampedAt = stampedAt;
+	}
+}
+
+/**
  * A commit frozen at the moment it was requested: what the new version holds, plus the two counters
  * that decide afterwards whether the finished write still belongs to the workspace on screen.
  * `session` and `selection` are bookkeeping and reach no stored field.
@@ -312,9 +338,7 @@ export function createWorkspaceStore({
 			// the same future instant until the clock catches up. Letting a record be committed to after
 			// its clock is corrected is a repair on the stored record, which `core/` owns.
 			if (previous && Date.parse(createdAt) < Date.parse(previous.createdAt)) {
-				throw new Error(
-					`this record's newest version is stamped ${previous.createdAt}, ahead of this device's clock, so nothing can follow it yet`,
-				);
+				throw new RecordStampedAheadError(previous.createdAt);
 			}
 
 			const version: BrandVersion = {
