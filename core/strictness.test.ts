@@ -10,8 +10,49 @@ const ramp = Array.from({ length: 12 }, (_, i) => ({
 	c: 0.05,
 	h: 259.8,
 }));
-const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' } };
-const tokenSet = { ...layer, schemes: { light: layer, dark: layer } };
+const shadow = {
+	source: 'derived',
+	values: {
+		md: {
+			color: { l: 0.15, c: 0.01, h: 259.8, alpha: 0.1 },
+			offsetX: { value: 0, unit: 'px' },
+			offsetY: { value: 4, unit: 'px' },
+			blur: { value: 6, unit: 'px' },
+			spread: { value: -1, unit: 'px' },
+		},
+	},
+};
+
+const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' }, shadow };
+
+const tokenSet = {
+	...layer,
+	schemes: { light: layer, dark: layer },
+	radius: { source: 'derived', values: { lg: { value: 0.625, unit: 'rem' } } },
+	typography: {
+		source: 'derived',
+		values: {
+			size: { base: { value: 1, unit: 'rem' } },
+			weight: { regular: 400 },
+			lineHeight: { normal: 1.5 },
+		},
+	},
+	tracking: { source: 'derived', values: { normal: { value: 0, unit: 'em' } } },
+	spacing: { source: 'system', values: { md: { value: 1, unit: 'rem' } } },
+	opacity: { source: 'system', values: { disabled: 0.5 } },
+	motion: {
+		source: 'system',
+		values: {
+			duration: { fast: { value: 150, unit: 'ms' } },
+			easing: { standard: [0.2, 0, 0, 1] },
+		},
+	},
+	focusRing: {
+		source: 'system',
+		values: { width: { value: 3, unit: 'px' }, offset: { value: 0, unit: 'px' } },
+	},
+	zIndex: { source: 'system', values: { modal: 1300 } },
+};
 
 const seed = {
 	keyColors: [
@@ -56,16 +97,28 @@ const record = {
 };
 
 /**
- * Zod strips unknown keys by default, which is the wrong failure for a persisted shape. The
- * categories #7 derives and the `$extensions` payload #9 attaches both need slots this schema
- * does not have yet, and stripping would lose them on the way to disk without a word. These
- * schemas reject instead, so the ticket that adds them gets an error naming the file to widen.
+ * Zod strips unknown keys by default, which is the wrong failure for a persisted shape. Stripping
+ * would lose an unrecognised key on the way to disk without a word, so these schemas reject instead
+ * and the ticket that adds the key gets an error naming the file to widen.
+ *
+ * #7 widened the schema for its nine non-colour categories and moved this guard onto the payload
+ * #9 attaches, which is the next category of data with no slot here. The guard is only worth
+ * anything while it points at something the schema has not learned yet.
  */
 describe('schema strictness', () => {
-	it('rejects a non-colour token category rather than dropping it on the way to disk', () => {
-		const withRadius = { ...tokenSet, radius: { sm: '4px', md: '8px' } };
+	it('rejects a provenance payload rather than dropping it on the way to disk', () => {
+		const withExtensions = {
+			...tokenSet,
+			$extensions: {
+				'com.cambium': {
+					provenance: 'observed',
+					rationale: 'traces to the brand key colour',
+					seedField: 'keyColors',
+				},
+			},
+		};
 
-		const result = TokenSetSchema.safeParse(withRadius);
+		const result = TokenSetSchema.safeParse(withExtensions);
 
 		expect(result.success).toBe(false);
 	});

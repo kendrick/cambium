@@ -3,8 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { BrandSeedSchema } from './brand-seed';
 import { validateDtcg } from './dtcg/validate';
+import { deriveNonColor } from './derive-non-color';
 import { createOklchScaleEngine } from './oklch-scale-engine';
+import { radiusScale } from './radius-scale';
 import { resolveCandidatePool } from './font-table';
+import { shadowScale } from './shadow-scale';
+import { systemConstants } from './system-constants';
+import { trackingScale } from './tracking-scale';
+import { typeScale } from './type-scale';
 import { parseSeed } from './parse-seed';
 import { rankFonts } from './rank-fonts';
 import { BALANCED } from './scale-engine';
@@ -17,7 +23,19 @@ const ramp = Array.from({ length: 12 }, (_, i) => ({
 	c: 0.05,
 	h: 259.8,
 }));
-const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' } };
+const shadow = {
+	source: 'derived',
+	values: {
+		md: {
+			color: { l: 0.15, c: 0.01, h: 259.8, alpha: 0.1 },
+			offsetX: { value: 0, unit: 'px' },
+			offsetY: { value: 4, unit: 'px' },
+			blur: { value: 6, unit: 'px' },
+			spread: { value: -1, unit: 'px' },
+		},
+	},
+};
+const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' }, shadow };
 
 const seed = {
 	keyColors: [
@@ -40,7 +58,34 @@ const seed = {
 	expressive: null,
 };
 
-const tokenSet = { ...layer, schemes: { light: layer, dark: layer } };
+const tokenSet = {
+	...layer,
+	schemes: { light: layer, dark: layer },
+	radius: { source: 'derived', values: { lg: { value: 0.625, unit: 'rem' } } },
+	typography: {
+		source: 'derived',
+		values: {
+			size: { base: { value: 1, unit: 'rem' } },
+			weight: { regular: 400 },
+			lineHeight: { normal: 1.5 },
+		},
+	},
+	tracking: { source: 'derived', values: { normal: { value: 0, unit: 'em' } } },
+	spacing: { source: 'system', values: { md: { value: 1, unit: 'rem' } } },
+	opacity: { source: 'system', values: { disabled: 0.5 } },
+	motion: {
+		source: 'system',
+		values: {
+			duration: { fast: { value: 150, unit: 'ms' } },
+			easing: { standard: [0.2, 0, 0, 1] },
+		},
+	},
+	focusRing: {
+		source: 'system',
+		values: { width: { value: 3, unit: 'px' }, offset: { value: 0, unit: 'px' } },
+	},
+	zIndex: { source: 'system', values: { modal: 1300 } },
+};
 
 const rawResponse = {
 	raw: JSON.stringify(seed),
@@ -135,7 +180,34 @@ describe('core purity', () => {
 			() => {
 				const generated = createOklchScaleEngine().generate(rampableSeed, BALANCED);
 
-				return generated.ok && TokenSetSchema.safeParse(buildTokenSet(generated.schemes)).success;
+				return (
+					generated.ok &&
+					TokenSetSchema.safeParse(buildTokenSet(generated.schemes, rampableSeed)).success
+				);
+			},
+		],
+		['the radius scale', () => radiusScale(null).source === 'derived'],
+		['the type scale', () => typeScale(null).values.size.base?.value === 1],
+		['the tracking scale', () => trackingScale(null).source === 'derived'],
+		[
+			'the shadow scale',
+			() => shadowScale({ l: 0.99, c: 0.004, h: 259.8 }, null).source === 'derived',
+		],
+		['the system constants', () => systemConstants().focusRing.source === 'system'],
+		[
+			'the non-colour derivation',
+			() => {
+				const generated = createOklchScaleEngine().generate(rampableSeed, BALANCED);
+
+				if (!generated.ok) return false;
+
+				const semantic = { background: 'neutral.1' };
+				const schemes = {
+					light: { primitives: generated.schemes.light, semantic },
+					dark: { primitives: generated.schemes.dark, semantic },
+				};
+
+				return deriveNonColor(rampableSeed, schemes).zIndex.source === 'system';
 			},
 		],
 	])('%s parses a valid value without reaching the network', (_name, parses) => {

@@ -142,11 +142,52 @@ describe('BrandRecordSchema integrity', () => {
 			c: 0.05,
 			h: 259.8,
 		}));
-		const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' } };
+		// The token set has to be valid on its own, or the rejection below stops being about the
+		// missing seed and starts being about a shape `TokenSetSchema` would reject anyway.
+		const shadow = {
+			source: 'derived',
+			values: {
+				md: {
+					color: { l: 0.15, c: 0.01, h: 259.8, alpha: 0.1 },
+					offsetX: { value: 0, unit: 'px' },
+					offsetY: { value: 4, unit: 'px' },
+					blur: { value: 6, unit: 'px' },
+					spread: { value: -1, unit: 'px' },
+				},
+			},
+		};
+		const layer = { primitives: { brand: ramp }, semantic: { border: 'brand.6' }, shadow };
 		const orphaned = {
 			...version,
 			seed: null,
-			tokenSet: { ...layer, schemes: { light: layer, dark: layer } },
+			tokenSet: {
+				...layer,
+				schemes: { light: layer, dark: layer },
+				radius: { source: 'derived', values: { lg: { value: 0.625, unit: 'rem' } } },
+				typography: {
+					source: 'derived',
+					values: {
+						size: { base: { value: 1, unit: 'rem' } },
+						weight: { regular: 400 },
+						lineHeight: { normal: 1.5 },
+					},
+				},
+				tracking: { source: 'derived', values: { normal: { value: 0, unit: 'em' } } },
+				spacing: { source: 'system', values: { md: { value: 1, unit: 'rem' } } },
+				opacity: { source: 'system', values: { disabled: 0.5 } },
+				motion: {
+					source: 'system',
+					values: {
+						duration: { fast: { value: 150, unit: 'ms' } },
+						easing: { standard: [0.2, 0, 0, 1] },
+					},
+				},
+				focusRing: {
+					source: 'system',
+					values: { width: { value: 3, unit: 'px' }, offset: { value: 0, unit: 'px' } },
+				},
+				zIndex: { source: 'system', values: { modal: 1300 } },
+			},
 		};
 
 		expect(BrandRecordSchema.safeParse({ ...record, versions: [orphaned] }).success).toBe(false);
