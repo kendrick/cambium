@@ -120,11 +120,16 @@ describe('what derivation does with a locally extracted seed', () => {
 		return result.seed;
 	}
 
-	it('generates a full token set from the colours alone', async () => {
+	/**
+	 * Asserts only that the engine accepts a colours-only seed, never how well it ramps one. Ramp
+	 * quality and anchor deviation belong to Seam 1 against fixture seeds in `core/`, per
+	 * `docs/agents/testing.md`, and duplicating them here would break this suite for engine
+	 * changes that have nothing to do with the reader.
+	 */
+	it('produces a seed the scale engine can generate from', async () => {
 		const generated = createOklchScaleEngine().generate(await localSeed(), BALANCED);
 
-		expect(generated.ok).toBe(true);
-		expect(generated.anchor?.withinTolerance).toBe(true);
+		expect(generated.error).toBeUndefined();
 	});
 
 	/**

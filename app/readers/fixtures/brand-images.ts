@@ -19,8 +19,12 @@ export type BrandImageFixture = {
 	id: string;
 	kind: 'logo' | 'photo' | 'ui';
 	sample: PixelSample;
-	/** The colour a person would name if asked what colour this brand is. */
-	brandHex: string;
+	/**
+	 * The colour a person would name if asked what colour this brand is, and null for an image
+	 * that has no such colour. Null is a real expectation rather than a gap: the extractor is
+	 * supposed to refuse an image of nothing but greys.
+	 */
+	brandHex: string | null;
 	/** A genuine second colour, where the image has one. */
 	accentHex: string | null;
 };
@@ -210,7 +214,7 @@ export const NEUTRAL_PAGE_FIXTURE: BrandImageFixture = {
 	id: 'fixture-neutral-page',
 	kind: 'ui',
 	sample: drawNeutralPage(),
-	brandHex: '#9ca3af',
+	brandHex: null,
 	accentHex: null,
 };
 

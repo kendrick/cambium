@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { BrandSeedSchema, type KeyColor } from '../../core/brand-seed';
-import { oklchDistance, readOklch } from '../../core/oklch';
+import { hueDistance, oklchDistance, readOklch } from '../../core/oklch';
 import { MIN_ACCENT_SEPARATION } from '../../core/oklch-scale-engine';
 import { parseSeed } from '../../core/parse-seed';
 
@@ -21,6 +21,7 @@ import {
 	readImageOpinions,
 	seedPayload,
 } from './local-extract';
+import { LOCAL_EXTRACT_VERSION, LOCAL_EXTRACTOR_MODEL, LOCAL_PROVIDER } from './local-reader';
 
 function keyColor(extraction: ReturnType<typeof chooseKeyColors>, role: KeyColor['proposedRole']) {
 	return extraction.keyColors?.find((color) => color.proposedRole === role);
@@ -63,9 +64,28 @@ describe('local extraction', () => {
 		const extraction = await extract(fixture);
 
 		expect(extraction.kind).toBe('read');
-		expect(distanceFromHex(keyColor(extraction, 'brand'), fixture.brandHex)).toBeLessThanOrEqual(
+		expect(distanceFromHex(keyColor(extraction, 'brand'), fixture.brandHex!)).toBeLessThanOrEqual(
 			KNOWN_COLOR_TOLERANCE,
 		);
+	});
+
+	/**
+	 * Pins the figure `MAX_HUE_DISAGREEMENT` is set against. That constant is the alarm, and this
+	 * is the room between the alarm and where the two libraries actually sit, so a library update
+	 * that moves them apart fails here first and says by how much.
+	 */
+	it.each([
+		['a logo', LOGO_FIXTURE],
+		['a photograph', PHOTOGRAPH_FIXTURE],
+		['an application screenshot', SCREENSHOT_FIXTURE],
+	])('has both libraries agreeing on %s to within two degrees of hue', async (_kind, fixture) => {
+		const { primary, secondOpinion } = await readImageOpinions(fixture.id, fixture.sample);
+		const nearest = Math.min(
+			...secondOpinion.map((other) => hueDistance(other.oklch.h, primary[0]!.oklch.h)),
+		);
+
+		expect(nearest).toBeLessThan(2);
+		expect(nearest).toBeLessThan(MAX_HUE_DISAGREEMENT);
 	});
 
 	it.each([
@@ -111,9 +131,19 @@ describe('local extraction', () => {
 		expect(read.secondOpinion).toEqual([]);
 	});
 
-	it('returns identical results for repeated extraction from one image', async () => {
-		const first = await extract(PHOTOGRAPH_FIXTURE);
-		const second = await extract(PHOTOGRAPH_FIXTURE);
+	/**
+	 * MMCQ quantization is the part of this most likely to drift, and the photograph is where it
+	 * would show: it is the only fixture with no flat region, so every candidate is a centroid
+	 * rather than a colour read off a byte.
+	 */
+	it.each([
+		['a logo', LOGO_FIXTURE],
+		['a photograph', PHOTOGRAPH_FIXTURE],
+		['an application screenshot', SCREENSHOT_FIXTURE],
+		['a page of greys', NEUTRAL_PAGE_FIXTURE],
+	])('returns identical results for repeated extraction from %s', async (_kind, fixture) => {
+		const first = await extract(fixture);
+		const second = await extract(fixture);
 
 		expect(seedPayload(second)).toBe(seedPayload(first));
 	});
@@ -213,9 +243,9 @@ describe('the seed envelope', () => {
 	it('parses through the core, which is the only thing that parses a reader response', async () => {
 		const result = parseSeed({
 			raw: seedPayload(await extract(SCREENSHOT_FIXTURE)),
-			provider: 'local',
-			model: 'colorthief-mmcq+vibrant-mmcq',
-			promptVersion: 'local-extract-v1',
+			provider: LOCAL_PROVIDER,
+			model: LOCAL_EXTRACTOR_MODEL,
+			promptVersion: LOCAL_EXTRACT_VERSION,
 		});
 
 		expect(result.error).toBeUndefined();

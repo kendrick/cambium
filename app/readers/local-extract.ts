@@ -49,6 +49,12 @@ export type LocalExtraction =
 			 *
 			 * `uncorroborated`: the two libraries read different structure out of the same pixels,
 			 * which per ADR-0002 means the image has no clear brand colour.
+			 *
+			 * Only a caller of `chooseKeyColors` can tell the two apart today. `seedPayload` flattens
+			 * both to `keyColors: null`, because `RawReaderResponse` has no field for a reason and
+			 * `BrandSeedSchema` is a `z.strictObject` that would reject one. So ADR-0002's "worth
+			 * surfacing rather than hiding" is honoured as far as this module reaches and no
+			 * further; carrying it to the user needs a seam change nobody has asked for yet.
 			 */
 			reason: 'all-neutral' | 'uncorroborated';
 	  };
@@ -77,10 +83,13 @@ export const MIN_BRAND_CHROMA = 0.04;
 /**
  * How far apart in hue the two libraries' answers may sit and still count as the same answer.
  *
- * Measured across the fixtures: the two libraries agree to under two degrees on a logo, a
- * photograph and a screenshot alike, because both are median-cut quantizers reading identical
- * pixels. So the gate is wide on purpose. It does not arbitrate between two plausible readings. It
- * catches the case where one library found structure the other never saw.
+ * Wide on purpose, because the gate does not arbitrate between two plausible readings. It catches
+ * the case where one library found structure the other never saw.
+ *
+ * The margin is asserted rather than asserted-about: `local-extract.test.ts` pins the two
+ * libraries to under two degrees of each other on every fixture, which is where the room between
+ * that figure and this one comes from. Both are median-cut quantizers reading identical pixels, so
+ * close agreement is the expected case and this bound is the alarm.
  */
 export const MAX_HUE_DISAGREEMENT = 15;
 
@@ -125,8 +134,9 @@ type QuantizedColor = { hex: string; population: number };
  *
  * ADR-0002 leaves 24 kB of headroom under a 200 kB gzipped ceiling to force every pipeline
  * library behind a boundary like this one, and the landing route is an upload screen that needs
- * none of them. Measured with the reader wired into a client page: 1.2 kB of this reaches
- * first-load and the 22 kB behind it stays lazy.
+ * none of them. Nothing in the repo imports the reader yet, so reproducing the split means wiring
+ * `createLocalBrandReader` into a `'use client'` page, running `pnpm build`, and measuring with
+ * `lib/bundle-size.ts`. Done that way it came to 1.2 kB of first-load against 22 kB left lazy.
  *
  * Both import shapes here fail at runtime rather than at build time, and ADR-0002 writes down
  * why. `colorthief` has no default export, so the named exports are the only way in.
@@ -149,7 +159,14 @@ async function loadQuantizers() {
 let quantizers: ReturnType<typeof loadQuantizers> | null = null;
 
 function quantizerModules() {
-	quantizers ??= loadQuantizers();
+	// Dropped on failure, not kept. A rejected promise stays rejected for as long as it is held, so
+	// caching one would turn a single dropped chunk request into a page that can never run a local
+	// read again. Clearing it costs nothing and lets the next read try the import afresh.
+	quantizers ??= loadQuantizers().catch((cause: unknown) => {
+		quantizers = null;
+
+		throw cause;
+	});
 
 	return quantizers;
 }
@@ -282,7 +299,7 @@ function toTriple(color: Oklch): OklchTriple {
  */
 export function chooseKeyColors(opinions: readonly ImageOpinions[]): LocalExtraction {
 	const ranked = opinions
-		.flatMap((opinion) => opinion.primary.map((candidate) => ({ candidate, opinions: opinion })))
+		.flatMap((image) => image.primary.map((candidate) => ({ candidate, image })))
 		// Fresh from `flatMap`, so nothing outside this function sees the mutation.
 		// oxlint-disable-next-line unicorn/no-array-sort
 		.sort((a, b) => b.candidate.score - a.candidate.score);
@@ -295,7 +312,7 @@ export function chooseKeyColors(opinions: readonly ImageOpinions[]): LocalExtrac
 	// only a single library saw. ADR-0002 is explicit that disagreement means the image has no
 	// clear brand colour and that this "is worth surfacing rather than hiding", and quietly
 	// promoting the next candidate would hide exactly that.
-	if (!corroborates(best.candidate, best.opinions.secondOpinion)) {
+	if (!corroborates(best.candidate, best.image.secondOpinion)) {
 		return { kind: 'no-brand-color', reason: 'uncorroborated' };
 	}
 
@@ -303,7 +320,7 @@ export function chooseKeyColors(opinions: readonly ImageOpinions[]): LocalExtrac
 		{
 			oklch: toTriple(best.candidate.oklch),
 			proposedRole: 'brand',
-			sourceImageId: best.opinions.imageId,
+			sourceImageId: best.image.imageId,
 			// A quantizer reports which colours an image holds, never where. The bucket a pixel
 			// landed in says nothing about the pixel's coordinates, and a region covering the
 			// scattered pixels of one bucket would be the whole image. Null is the honest answer,
@@ -318,14 +335,14 @@ export function chooseKeyColors(opinions: readonly ImageOpinions[]): LocalExtrac
 	const accent = ranked.find(
 		(entry) =>
 			hueDistance(entry.candidate.oklch.h, best.candidate.oklch.h) >= MIN_ACCENT_SEPARATION &&
-			corroborates(entry.candidate, entry.opinions.secondOpinion),
+			corroborates(entry.candidate, entry.image.secondOpinion),
 	);
 
 	if (accent) {
 		keyColors.push({
 			oklch: toTriple(accent.candidate.oklch),
 			proposedRole: 'accent',
-			sourceImageId: accent.opinions.imageId,
+			sourceImageId: accent.image.imageId,
 			sourceRegion: null,
 		});
 	}
@@ -342,10 +359,13 @@ export function chooseKeyColors(opinions: readonly ImageOpinions[]): LocalExtrac
  * wants: it records the gap rather than leaving a later reader unable to tell "nothing in the
  * image informed this" from "this field is not in the schema".
  *
- * The list is the whole non-colour half of the seed, which is what #33's non-goals say a keyless
- * read leaves alone. `neutralTemperature` is on it although a neutral is a colour: the greys in a
- * screenshot are the page's own furniture rather than a brand decision, and reading a brand's
- * intended neutral tint off them would be the invention the seed's nulls exist to prevent.
+ * `neutralTemperature` is the one entry worth arguing about, because a neutral is a colour and the
+ * candidates this module rejects are exactly the image's neutrals. It stays null because stating it
+ * makes the output worse. `neutralAnchor` in `core/oklch-scale-engine.ts` treats a stated
+ * temperature as evidence and overrides its tinting parameter outright, and the neutral a logo on
+ * white offers is `{ hue: 0, chroma: 0 }`. Reading that off the page would flatten every neutral
+ * ramp to dead grey, overruling the brand tint the engine derives when the field is absent. The
+ * greys in an upload are the page's own furniture, and the seed has no way to say so.
  */
 const UNINFORMED: Omit<BrandSeed, 'keyColors'> = {
 	neutralTemperature: null,
