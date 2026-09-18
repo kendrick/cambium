@@ -11,6 +11,8 @@ import {
 	NEUTRAL_PAGE_FIXTURE,
 	PHOTOGRAPH_FIXTURE,
 	SCREENSHOT_FIXTURE,
+	SLATE_CHROME_FIXTURE,
+	SLATE_UI_FIXTURE,
 } from './fixtures/brand-images';
 import {
 	type Candidate,
@@ -118,6 +120,64 @@ describe('local extraction', () => {
 		expect(distanceFromHex(brand, '#111827')).toBeGreaterThan(0.3);
 	});
 
+	/**
+	 * Slate is the regression case, because it is the one neutral family chromatic enough to reach
+	 * a plausible floor. A floor of 0.04 let slate-500 and slate-950 through, and this fixture is
+	 * what that cost: an interface with no brand colour returned its own body text as one.
+	 */
+	it('claims no brand colour from an interface chromed entirely in slate', async () => {
+		const extraction = await extract(SLATE_CHROME_FIXTURE);
+
+		expect(SLATE_CHROME_FIXTURE.brandHex).toBeNull();
+		expect(extraction).toEqual({ kind: 'no-brand-color', reason: 'all-neutral' });
+	});
+
+	/**
+	 * Only the primary list can be claimed, which is what makes the asymmetry below safe.
+	 *
+	 * Vibrant quantizes in RGB, and on dark slate its centroid comes out more chromatic than
+	 * either colour that went into it: averaging slate-900 (0.0398) and slate-800 (0.0368) lands
+	 * at 0.0496, past the floor. colorthief quantizes in OKLCH and does not do this. The inflated
+	 * swatch is harmless because `chooseKeyColors` ranks primary candidates alone and consults the
+	 * second opinion only to corroborate one, so a colour the primary list never offered cannot be
+	 * promoted into the seed. Asserted rather than described, because it is the kind of asymmetry
+	 * a later reader would otherwise read as a bug.
+	 */
+	it('offers no claimable slate candidate, whatever the second opinion inflates', async () => {
+		const read = await readImageOpinions(SLATE_CHROME_FIXTURE.id, SLATE_CHROME_FIXTURE.sample);
+
+		expect(read.primary).toEqual([]);
+		expect(chooseKeyColors([read]).keyColors).toBeUndefined();
+	});
+
+	/**
+	 * The other half of the same question. Rejecting slate must not cost the button beside it, or
+	 * the floor would have traded one wrong answer for another.
+	 */
+	it('still finds the brand button in a slate interface', async () => {
+		const brand = keyColor(await extract(SLATE_UI_FIXTURE), 'brand');
+
+		expect(distanceFromHex(brand, SLATE_UI_FIXTURE.brandHex!)).toBeLessThanOrEqual(
+			KNOWN_COLOR_TOLERANCE,
+		);
+		expect(keyColor(await extract(SLATE_UI_FIXTURE), 'accent')).toBeUndefined();
+	});
+
+	/**
+	 * Pins the margin the floor is set from, so a future edit to either number has to face the
+	 * other. slate-500 is the most chromatic step of the most chromatic neutral family that real
+	 * interfaces ship.
+	 */
+	it('sits clear of the most chromatic neutral in common use', () => {
+		const slate500 = readOklch('#64748b');
+
+		expect(slate500.c).toBeLessThan(MIN_BRAND_CHROMA);
+		expect(MIN_BRAND_CHROMA - slate500.c).toBeGreaterThanOrEqual(0.004);
+		// And still below the washed-out end of what a brand would claim.
+		expect(MIN_BRAND_CHROMA).toBeLessThan(readOklch('#4a7c7c').c);
+		expect(MIN_BRAND_CHROMA).toBeLessThan(readOklch('#5b7c8d').c);
+	});
+
 	it('claims no brand colour from an image that holds only neutrals', async () => {
 		const extraction = await extract(NEUTRAL_PAGE_FIXTURE);
 
@@ -141,6 +201,7 @@ describe('local extraction', () => {
 		['a photograph', PHOTOGRAPH_FIXTURE],
 		['an application screenshot', SCREENSHOT_FIXTURE],
 		['a page of greys', NEUTRAL_PAGE_FIXTURE],
+		['a slate interface', SLATE_UI_FIXTURE],
 	])('returns identical results for repeated extraction from %s', async (_kind, fixture) => {
 		const first = await extract(fixture);
 		const second = await extract(fixture);

@@ -171,6 +171,38 @@ function drawPhotograph(): PixelSample {
 }
 
 /**
+ * A dark interface chromed in Tailwind slate, drawn twice: once with a brand button and once
+ * without.
+ *
+ * Slate is the regression case. It is the most chromatic neutral family in common use, and the
+ * exact palette values real interfaces ship put seven of its steps between 0.035 and 0.041
+ * chroma, which is close enough to a washed-out brand colour to have cleared an earlier version
+ * of `MIN_BRAND_CHROMA`. The variant with no button is the one that caught it: with every slate
+ * step surviving the floor, the extractor returned `#64748b` body text as the brand colour of an
+ * interface that has no brand colour at all.
+ */
+function drawSlateUi(withButton: boolean): PixelSample {
+	const sample = fill(SIDE, SIDE, '#0f172a');
+
+	rect(sample, 0, 0, SIDE, 40, '#1e293b');
+	rect(sample, 0, 40, 64, SIDE - 40, '#1e293b');
+	rect(sample, 80, 56, 160, 120, '#334155');
+
+	// slate-500, the family's chroma ceiling at 0.0407 and so the step that binds the floor.
+	for (let row = 0; row < 8; row += 1) {
+		rect(sample, 92, 68 + row * 14, 130, 6, '#64748b');
+	}
+
+	rect(sample, 92, 200, 60, 14, '#475569');
+
+	if (withButton) {
+		rect(sample, 190, 10, 52, 20, '#7c3aed');
+	}
+
+	return sample;
+}
+
+/**
  * Nothing coloured at all: a page of greys. Every candidate sits under the neutral floor, so this
  * is the fixture that proves the extractor returns no brand colour rather than the background.
  */
@@ -208,6 +240,23 @@ export const PHOTOGRAPH_FIXTURE: BrandImageFixture = {
 	// The sky. A third of the frame and genuinely coloured, so it is a real second colour rather
 	// than something the neutral floor was always going to dispose of.
 	accentHex: '#7ea8d8',
+};
+
+export const SLATE_UI_FIXTURE: BrandImageFixture = {
+	id: 'fixture-slate-ui',
+	kind: 'ui',
+	sample: drawSlateUi(true),
+	brandHex: '#7c3aed',
+	accentHex: null,
+};
+
+export const SLATE_CHROME_FIXTURE: BrandImageFixture = {
+	id: 'fixture-slate-chrome',
+	kind: 'ui',
+	sample: drawSlateUi(false),
+	// No brand colour, because the image holds none. Every colour in it is a slate step.
+	brandHex: null,
+	accentHex: null,
 };
 
 export const NEUTRAL_PAGE_FIXTURE: BrandImageFixture = {

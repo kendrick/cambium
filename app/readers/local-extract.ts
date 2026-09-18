@@ -66,19 +66,36 @@ export type LocalExtraction =
  * floor", and they are one gate rather than two: a candidate under this floor is grey, and grey is
  * what a page background and a paragraph of text are made of.
  *
- * Measured against the neutrals a real interface is built from, which is what fixes the value.
- * Tailwind's `gray-900` (`#111827`) reads 0.032 chroma, `gray-500` (`#6b7280`) reads 0.023, and a
- * plain 50 per cent grey reads 0. A muted-but-real brand colour sits above all three: a dusty
- * teal (`#4a7c7c`) reads 0.054. So the floor goes in the gap, and `gray-900` is what fixes its
- * lower bound. A paragraph of body text outweighs everything coloured in a screenshot, so a floor
- * under 0.032 hands the answer to the text.
+ * Set from the measured ceiling of the neutrals real interfaces actually ship. Tailwind slate is
+ * the binding family by a wide margin, and slate-500 (`#64748b`) is its most chromatic step at
+ * 0.0407, with slate-950 at 0.0406 and five more steps between 0.035 and 0.040. Every other
+ * neutral family is far below: gray peaks at 0.0318, zinc at 0.0146, stone at 0.0116, and neutral
+ * is achromatic throughout. So slate-500 fixes the lower edge and the floor clears it by 0.0043.
+ *
+ * A floor of 0.04 did not clear it, and the failure was real rather than theoretical. Slate-500
+ * and slate-950 both survived, and `SLATE_CHROME_FIXTURE` is what it looked like: an interface
+ * with no brand colour in it returned its own body text as the brand. `local-extract.test.ts`
+ * pins both slate cases now.
+ *
+ * What this floor does not do is separate slate from every slate-like colour, and no value in
+ * this region would. The neutral band runs to 0.041 and the washed-out brand colours start around
+ * 0.046, so the two are adjacent: a dusty teal (`#4a7c7c`) reads 0.054 and a muted blue-grey
+ * (`#5b7c8d`) reads 0.046, and raising the floor far enough to be safe against drift would start
+ * rejecting those. Perturbing slate-500 by three bytes per channel reaches 0.0494, past any floor
+ * that leaves a brand colour alive. So the guard is exact against the palette values interfaces
+ * ship, which is what designers paste in, and is a heuristic against everything else.
+ *
+ * Where the two error modes are "return the page background" and "return nothing", this prefers
+ * nothing. A background presented as a brand colour is a wrong answer the user cannot see, and a
+ * null is a gap the user can see and fill in, which is the whole reason the seed's fields are
+ * nullable.
  *
  * No lightness cap sits beside this, deliberately. Near-white and near-black fall out for free,
  * because the sRGB gamut pinches to zero chroma at both ends of lightness. A cap would instead
  * reject the colours it pinches around: pure yellow is a legitimate brand colour at 0.968
  * lightness, and any cap low enough to catch `#fafafa` catches it too.
  */
-export const MIN_BRAND_CHROMA = 0.04;
+export const MIN_BRAND_CHROMA = 0.045;
 
 /**
  * How far apart in hue the two libraries' answers may sit and still count as the same answer.
