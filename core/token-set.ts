@@ -471,6 +471,10 @@ export const SchemeSchema = z.strictObject(SCHEME_SHAPE).superRefine(checkAliase
  * Not general-purpose structural equality: two objects with no own keys compare equal, so a pair of
  * `Date`s would. Nothing here parses to one, and widening this to handle shapes the schemas cannot
  * produce would be answering a question nobody asked.
+ *
+ * `$extensions` is compared through `sameOwnProvenance` rather than structurally, which is the one
+ * place this stops being plain equality. That carve-out is the whole of the mirror's foreign-data
+ * policy and `checkMirroredLayers` records why.
  */
 function sameValue(a: unknown, b: unknown): boolean {
 	if (a === b) return true;
@@ -483,7 +487,27 @@ function sameValue(a: unknown, b: unknown): boolean {
 
 	if (keys.length !== Object.keys(right).length) return false;
 
-	return keys.every((key) => Object.hasOwn(right, key) && sameValue(left[key], right[key]));
+	return keys.every(
+		(key) =>
+			Object.hasOwn(right, key) &&
+			(key === '$extensions'
+				? sameOwnProvenance(left[key], right[key])
+				: sameValue(left[key], right[key])),
+	);
+}
+
+/**
+ * Of two mirrored `$extensions` objects, only Cambium's own payload has to agree.
+ *
+ * Ours describes one derivation, so two copies disagreeing about it is corruption of data this
+ * pipeline wrote and stays a parse error. A namespace belonging to somebody else is not compared at
+ * all, and the next reader should leave that alone: see `checkMirroredLayers`.
+ */
+function sameOwnProvenance(a: unknown, b: unknown): boolean {
+	const left = a as Record<string, unknown> | null;
+	const right = b as Record<string, unknown> | null;
+
+	return sameValue(left?.[CAMBIUM_NAMESPACE], right?.[CAMBIUM_NAMESPACE]);
 }
 
 /**
@@ -498,6 +522,27 @@ function sameValue(a: unknown, b: unknown): boolean {
  * Checked over the derived key set rather than a written list. #7 added `shadow` to a mirror that
  * already held `primitives` and `semantic` unguarded, and guarding only the new one would leave a
  * reader to infer from it that the other two were guarded too.
+ *
+ * A foreign `$extensions` namespace is deliberately exempt, and that line is the surprising one in
+ * this file. Read the justification above before correcting it: what the mirror protects is the
+ * theme a consumer renders. Values decide that and have to agree. Cambium's own payload has to
+ * agree too, because it describes one derivation and two answers would mean one of them is wrong.
+ * Another tool's annotation decides nothing a consumer renders, so two copies carrying different
+ * notes still emit the same light theme.
+ *
+ * Requiring the mirror to hold there would reject a file no conforming tool could have written.
+ * Nothing announces that Cambium duplicates its light scheme at the top level, so a tool that walks
+ * a file and annotates the copy it found has done the only thing available to it, and failing the
+ * whole set over that is the same DTCG 5.2.3 breach `TokenExtensionsSchema` exists to fix, one
+ * layer further in.
+ *
+ * The cost is real and worth stating: the two copies may now carry different foreign data, so an
+ * adapter assembling a light theme meets a token annotated twice. The two are the same token
+ * written twice for consumers, so the honest reading is the union of both, with a genuine collision
+ * on one namespace being the adapter's to report rather than this schema's to prevent. Merging them
+ * here instead was the other candidate and it loses more than it buys: writing a top-level
+ * annotation onto `schemes.light` fabricates data the foreign tool never wrote, and it breaks the
+ * byte-identical round trip `core/provenance.test.ts` pins.
  */
 function checkMirroredLayers(
 	value: Record<string, unknown> & { schemes: { light: Record<string, unknown> } },

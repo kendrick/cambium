@@ -66,6 +66,70 @@ function countPayloads(json: string): number {
 	return json.match(/com\.cambium/g)?.length ?? 0;
 }
 
+/** The smallest record `BrandRecordSchema` accepts, wrapped around whatever token set it is given. */
+function recordHolding(tokenSet: unknown) {
+	return {
+		id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+		schemaVersion: SCHEMA_VERSION,
+		images: [{ id: 'img-1', downscaled: 'data:image/webp;base64,AA', originalHash: 'sha256:a' }],
+		versions: [
+			{
+				createdAt: '2026-09-16T12:00:00.000Z',
+				ordinal: 1,
+				seed: STATED_SEED,
+				tokenSet,
+				provider: 'anthropic',
+				model: 'claude-opus-5',
+				promptVersion: 'seed-v3',
+				rawResponse: '{"keyColors":[{"proposedRole":"brand"}]}',
+				scaleEngine: 'cambium-oklch-1',
+				fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
+				interpretation: 'balanced',
+			},
+		],
+	};
+}
+
+/**
+ * A namespace Cambium does not understand, shaped like the things most likely to be lost quietly:
+ * a nested object, an array, and a null.
+ */
+const FOREIGN = {
+	note: 'hand-authored by another tool',
+	weights: [1, 2, 3],
+	nested: { deep: true, absent: null },
+};
+
+/**
+ * `set` with a foreign namespace planted on the first brand step of whichever copies `on` names.
+ *
+ * The top level and `schemes.light` hold the same tokens twice, and a foreign tool has no way to
+ * learn that, so annotating one copy is the ordinary outcome of walking a Cambium file.
+ */
+function plantForeign(set: TokenSet, on: 'top' | 'light' | 'both'): unknown {
+	const annotate = (layer: TokenSet['schemes']['light'] | TokenSet) => ({
+		...layer.primitives,
+		brand: [
+			{
+				...layer.primitives.brand![0]!,
+				$extensions: { ...layer.primitives.brand![0]!.$extensions, 'com.someothertool': FOREIGN },
+			},
+			...layer.primitives.brand!.slice(1),
+		],
+	});
+
+	const light =
+		on === 'light' || on === 'both'
+			? { ...set.schemes.light, primitives: annotate(set.schemes.light) }
+			: set.schemes.light;
+
+	return {
+		...set,
+		primitives: on === 'top' || on === 'both' ? annotate(set) : set.primitives,
+		schemes: { ...set.schemes, light },
+	};
+}
+
 /** A foreign namespace as stored bytes, which is what "preserved unchanged" has to mean. */
 function foreignBytes(token: unknown): string {
 	return JSON.stringify(
@@ -214,23 +278,8 @@ describe('token provenance', () => {
 	 * either path.
 	 */
 	it('preserves a namespace it does not understand through both round trips', () => {
-		const foreign = {
-			note: 'hand-authored by another tool',
-			weights: [1, 2, 3],
-			nested: { deep: true, absent: null },
-		};
-		const set = tokenSetFor(STATED_SEED);
-		const step = {
-			...set.primitives.brand![0]!,
-			$extensions: { ...set.primitives.brand![0]!.$extensions, 'com.someothertool': foreign },
-		};
-		const layer = {
-			...set.schemes.light,
-			primitives: { ...set.primitives, brand: [step, ...set.primitives.brand!.slice(1)] },
-		};
-		const withForeign = { ...set, ...layer, schemes: { light: layer, dark: layer } };
-
-		const parsed = TokenSetSchema.parse(withForeign);
+		const foreign = FOREIGN;
+		const parsed = TokenSetSchema.parse(plantForeign(tokenSetFor(STATED_SEED), 'both'));
 
 		// Parsing alone drops it if the schema is strict about the namespace, so this is the
 		// assertion the old shape could not have passed at all.
@@ -240,6 +289,81 @@ describe('token provenance', () => {
 		).toBe(JSON.stringify(foreign));
 		expect(foreignBytes(TokenSetSchema.parse(structuredClone(parsed)).primitives.brand![0]!)).toBe(
 			JSON.stringify(foreign),
+		);
+	});
+
+	/**
+	 * The mirror's foreign-data policy, which is the surprising half of `checkMirroredLayers`.
+	 *
+	 * A tool walking a Cambium file cannot know the top level repeats `schemes.light`, so annotating
+	 * one copy is the ordinary outcome and has to parse. Asserted on both sides: the annotated copy
+	 * keeps the bytes, and the copy nobody touched is left alone rather than back-filled.
+	 */
+	it.each([['top'], ['light']] as const)(
+		'accepts a foreign namespace on the %s copy alone and leaves the other untouched',
+		(on) => {
+			const parsed = TokenSetSchema.parse(plantForeign(tokenSetFor(STATED_SEED), on));
+			const annotated = on === 'top' ? parsed.primitives : parsed.schemes.light.primitives;
+			const untouched = on === 'top' ? parsed.schemes.light.primitives : parsed.primitives;
+
+			expect(foreignBytes(annotated.brand![0]!)).toBe(JSON.stringify(FOREIGN));
+			expect(foreignBytes(untouched.brand![0]!)).toBeUndefined();
+		},
+	);
+
+	/**
+	 * The half of the mirror that did not move. Cambium's own payload describes one derivation, so
+	 * two copies disagreeing about it is corruption of data this pipeline wrote, and a value that
+	 * differs across the mirror still means two light themes from one file.
+	 */
+	it.each([
+		[
+			'our own provenance disagrees across the mirror',
+			(set: TokenSet) => ({
+				...set,
+				primitives: {
+					...set.primitives,
+					brand: [
+						{
+							...set.primitives.brand![0]!,
+							$extensions: {
+								[CAMBIUM_NAMESPACE]: invented('nothing reached this')[CAMBIUM_NAMESPACE],
+							},
+						},
+						...set.primitives.brand!.slice(1),
+					],
+				},
+			}),
+		],
+		[
+			'a value disagrees across the mirror',
+			(set: TokenSet) => ({
+				...set,
+				primitives: {
+					...set.primitives,
+					brand: [{ ...set.primitives.brand![0]!, l: 0.5 }, ...set.primitives.brand!.slice(1)],
+				},
+			}),
+		],
+	])('still rejects a set where %s', (_name, diverge) => {
+		expect(TokenSetSchema.safeParse(diverge(tokenSetFor(STATED_SEED))).success).toBe(false);
+	});
+
+	/**
+	 * The persistence path with a token set actually in it. Every storage and state fixture in the
+	 * repo sets `tokenSet: null`, so nothing else carries extensions through a record, and
+	 * `structuredClone` is what an IndexedDB write uses rather than JSON.
+	 */
+	it('carries a foreign namespace through a stored record and a structured clone', () => {
+		const stored = recordHolding(plantForeign(tokenSetFor(STATED_SEED), 'top'));
+		const parsed = BrandRecordSchema.parse(stored);
+		const read = (record: typeof parsed) =>
+			foreignBytes(record.versions[0]!.tokenSet!.primitives.brand![0]!);
+
+		expect(read(parsed)).toBe(JSON.stringify(FOREIGN));
+		expect(read(BrandRecordSchema.parse(structuredClone(parsed)))).toBe(JSON.stringify(FOREIGN));
+		expect(read(BrandRecordSchema.parse(JSON.parse(JSON.stringify(parsed))))).toBe(
+			JSON.stringify(FOREIGN),
 		);
 	});
 
@@ -263,31 +387,7 @@ describe('token provenance', () => {
 
 	/** The export archive is the only migration path, so the payload has to clear the record too. */
 	it('parses inside a stored record at the current schema version', () => {
-		const image = {
-			id: 'img-1',
-			downscaled: 'data:image/webp;base64,AA',
-			originalHash: 'sha256:a',
-		};
-		const record = {
-			id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
-			schemaVersion: SCHEMA_VERSION,
-			images: [image],
-			versions: [
-				{
-					createdAt: '2026-09-16T12:00:00.000Z',
-					ordinal: 1,
-					seed: STATED_SEED,
-					tokenSet: tokenSetFor(STATED_SEED),
-					provider: 'anthropic',
-					model: 'claude-opus-5',
-					promptVersion: 'seed-v3',
-					rawResponse: '{"keyColors":[{"proposedRole":"brand"}]}',
-					scaleEngine: 'cambium-oklch-1',
-					fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
-					interpretation: 'balanced',
-				},
-			],
-		};
+		const record = recordHolding(tokenSetFor(STATED_SEED));
 
 		expect(BrandRecordSchema.safeParse(JSON.parse(JSON.stringify(record))).success).toBe(true);
 	});
