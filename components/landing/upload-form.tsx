@@ -123,7 +123,20 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 			const rejected: string[] = [];
 			const accepted: PickedImage[] = [];
 
-			for (const file of files.slice(0, room)) {
+			let overflowed = 0;
+
+			for (const file of files) {
+				// Counted against the limit only once a file has proved usable. Slicing the list to `room`
+				// first spends a slot on a file that will occupy none: with one slot left and a GIF picked
+				// ahead of a PNG, the GIF was rejected and the PNG was never looked at, so the file the
+				// user could actually use was dropped because of one they could not. The limit is also
+				// reported off this counter now, because `files.length > room` called it a limit problem
+				// when the limit had not been reached.
+				if (accepted.length >= room) {
+					overflowed += 1;
+					continue;
+				}
+
 				// A file whose signature is right and whose body is truncated still throws out of the
 				// decoder. One bad file must not take the rest of the batch with it, and the picker is
 				// the last place anyone can do anything about it.
@@ -161,7 +174,7 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 			if (accepted.length > 0) setPicked((current) => [...current, ...accepted]);
 
 			const messages = [...rejected];
-			if (files.length > room) messages.push(OVER_LIMIT_NOTICE);
+			if (overflowed > 0) messages.push(OVER_LIMIT_NOTICE);
 
 			setNotice(messages.length > 0 ? messages.join(' ') : null);
 		} finally {

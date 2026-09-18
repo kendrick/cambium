@@ -49,15 +49,20 @@ type SavedRecord =
  * something over, and that evidence is exactly what `unreadable` spends when it tells somebody
  * their record is still there and not to clear it.
  *
- * Matched by name rather than by `instanceof`, because importing zod to narrow one error would put
- * 93 kB into a bundle ADR-0002 leaves about 5 kB in. `app/storage/storage-estimate.ts` argues for
- * name matching already; the reason is stronger here.
+ * Recognised by the `issues` array a `ZodError` carries, which is the shape callers are meant to
+ * read a validation failure out of. Importing zod to use `instanceof` would put 93 kB into a bundle
+ * ADR-0002 leaves about 5 kB in, so that is not available. Matching the class name instead was the
+ * first attempt and rests on two of the library's internals at once, its error name and its
+ * inheritance, either of which can move in a minor release with nothing here failing loudly.
+ * Nothing else that can reach this catch carries `issues`: an `idb` or IndexedDB rejection is a
+ * `DOMException`.
  *
- * It fails toward claiming less. If zod ever renames its error, every read failure reads as
- * `unavailable`, which says nothing about existence rather than saying something false.
+ * It fails toward claiming less, whichever way it is written. If this stops recognising a schema
+ * rejection, every read failure reads as `unavailable`, which says nothing about existence rather
+ * than saying something false.
  */
 function isSchemaRejection(error: unknown): boolean {
-	return error instanceof Error && error.name === 'ZodError';
+	return Array.isArray((error as { issues?: unknown } | null | undefined)?.issues);
 }
 
 /**
