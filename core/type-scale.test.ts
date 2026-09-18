@@ -99,14 +99,30 @@ describe('typeScale', () => {
 	 * `source` on the category stays `derived` regardless, so the split lives on each size's own
 	 * payload rather than on the discriminator a category-level read would reach for.
 	 */
-	it('tags every size derived on typeScaleRatio when the seed stated one', () => {
+	it('tags every scaled size derived on typeScaleRatio when the seed stated one', () => {
 		const { size } = typeScale(1.25).values;
 
-		STEPS.forEach((step) => {
+		STEPS.filter((step) => step !== 'base').forEach((step) => {
 			expect(size[step]!.$extensions[CAMBIUM_NAMESPACE]).toMatchObject({
 				provenance: 'derived',
 				seedField: 'typeScaleRatio',
 			});
+		});
+	});
+
+	/**
+	 * `base` is exempt because the ratio cannot move it: its exponent is zero, so it is 1rem at
+	 * every stated ratio and at the fallback. Asserted by measuring rather than by reading the
+	 * exponent, so the claim survives a change to how the scale is computed.
+	 */
+	it('tags the base size invented, because no ratio moves it', () => {
+		const stated = typeScale(1.25).values.size.base!;
+		const wider = typeScale(1.6).values.size.base!;
+
+		expect(stated.value).toBe(wider.value);
+		expect(stated.$extensions[CAMBIUM_NAMESPACE]).toMatchObject({
+			provenance: 'invented',
+			seedField: null,
 		});
 	});
 

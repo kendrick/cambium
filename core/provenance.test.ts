@@ -210,7 +210,7 @@ describe('token provenance', () => {
 	 */
 	it.each([
 		['radius', (set: TokenSet) => set.radius.values.lg, 'radiusCharacter'],
-		['type scale', (set: TokenSet) => set.typography.values.size.base, 'typeScaleRatio'],
+		['type scale', (set: TokenSet) => set.typography.values.size.lg, 'typeScaleRatio'],
 		['tracking', (set: TokenSet) => set.tracking.values.normal, 'trackingFeel'],
 	])('marks %s against the seed field that governs it', (_name, read, seedField) => {
 		expect(payloadOf(read(tokenSetFor(STATED_SEED)))).toMatchObject({

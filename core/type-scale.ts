@@ -51,10 +51,23 @@ function clampRatio(ratio: number): number {
 export function typeScale(ratio: BrandSeed['typeScaleRatio']): Typography {
 	const clamped = clampRatio(ratio ?? DEFAULT_RATIO);
 
-	/** One seed field for the whole size set, so a stated-vs-fallback ratio is a fact about the call. */
-	const sizeExtensions = ratio
+	/** A stated-vs-fallback ratio is a fact about the call, so it is read once for the whole set. */
+	const scaledExtensions = ratio
 		? derived('typeScaleRatio', "Scaled from the brand seed's stated type scale ratio")
 		: invented('The seed measured no type scale ratio, so this scale falls back to a minor third');
+
+	/**
+	 * `base` is the one size the ratio cannot move, and it says so.
+	 *
+	 * Its exponent is zero, so `clamped ** 0` is 1 at every ratio the seed can state and at the
+	 * fallback alike. Marking it `derived` on `typeScaleRatio` would claim a field informed a value
+	 * it never touches, which is the same false claim as marking a brand-tracking token `invented`,
+	 * with the sign flipped. The anchor is the page's own root size and nothing in a Brand Seed
+	 * reaches it.
+	 */
+	const anchorExtensions = invented(
+		"The scale anchors at the page's own root size, which no stated ratio moves",
+	);
 
 	/**
 	 * Unconditional, both of them: a Brand Seed measures a scale ratio and a type classification,
@@ -77,7 +90,7 @@ export function typeScale(ratio: BrandSeed['typeScaleRatio']): Typography {
 		size[step] = {
 			value: clamped ** (index - BASE_STEP_INDEX),
 			unit: 'rem',
-			$extensions: sizeExtensions,
+			$extensions: index === BASE_STEP_INDEX ? anchorExtensions : scaledExtensions,
 		};
 	});
 
