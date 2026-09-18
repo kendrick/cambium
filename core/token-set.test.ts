@@ -15,18 +15,37 @@ const shadow = SHADOW_FIXTURE;
 /** Shadow is the one non-colour category that differs per scheme, so it is the one a scheme carries. */
 const layer = {
 	primitives: { brand: ramp, neutral: ramp },
-	semantic: { border: 'brand.6' },
+	semantic: { border: 'brand.6', primary: 'brand.9', foreground: 'neutral.12' },
 	shadow,
 };
 
 const nonColor = NON_COLOR_FIXTURE;
 
+// The top level is the light scheme, so it is spread from the same `layer` the schemes hold rather
+// than assembled separately. Writing the two halves out by hand is what `checkMirroredLayers`
+// rejects, and this fixture used to do exactly that.
 const validTokenSet = {
 	...layer,
-	semantic: { border: 'brand.6', primary: 'brand.9', foreground: 'neutral.12' },
 	schemes: { light: layer, dark: layer },
 	...nonColor,
 };
+
+/**
+ * Moves a mirrored key in the root and in the light scheme at once.
+ *
+ * `checkMirroredLayers` rejects a root that disagrees with `schemes.light`, so a test that mutates
+ * only the root gets its rejection from the mirror rather than from the thing it names, and passes
+ * whatever happens to the property it claims to cover. Adding that refinement blinded eight
+ * assertions in this file until they moved to this helper: with the prototype-chain guard in
+ * `declaredRamp` deliberately removed, every one of them still passed.
+ */
+function withMirrored(key: 'primitives' | 'semantic' | 'shadow', value: unknown) {
+	return {
+		...validTokenSet,
+		[key]: value,
+		schemes: { light: { ...layer, [key]: value }, dark: layer },
+	};
+}
 
 describe('TokenSetSchema', () => {
 	it('parses a set carrying primitives, a semantic layer, both schemes, and every category', () => {
@@ -38,7 +57,7 @@ describe('TokenSetSchema', () => {
 	});
 
 	it('rejects a ramp that is not twelve steps', () => {
-		const short = { ...validTokenSet, primitives: { brand: ramp.slice(0, 9), neutral: ramp } };
+		const short = withMirrored('primitives', { brand: ramp.slice(0, 9), neutral: ramp });
 
 		expect(TokenSetSchema.safeParse(short).success).toBe(false);
 	});
@@ -49,35 +68,34 @@ describe('TokenSetSchema', () => {
 	it('rejects twelve entries that are not steps 1 through 12 in order', () => {
 		const duplicated = ramp.map((s) => ({ ...s, step: 1 }));
 
-		const result = TokenSetSchema.safeParse({
-			...validTokenSet,
-			primitives: { brand: duplicated, neutral: ramp },
-		});
+		const result = TokenSetSchema.safeParse(
+			withMirrored('primitives', { brand: duplicated, neutral: ramp }),
+		);
 
 		expect(result.success).toBe(false);
 	});
 
 	it('rejects an alias pointing at a ramp that does not exist', () => {
-		const dangling = { ...validTokenSet, semantic: { border: 'missing.6' } };
+		const dangling = withMirrored('semantic', { border: 'missing.6' });
 
 		expect(TokenSetSchema.safeParse(dangling).success).toBe(false);
 	});
 
 	it('rejects an alias pointing at a step outside the ramp', () => {
-		const offRamp = { ...validTokenSet, semantic: { border: 'brand.99' } };
+		const offRamp = withMirrored('semantic', { border: 'brand.99' });
 
 		expect(TokenSetSchema.safeParse(offRamp).success).toBe(false);
 	});
 
 	it('rejects an alias that is not in ramp.step form', () => {
-		const malformed = { ...validTokenSet, semantic: { border: '#0f172a' } };
+		const malformed = withMirrored('semantic', { border: '#0f172a' });
 
 		expect(TokenSetSchema.safeParse(malformed).success).toBe(false);
 	});
 
 	// A blank token set parsed clean and reached generation and export carrying nothing.
-	it.each(['primitives', 'semantic'])('rejects an empty %s layer', (key) => {
-		expect(TokenSetSchema.safeParse({ ...validTokenSet, [key]: {} }).success).toBe(false);
+	it.each(['primitives', 'semantic'] as const)('rejects an empty %s layer', (key) => {
+		expect(TokenSetSchema.safeParse(withMirrored(key, {})).success).toBe(false);
 	});
 
 	it('requires both schemes rather than deriving one from the other', () => {
@@ -105,7 +123,7 @@ describe('TokenSetSchema alias lookups', () => {
 	it.each(['constructor.1', 'toString.1', 'valueOf.1'])(
 		'rejects %j, which resolves only through the prototype chain',
 		(alias) => {
-			const result = TokenSetSchema.safeParse({ ...validTokenSet, semantic: { border: alias } });
+			const result = TokenSetSchema.safeParse(withMirrored('semantic', { border: alias }));
 
 			expect(result.success).toBe(false);
 		},
@@ -133,6 +151,14 @@ describe('TokenSetSchema non-colour categories', () => {
 	it.each(CATEGORIES)('requires %s rather than treating it as optional', (name) => {
 		const without: Record<string, unknown> = { ...validTokenSet };
 		delete without[name];
+
+		// `shadow` is mirrored, so dropping it at the root alone would be rejected for disagreeing
+		// with the light scheme rather than for being absent.
+		if (name === 'shadow') {
+			const lightWithout: Record<string, unknown> = { ...layer };
+			delete lightWithout.shadow;
+			without.schemes = { light: lightWithout, dark: layer };
+		}
 
 		expect(TokenSetSchema.safeParse(without).success).toBe(false);
 	});
@@ -194,10 +220,10 @@ describe('TokenSetSchema non-colour categories', () => {
 
 	it('rejects a shadow colour with no alpha, which is a shadow nobody can see through', () => {
 		const { alpha: _dropped, ...opaque } = shadow.values.md.color;
-		const broken = {
-			...validTokenSet,
-			shadow: { source: 'derived', values: { md: { ...shadow.values.md, color: opaque } } },
-		};
+		const broken = withMirrored('shadow', {
+			source: 'derived',
+			values: { md: { ...shadow.values.md, color: opaque } },
+		});
 
 		expect(TokenSetSchema.safeParse(broken).success).toBe(false);
 	});
@@ -205,8 +231,68 @@ describe('TokenSetSchema non-colour categories', () => {
 	it.each(CATEGORIES)('rejects an empty %s category', (name) => {
 		const declared = { ...nonColor, shadow } as Record<string, { source: string }>;
 		const emptied = { source: declared[name]!.source, values: {} };
+		const broken =
+			name === 'shadow' ? withMirrored('shadow', emptied) : { ...validTokenSet, [name]: emptied };
 
-		expect(TokenSetSchema.safeParse({ ...validTokenSet, [name]: emptied }).success).toBe(false);
+		expect(TokenSetSchema.safeParse(broken).success).toBe(false);
+	});
+});
+
+/**
+ * Every key a scheme carries appears twice in a stored set, once unprefixed and once under
+ * `schemes.light`. Two copies that may disagree are one copy and a rumour: an adapter reading
+ * `tokenSet.primitives` and one reading `tokenSet.schemes.light.primitives` would emit different
+ * light themes from the same file, and neither could be called wrong.
+ *
+ * #7 added `shadow` to a mirror that already held `primitives` and `semantic` unguarded, so the
+ * check covers the class rather than the field this branch introduced.
+ */
+describe('TokenSetSchema mirrored layers', () => {
+	const DIVERGENT: [string, unknown][] = [
+		['primitives', { brand: ramp, neutral: ramp.map((step) => ({ ...step, h: 120 })) }],
+		['semantic', { border: 'neutral.9', primary: 'brand.9', foreground: 'neutral.12' }],
+		[
+			'shadow',
+			{
+				...shadow,
+				values: { md: { ...shadow.values.md, blur: { value: 99, unit: 'px' } } },
+			},
+		],
+	];
+
+	it.each(DIVERGENT)('rejects a root %s that disagrees with the light scheme', (key, value) => {
+		const result = TokenSetSchema.safeParse({ ...validTokenSet, [key]: value });
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues.some((issue) => issue.path[0] === key)).toBe(true);
+	});
+
+	// Order is how a round trip through a formatter or a JSON tool perturbs a record, and it is not
+	// disagreement. Rejecting it would fail a set that holds exactly the same tokens.
+	it('accepts a root layer that differs from the light scheme only in key order', () => {
+		const reordered = {
+			...validTokenSet,
+			primitives: { neutral: ramp, brand: ramp },
+			semantic: { foreground: 'neutral.12', border: 'brand.6', primary: 'brand.9' },
+		};
+
+		expect(TokenSetSchema.safeParse(reordered).success).toBe(true);
+	});
+
+	// The dark scheme is not mirrored anywhere, so it is free to differ and has to stay that way.
+	it('leaves the dark scheme free to differ from the top level', () => {
+		const darker = {
+			...validTokenSet,
+			schemes: {
+				light: layer,
+				dark: {
+					...layer,
+					primitives: { brand: ramp.map((s) => ({ ...s, h: 40 })), neutral: ramp },
+				},
+			},
+		};
+
+		expect(TokenSetSchema.safeParse(darker).success).toBe(true);
 	});
 });
 

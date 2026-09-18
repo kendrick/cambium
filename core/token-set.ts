@@ -249,17 +249,77 @@ export const ColorSchemeSchema = z
 	.superRefine(checkAliasesResolve);
 
 /**
+ * Declared as a shape rather than written inline, so `checkMirroredLayers` can derive the mirrored
+ * key set from it. The top level repeats every key a scheme holds, and nothing else discovers when
+ * a fourth one is added.
+ */
+const SCHEME_SHAPE = {
+	primitives: PrimitiveLayerSchema,
+	semantic: SemanticLayerSchema,
+	shadow: ShadowScaleSchema,
+};
+
+/**
  * Shadow is the one non-colour category a scheme carries, because a shadow tuned for a white page
  * is invisible on a near-black one and the surface it tints resolves differently per scheme.
  * Everything else in the set holds still across the two.
  */
-export const SchemeSchema = z
-	.strictObject({
-		primitives: PrimitiveLayerSchema,
-		semantic: SemanticLayerSchema,
-		shadow: ShadowScaleSchema,
-	})
-	.superRefine(checkAliasesResolve);
+export const SchemeSchema = z.strictObject(SCHEME_SHAPE).superRefine(checkAliasesResolve);
+
+/**
+ * Equality over own enumerable keys, which is what these schemas parse to and all this has to
+ * compare. Insensitive to key order, because a round trip through a JSON tool reorders keys
+ * without changing a token.
+ *
+ * Not general-purpose structural equality: two objects with no own keys compare equal, so a pair of
+ * `Date`s would. Nothing here parses to one, and widening this to handle shapes the schemas cannot
+ * produce would be answering a question nobody asked.
+ */
+function sameValue(a: unknown, b: unknown): boolean {
+	if (a === b) return true;
+	if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+	if (Array.isArray(a) !== Array.isArray(b)) return false;
+
+	const left = a as Record<string, unknown>;
+	const right = b as Record<string, unknown>;
+	const keys = Object.keys(left);
+
+	if (keys.length !== Object.keys(right).length) return false;
+
+	return keys.every((key) => Object.hasOwn(right, key) && sameValue(left[key], right[key]));
+}
+
+/**
+ * The top level is the light scheme, so it has to hold what the light scheme holds.
+ *
+ * Every key a scheme carries appears twice in a stored set, once unprefixed and once under
+ * `schemes.light`, and each copy validated alone. Two copies that may disagree are one copy and a
+ * rumour: an adapter reading `tokenSet.primitives` and one reading `tokenSet.schemes.light
+ * .primitives` would emit different light themes from the same file, and neither could be called
+ * wrong. Round-tripping through any tool that rewrites one half is enough to separate them.
+ *
+ * Checked over the derived key set rather than a written list. #7 added `shadow` to a mirror that
+ * already held `primitives` and `semantic` unguarded, and guarding only the new one would leave a
+ * reader to infer from it that the other two were guarded too.
+ */
+function checkMirroredLayers(
+	value: Record<string, unknown> & { schemes: { light: Record<string, unknown> } },
+	ctx: z.RefinementCtx,
+) {
+	const light = value.schemes?.light;
+
+	if (!light) return;
+
+	for (const key of Object.keys(SCHEME_SHAPE)) {
+		if (sameValue(value[key], light[key])) continue;
+
+		ctx.addIssue({
+			code: 'custom',
+			path: [key],
+			message: `the unprefixed ${key} is the light scheme's, so it must equal schemes.light.${key}`,
+		});
+	}
+}
 
 /**
  * Strict rather than stripping, here and throughout the persisted shapes. Zod drops unknown
@@ -290,7 +350,8 @@ export const TokenSetSchema = z
 		focusRing: FocusRingSchema,
 		zIndex: ZIndexScaleSchema,
 	})
-	.superRefine(checkAliasesResolve);
+	.superRefine(checkAliasesResolve)
+	.superRefine(checkMirroredLayers);
 
 export type RampStep = z.infer<typeof RampStepSchema>;
 export type Ramp = z.infer<typeof RampSchema>;
