@@ -362,9 +362,10 @@ export async function prepareReferenceImage(
 	const landed = await decodeSize(codec, stored);
 
 	// The whole file, last of all. Every way this function can refuse a file has now been tried, and
-	// `decodeSize` closes each bitmap before it returns, so nothing else large is alive while these
-	// bytes are held. `originalHash` identifies the file the user actually picked, so it has to run
-	// over every one of them; this defers that read rather than avoiding it.
+	// `decodeSize` closes each bitmap before it returns, so no decoded surface is alive while these
+	// bytes are held. The encoded blob still is, on the branch that made one, and the base64 string
+	// below adds about a third again. `originalHash` identifies the file the user actually picked, so
+	// it has to run over every byte; this defers that read rather than avoiding it.
 	const original = new Uint8Array(await file.arrayBuffer());
 	const originalHash = `sha256:${await sha256Hex(original)}`;
 

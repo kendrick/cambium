@@ -41,12 +41,6 @@ type SavedRecord =
 	| { kind: 'unavailable' };
 
 /**
- * The shape every terminal outcome renders: something to read, and the one way back.
- *
- * Extracted at the fifth branch rather than the fourth, which is where the repetition stopped being
- * cheaper than the indirection.
- */
-/**
  * Whether a read failed because a row came back and would not parse.
  *
  * `RecordStore.get` awaits the row and then runs `BrandRecordSchema.parse` on it inside one
@@ -66,6 +60,12 @@ function isSchemaRejection(error: unknown): boolean {
 	return error instanceof Error && error.name === 'ZodError';
 }
 
+/**
+ * The shape every terminal outcome renders: something to read, and the one way back.
+ *
+ * Extracted at the fifth branch rather than the fourth, which is where the repetition stopped being
+ * cheaper than the indirection.
+ */
 function Outcome({ action, children }: { action: string; children: React.ReactNode }) {
 	return (
 		<div className="flex flex-col items-start gap-4">
@@ -100,9 +100,10 @@ export function LandingRoute() {
 		void (async () => {
 			let result: SavedRecord;
 
-			// Nested because the two failures license different sentences. The outer one is "could this
-			// browser be asked at all", where nothing was read and nothing may exist. The inner one is
-			// "did this record load", where storage answered and refused a row it holds.
+			// Nested because the failures license different sentences. The outer one is "could storage be
+			// reached at all", which covers both the chunk import and opening the database, and where
+			// nothing was read so nothing may exist. The inner one is "did this record load", where
+			// storage answered and a schema rejection proves it handed a row over.
 			//
 			// Both used to sit outside any handler. A browser that refuses IndexedDB left the effect
 			// rejecting and the screen on "Looking for that record…" indefinitely. That closes the
@@ -184,13 +185,15 @@ export function LandingRoute() {
 	if (saved.kind === 'unavailable') {
 		return (
 			<Outcome action="Start a new brand">
-				{/* Says nothing about whether the record exists, because nothing came back. This covers a
-				    database that would not open and a read that failed partway, and neither one proves
-				    anything is stored. */}
+				{/* Three failures land here and the copy has to fit all of them: a chunk that would not
+				    load, a database that would not open, and a read that failed partway on a database
+				    that opened fine. Only the middle one is "storage is unreachable", so the sentence
+				    claims the one thing true of all three, which is that the lookup did not finish. */}
 				<p className="text-sm">
-					Cambium could not reach its storage, so nothing could be looked up. Private browsing and
-					blocked site data are the usual causes.
+					Cambium could not look that record up, so this page cannot say whether it exists. Blocked
+					site data, private browsing, and a dropped connection are the usual causes.
 				</p>
+				<p className="text-muted-foreground text-sm">Reloading is worth a try.</p>
 			</Outcome>
 		);
 	}
