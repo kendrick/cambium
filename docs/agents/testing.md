@@ -8,6 +8,26 @@ Tests assert external behavior at a seam, never implementation details. A test s
 
 Assert that a given seed produces a token set whose `border` token resolves to primitive step 6 and passes AA against its surface. Do not assert which function computed it, in what order, or through which intermediate structure.
 
+## Where the seam actually is
+
+The section above says a test asserts behavior at a seam, without saying where the seam sits. Five P2 defects in one wave came from drawing it a layer too early.
+
+| Defect | What the test asserted | Who consumes the value |
+|---|---|---|
+| #70 quantization straddle | contrast between full-precision OKLCH values | the 8-bit pixel a browser paints |
+| #75 invisible shadow | OKLCH lightness interpolated linearly | a compositor blending per channel in sRGB |
+| #75 schema version | the shape validates today | v5 code opening a v4 archive |
+| #75 divergent mirror | each copy valid on its own | two adapters reading different copies |
+| #75 negative dimension | a number carrying a unit | a CSS parser rejecting a negative `border-radius` |
+
+Each value was correct in our representation and wrong the moment something else evaluated it. Every test ran inside the source language.
+
+Where a value crosses into something this repo does not control—a browser compositor, a CSS parser, an archive a later version opens, a second adapter—that crossing is the seam. The assertion protecting it belongs in the consumer's units. Assert the composited pixel, not the declared color. Assert the parsed archive, not the schema that produced it.
+
+The shadow defect is worth walking through. It shipped invisible four times, and every round passed ten specs written test-first, because all ten measured a quantity no browser paints. The first three rounds asserted the color the token file declares and said nothing about what lands on the page. The fourth did composite the shadow over its page, then mixed the two OKLCH lightnesses linearly while a browser composites per channel in sRGB. That gap reaches 88% on a dark page and always errs toward the flattering answer. Four rounds of fixes moved the numbers and left the pixels alone.
+
+The gates already running could not reach that class. The Spec axis of `code-review` compares a diff against its spec, and the spec speaks our language too, so "shadow tinted by the surface" passed with an invisible shadow. The Standards axis reads the source for documented violations and design smells, and never leaves the source to ask what a consumer makes of the output. Test-first only guarantees that the test came first, and says nothing about whose units it measures. An outside reviewer with no stake in our intentions found all five, after three internal passes had missed them. So the check also sits in `AGENTS.md`, which the Standards axis reads as a repo standards source. #76 has the full post-mortem.
+
 ## Seam 1: the pure core
 
 Pure TypeScript, no DOM, no network, no storage:
@@ -18,7 +38,7 @@ Pure TypeScript, no DOM, no network, no storage:
 
 That purity is itself asserted, not just intended: `core/purity.test.ts` parses each schema with no browser global in scope, so a stray DOM or storage reference fails a test rather than surfacing later in the headless CLI.
 
-This one seam covers everything that can be interestingly wrong: seed schema validation, the 12-step primitive ramp, semantic aliasing, independent light and dark derivation, OKLCH contrast repair, provenance, `$extensions`, interpretation presets, and all six export adapters. Fixture seeds and recorded raw responses drive it, both produced by the fixture generation script.
+This one seam covers everything that can be interestingly wrong: seed schema validation, the 12-step primitive ramp, semantic aliasing, independent light and dark derivation, OKLCH contrast repair, provenance, `$extensions`, interpretation presets, and all six export adapters. Hand-authored fixtures drive that seam: the `RawReaderResponse` envelopes under `core/fixtures/raw-responses/`, and the shared token-set halves in `core/token-set.fixture.ts`. No script writes either one. #18 adds the first fixture generator, so revisit this line when #18 lands.
 
 Coverage here should include, at minimum:
 
@@ -34,7 +54,7 @@ Two patterns are worth borrowing from unbranded-ds, the only prior art the issue
 
 ## Seam 2: RecordStore
 
-One shared contract suite over the four interface methods, run against the IndexedDB implementation under `fake-indexeddb` in Node. The whole point is that a future HTTP implementation runs that suite unchanged, so keep the suite implementation-blind.
+One shared contract suite over the four interface methods, in `app/storage/record-store-contract.ts`. Two implementations run it today: the in-memory store, and the IndexedDB store under `fake-indexeddb` in Node. A future HTTP implementation should run the same suite unchanged, so keep the suite implementation-blind.
 
 ## The browser tier
 
