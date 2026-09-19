@@ -79,6 +79,10 @@ describe('parseSeed', () => {
 		]);
 	});
 
+	// The fixture stamps `seed-v2` while `SEED_PROMPT_VERSION` is `seed-v3`, on purpose. A fixture
+	// agreeing with the constant would pass this assertion either way: whether `parseSeed` carried
+	// the value off the response, or read the constant directly. Only the first is the behaviour
+	// under test.
 	it('carries the provider, model, and prompt version of the response that failed', () => {
 		const result = parseSeed(proseNotJson);
 
