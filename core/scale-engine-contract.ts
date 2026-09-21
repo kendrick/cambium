@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { type BrandSeed, BrandSeedSchema, type OklchTriple } from './brand-seed';
-import { contrastFromOklch, hueDistance, isInP3, isInSrgb, oklchDistance } from './oklch';
+import { hueDistance, isInP3, isInSrgb, oklchDistance, renderedContrast } from './oklch';
 import {
 	ANCHOR_TOLERANCE,
 	BALANCED,
@@ -153,16 +153,21 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 	});
 
 	describe('the step-role target table', () => {
+		// Measured over the 8-bit pair a browser paints, on both ends, and nowhere over the
+		// full-precision OKLCH the engine solved in. Those two answers disagree by roughly fifty
+		// times what six-decimal rounding moves, and #72 is what that gap cost: five steps clearing
+		// their floor in our units and missing it in the consumer's. A full-precision assertion
+		// alongside this one would pin the producer's number as a requirement it is not.
 		it.each(SEEDS)('meets every declared WCAG floor against step 2 for %s', (_label, brand) => {
 			for (const { scheme, name, ramp } of eachRamp(generate(brand).schemes)) {
 				for (const role of STEP_ROLES) {
 					if (role.minWcagVsStep2 === null) continue;
 
-					const measured = contrastFromOklch(ramp[role.step - 1]!, ramp[1]!);
+					const measured = renderedContrast(ramp[role.step - 1]!, ramp[1]!);
 
 					expect(
 						measured,
-						`${scheme} ${name} step ${role.step} (${role.role}): ${measured.toFixed(3)}`,
+						`${scheme} ${name} step ${role.step} (${role.role}): ${measured.toFixed(3)} rendered`,
 					).toBeGreaterThanOrEqual(role.minWcagVsStep2);
 				}
 			}
