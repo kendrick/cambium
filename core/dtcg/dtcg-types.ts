@@ -5,8 +5,11 @@ import type { TokenExtensions } from '../token-set';
  * schema, and it is the only place this repo grades a document for conformance — a second,
  * hand-rolled check here would be exactly the "grading against a hand-written idea of the schema"
  * the plan warns off. What lives in this file is the shape a reader needs to *construct* one of
- * these documents in TypeScript, plus the data `serialize.ts` and the downstream export adapters
- * (#12, #13) read instead of each restating the family-to-`$type` mapping by hand.
+ * these documents in TypeScript, plus `DTCG_FAMILY_TYPES`: an independent second statement of
+ * which `$type` each family takes, kept separate from the literals `serialize.ts` writes at each
+ * construction site so `serialize.test.ts` can grade one against the other rather than a constant
+ * agreeing with itself. It is also the contract #12 and #13 read instead of each restating the
+ * family-to-`$type` mapping by hand.
  *
  * No DOM, network, or storage import, and no mutable module state: this module sits under
  * `core/`, which `docs/agents/testing.md` treats as the pure core, and `core/purity.test.ts`

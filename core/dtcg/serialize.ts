@@ -34,7 +34,14 @@ import {
 } from './dtcg-types';
 
 /**
- * The internal `TokenSet` written out as two DTCG 2025.10 documents, one per scheme.
+ * Two complete documents rather than a base and an override: light and dark are generated
+ * independently against the same step roles (`core/scale-engine.ts:21`), so neither one is a patch
+ * on the other, and a consumer may take either without reading the sibling first.
+ */
+export type DtcgDocumentPair = { light: DtcgDocument; dark: DtcgDocument };
+
+/**
+ * Writes the internal `TokenSet` out as two DTCG 2025.10 documents, one per scheme.
  *
  * Pure in the sense the acceptance criterion asks for: same token set in, same bytes out. Nothing
  * here reads the DOM, the network, storage, or module state, and the input comes back untouched,
@@ -58,8 +65,6 @@ import {
  * is the spec's trade rather than a gap here, and `toSrgbHex` records the matching argument for
  * why the hex is the byte pair the contrast gate measured rather than a second rounding of it.
  */
-export type DtcgDocumentPair = { light: DtcgDocument; dark: DtcgDocument };
-
 export function serializeDtcg(tokenSet: TokenSet): DtcgDocumentPair {
 	// `TokenSet` is Zod's output type, so the compiler accepting an argument here does not mean the
 	// schema would. `buildTokenSet` never parses and `scripts/generate.mjs` hands its result

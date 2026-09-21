@@ -155,12 +155,44 @@ function groupAt(doc: Doc, path: readonly string[]): Node {
 }
 
 /**
- * Rejects a name this deserializer would otherwise walk past.
+ * Whether a key is DTCG metadata about the node it sits on rather than a group or a token inside
+ * it. Every walk over a node's entries skips these.
+ *
+ * The prefix decides it, because DTCG reserves `$` for itself: `tokenOrGroupName` is
+ * `^[^${}.][^{}.]*$` (`core/dtcg/format.2025.10.json:61`), so a name beginning with `$` can never
+ * be a group or a token. That is checked by prefix rather than against the names the schema lists
+ * (`$schema`, `$type`, `$description`, `$extensions`, `$extends`, `$deprecated` and `$root` at the
+ * root; all but `$schema` on a group) for two reasons. The schema closes that set itself with
+ * `additionalProperties: false`, so a `$` name outside the list is already invalid and
+ * `validateDtcg` is the thing that says so; copying the list here would put a second grader on a
+ * rule the schema owns. And the list is the schema's to grow, so a hard-coded copy would refuse a
+ * document that a refreshed `format.2025.10.json` accepts, which is the same failure as refusing
+ * `$schema` today, one release later.
+ *
+ * What this costs is honest and small: metadata has nowhere to live on a `TokenSet`, so a root
+ * `$description` an editor stamped is read past and does not come back on re-serialization. A
+ * document Cambium wrote carries none of these keys, so its own round trip is exact.
+ *
+ * `$type` is the one reserved name that also does work elsewhere: `groupAt` uses it to tell a token
+ * from a group, the same structural test `serialize.test.ts` makes. A group carrying a `$type` for
+ * inheritance is therefore still read as a token, which the plan's decision 5 rules out emitting
+ * and which this function does not change either way.
+ */
+function isReservedName(name: string): boolean {
+	return name.startsWith('$');
+}
+
+/**
+ * Rejects a group name this deserializer would otherwise walk past.
  *
  * Only applied where the shape is fixed—the root and the four groups with named children—since
  * everywhere else the entries are iterated and nothing can be missed. A group left unread reads
  * back as a token set that never held it, and no later comparison can tell that apart from a token
  * set that really did not.
+ *
+ * Reserved names are exempt, and the message below says why they have to be: a `$schema` pointer an
+ * editor stamped on the root carries no tokens at all, so refusing it would be both wrong about the
+ * document and wrong in its reason.
  */
 function requireOnly(
 	group: Node,
@@ -168,7 +200,9 @@ function requireOnly(
 	doc: Doc,
 	path: readonly string[],
 ): void {
-	const unmodelled = Object.keys(group).filter((name) => !expected.includes(name));
+	const unmodelled = Object.keys(group).filter(
+		(name) => !isReservedName(name) && !expected.includes(name),
+	);
 
 	if (unmodelled.length > 0) {
 		throw new Error(
@@ -193,6 +227,7 @@ function valueOf(token: Node, doc: Doc, path: readonly string[]): unknown {
 	return childOf(token, '$value', doc, [...path, '$value']);
 }
 
+/** Every child of a group that is a group or a token, which is every key `isReservedName` clears. */
 function mapGroup<T>(
 	group: Node,
 	doc: Doc,
@@ -200,7 +235,9 @@ function mapGroup<T>(
 	read: (node: unknown, tokenPath: string[]) => T,
 ): Record<string, T> {
 	return Object.fromEntries(
-		Object.entries(group).map(([name, node]) => [name, read(node, [...path, name])]),
+		Object.entries(group)
+			.filter(([name]) => !isReservedName(name))
+			.map(([name, node]) => [name, read(node, [...path, name])]),
 	);
 }
 
@@ -446,9 +483,9 @@ function focusRingOf(doc: Doc) {
 
 	requireOnly(groupAt(doc, path), ['width', 'offset'], doc, path);
 
-	const both = dimensionScale(doc, path);
+	const dimensions = dimensionScale(doc, path);
 
-	return { width: both.width, offset: both.offset };
+	return { width: dimensions.width, offset: dimensions.offset };
 }
 
 /**
@@ -484,16 +521,18 @@ function rampOf(node: unknown, doc: Doc, path: readonly string[]) {
 		throw new Error(`${label(doc, path)} is a token where a ramp of twelve steps was expected`);
 	}
 
-	const steps = Object.entries(group).map(([name, stepNode]) => {
-		const stepPath = [...path, name];
-		const step = Number(name);
+	const steps = Object.entries(group)
+		.filter(([name]) => !isReservedName(name))
+		.map(([name, stepNode]) => {
+			const stepPath = [...path, name];
+			const step = Number(name);
 
-		if (!Number.isInteger(step)) {
-			throw new Error(`${label(doc, stepPath)} is not named for a ramp step number`);
-		}
+			if (!Number.isInteger(step)) {
+				throw new Error(`${label(doc, stepPath)} is not named for a ramp step number`);
+			}
 
-		return rampStepOf(stepNode, step, doc, stepPath);
-	});
+			return rampStepOf(stepNode, step, doc, stepPath);
+		});
 
 	// `map` already returned a fresh array, so this sort mutates nothing the caller can see.
 	// `toSorted` would say it directly and is ES2023 against an ES2022 target.
@@ -629,6 +668,20 @@ function checkDocumentsAgree(light: Doc, dark: Doc): void {
  * A path rather than a boolean because the consumer is a person with two files open, and "the
  * typography groups differ" sends them to read a hundred tokens. Key order is ignored, since a
  * round trip through any JSON tool reorders keys without changing a token.
+ *
+ * A group's reserved names are skipped, the same way the walks skip them, because this comparison
+ * exists to protect a value the token set holds once and group metadata is held no times at all.
+ * Two documents that differ only in a `$description` disagree about no token, and reporting that as
+ * "differs ... and the token set holds it once" would name a thing the token set does not hold. So
+ * a one-sided `$description` is read past, exactly like a two-sided one. It cannot be preserved
+ * instead: a `TokenSet` has nowhere to put a group's metadata, so there is no copy to keep and
+ * nothing is lost by not comparing it.
+ *
+ * A token's own keys are a different matter and stay compared, `$extensions` above all. On a token
+ * in one of these families the `com.cambium` payload is data the token set keeps, in a slot it
+ * keeps once, so two documents claiming different provenance for one token is a real disagreement
+ * with no honest answer. `$value` and `$type` are the same. That is what `holdsTokens` below
+ * separates: reserved names are skipped only where a group is being compared.
  */
 function firstDifference(
 	light: unknown,
@@ -645,8 +698,11 @@ function firstDifference(
 
 	const left = light as Node;
 	const right = dark as Node;
+	const comparingGroup = holdsTokens(left) && holdsTokens(right);
 
 	for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+		if (comparingGroup && isReservedName(key)) continue;
+
 		if (!Object.hasOwn(left, key) || !Object.hasOwn(right, key)) return [...path, key].join('.');
 
 		const difference = firstDifference(left[key], right[key], [...path, key]);
@@ -655,4 +711,14 @@ function firstDifference(
 	}
 
 	return undefined;
+}
+
+/**
+ * Whether a node holds tokens rather than being one, by the same `$type` test `groupAt` makes. Both
+ * sides have to clear it before reserved names are skipped: a `$type` on one document and not the
+ * other means one is a token where the other is a group, which is a disagreement worth reporting
+ * rather than a difference worth skipping.
+ */
+function holdsTokens(node: Node): boolean {
+	return !('$type' in node);
 }

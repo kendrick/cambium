@@ -12,6 +12,7 @@ import { deserializeDtcg } from './deserialize';
 import { CAMBIUM_DTCG_NAMESPACE } from './dtcg-types';
 import { SPEC_DARK_DOCUMENT, SPEC_LIGHT_DOCUMENT, SPEC_TOKEN_SET } from './dtcg.fixture';
 import { serializeDtcg } from './serialize';
+import { validateDtcg } from './validate';
 
 /**
  * The round trip has one ruler that cannot cheat and one that can.
@@ -39,6 +40,43 @@ const generated = createOklchScaleEngine().generate(seed, BALANCED);
 if (!generated.ok) throw new Error(`the seed fixture no longer generates: ${generated.error.kind}`);
 
 const seedTokenSet = buildTokenSet(generated.schemes, seed);
+
+/**
+ * A readable failure rather than `expect(result).toEqual({ valid: true })`, which prints a
+ * quarter-screen of Ajv diagnostics with the pointers buried. Copied from `serialize.test.ts`,
+ * where the same reasoning is written out.
+ */
+function violationLines(document: unknown): string[] {
+	const result = validateDtcg(document);
+
+	if (result.valid) return [];
+
+	return result.violations.map(
+		(violation) =>
+			`${violation.pointer === '' ? '(root)' : violation.pointer}: ${violation.message}`,
+	);
+}
+
+/**
+ * A legal value for each reserved key these tests stamp, so the doctored document stays
+ * schema-valid and `violationLines` can prove it. `$schema` wants a URI reference, `$description`
+ * plain text, and `$extensions` an object.
+ */
+const RESERVED_VALUES: Record<string, unknown> = {
+	$schema: 'https://www.designtokens.org/schemas/2025.10/format.json',
+	$description: 'a note left by whatever last opened the file',
+	$extensions: { 'com.example': { note: 'a tool that walked the document' } },
+};
+
+/** Writes one reserved DTCG key onto the group at `path`. */
+function stamp(document: unknown, path: readonly string[], key: string): void {
+	const group = path.reduce<Record<string, unknown>>(
+		(node, segment) => node[segment] as Record<string, unknown>,
+		document as Record<string, unknown>,
+	);
+
+	group[key] = RESERVED_VALUES[key];
+}
 
 /**
  * Every `$extensions` namespace anywhere in a value, so a leaked transport namespace is found
@@ -184,6 +222,100 @@ describe('deserializeDtcg', () => {
 
 		expect(() => deserializeDtcg(light, SPEC_DARK_DOCUMENT)).toThrow(/border/);
 	});
+
+	/**
+	 * The refusal above is right about an unmodelled token group and wrong about a `$` name, which is
+	 * the distinction the cases below pin. DTCG reserves the `$` prefix, so `$schema` and
+	 * `$description` can never be a family this deserializer failed to model, and a document Cambium
+	 * wrote can pick one up from any editor that stamps a schema pointer on save.
+	 *
+	 * Each case asserts through `validateDtcg` that the doctored document is still schema-valid
+	 * before reading it. Without that the test could pass by exercising a document the schema would
+	 * have rejected anyway, which would prove nothing about conforming input.
+	 *
+	 * The metadata itself is read past rather than carried: a `TokenSet` has nowhere to put it. So
+	 * the assertion is that the token set is the one the undoctored pair denotes, which is what the
+	 * round trip of a real Cambium document needs and all the internal model can represent.
+	 *
+	 * Every placement runs three times, and the one-sided runs are the ones that bite. Stamping both
+	 * documents leaves the two nodes equal, so the light-versus-dark comparison never sees the key
+	 * and a symmetric case alone cannot tell a comparison that skips reserved names from one that
+	 * compares them. Only the one-sided runs reach that code, which is why they are here.
+	 */
+	const metadataPlacements: { where: string; group: readonly string[]; key: string }[] = [
+		{ where: 'the root', group: [], key: '$schema' },
+		{ where: 'the root', group: [], key: '$description' },
+		{ where: 'the radius group', group: ['radius'], key: '$description' },
+		{ where: 'a primitive ramp', group: ['color', 'primitive', 'brand'], key: '$description' },
+		{ where: 'the radius group', group: ['radius'], key: '$extensions' },
+	];
+
+	const sides: { name: string; light: boolean; dark: boolean }[] = [
+		{ name: 'both documents', light: true, dark: true },
+		{ name: 'the light document alone', light: true, dark: false },
+		{ name: 'the dark document alone', light: false, dark: true },
+	];
+
+	for (const { where, group, key } of metadataPlacements) {
+		for (const side of sides) {
+			it(`reads past ${key} on ${where}, stamped on ${side.name}`, () => {
+				const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+				const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+				if (side.light) stamp(light, group, key);
+				if (side.dark) stamp(dark, group, key);
+
+				expect(violationLines(light)).toEqual([]);
+				expect(violationLines(dark)).toEqual([]);
+
+				expect(deserializeDtcg(light, dark)).toEqual(
+					deserializeDtcg(SPEC_LIGHT_DOCUMENT, SPEC_DARK_DOCUMENT),
+				);
+			});
+		}
+	}
+
+	/**
+	 * The other half of the same rule, and the half that must not move. `$extensions` is a reserved
+	 * name, but on a token it is data the token set keeps, in a slot it keeps once. Two documents
+	 * claiming different provenance for one token is a real disagreement with no honest answer, and
+	 * skipping reserved names there would read one document's payload and discard the other's without
+	 * a word.
+	 *
+	 * The placement above puts `$extensions` on the `radius` group, where the token set has no slot
+	 * and it is read past. These put it on the `radius.md` token, where it has one. Same key, and the
+	 * answers differ because the node under it does.
+	 */
+	const tokenDisagreements: {
+		what: string;
+		spoil: (document: typeof SPEC_LIGHT_DOCUMENT) => void;
+	}[] = [
+		{
+			what: 'a foreign namespace on one document only',
+			spoil: (document) => {
+				(document.radius.md.$extensions as Record<string, unknown>)['com.example'] = {
+					note: 'a',
+				};
+			},
+		},
+		{
+			what: 'two provenance rationales for one token',
+			spoil: (document) => {
+				document.radius.md.$extensions['com.cambium'].rationale = 'a different reason';
+			},
+		},
+	];
+
+	for (const { what, spoil } of tokenDisagreements) {
+		it(`still refuses ${what}, because a token's $extensions is kept once`, () => {
+			const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+
+			spoil(light);
+
+			expect(violationLines(light)).toEqual([]);
+			expect(() => deserializeDtcg(light, SPEC_DARK_DOCUMENT)).toThrow(/radius\.md\.\$extensions/);
+		});
+	}
 
 	it('is deterministic: the same documents read back to the same bytes', () => {
 		const first = JSON.stringify(deserializeDtcg(SPEC_LIGHT_DOCUMENT, SPEC_DARK_DOCUMENT));

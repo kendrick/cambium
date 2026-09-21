@@ -50,7 +50,16 @@ const BRANCH_SHAPE_MESSAGE =
 const BRANCH_TYPE_MESSAGE =
 	/^must be (?:string|number|integer|boolean|object|array|null|equal to constant)$/;
 
-function specificity(message: string): number {
+/**
+ * How far a message sits from the value it is about. Zero is a complaint against the value itself,
+ * such as a bound or a pattern; two is a complaint about the shape of the attempt that never
+ * reaches the value at all.
+ *
+ * The scale runs this way round so that sorting ascending puts the most useful message first, and
+ * the name says which end is which because the number alone reads backwards to anyone expecting a
+ * score.
+ */
+function vagueness(message: string): number {
 	if (BRANCH_SHAPE_MESSAGE.test(message)) return 2;
 	if (BRANCH_TYPE_MESSAGE.test(message)) return 1;
 
@@ -108,6 +117,11 @@ function isAncestorOrSelf(ancestor: readonly string[], descendant: readonly stri
  * lives. A guess made beside the raw list can be wrong without costing anything, because the raw
  * list is still there.
  *
+ * No caller consumes this yet. #11's note asked for the collapsing rule to be decided against a
+ * real interface, and the validation UI that would be it is #23 and #24. The rule landed ahead of
+ * its consumer so the serializer's failures have something to read; whether `alternatives` earns
+ * its place is the first real caller's to say.
+ *
  * The rule is deepest-wins along a chain. Diagnostics are anchored (see `anchorOf`), the distinct
  * anchors that no other anchor extends become the rows, and every diagnostic is counted against
  * the deepest row it is an ancestor of. One bad OKLCH hue anchors entirely on the chain
@@ -158,8 +172,8 @@ export function summarizeViolations(violations: readonly DtcgViolation[]): DtcgV
 
 	return rows.map(({ anchor, members }) => {
 		// Decorated with the input index rather than leaning on sort stability, so the output is the
-		// same list on every engine. Determinism is an acceptance criterion here, not a nicety.
-		const ranked = members
+		// same list on every engine. Determinism is one of #11's acceptance criteria.
+		const leastVagueFirst = members
 			.filter((member) => member.anchor.length === anchor.length)
 			.map((member, index) => ({
 				message: member.violation.message,
@@ -170,11 +184,12 @@ export function summarizeViolations(violations: readonly DtcgViolation[]): DtcgV
 			// `toSorted` would satisfy the rule directly, but it is ES2023 and tsconfig targets ES2022,
 			// the same trade core/family-variants.ts makes.
 			// oxlint-disable-next-line unicorn/no-array-sort
-			.sort((a, b) => specificity(a.message) - specificity(b.message) || a.index - b.index);
+			.sort((a, b) => vagueness(a.message) - vagueness(b.message) || a.index - b.index);
 
-		// A row is built from an anchor some diagnostic reported, so `ranked` always has a first
-		// element. The fallbacks below are what TypeScript charges for an invariant it cannot see.
-		const [best, ...rest] = ranked;
+		// A row is built from an anchor some diagnostic reported, so `leastVagueFirst` always has a
+		// first element. The fallbacks below are what TypeScript charges for an invariant it cannot
+		// see.
+		const [best, ...rest] = leastVagueFirst;
 		const alternatives = new Set(rest.map(({ message }) => message));
 
 		// A branch rejected twice says nothing the second time, and `collapsed` already carries the
