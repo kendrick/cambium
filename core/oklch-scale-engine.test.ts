@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { BrandSeedSchema } from './brand-seed';
-import { hueDistance, isInSrgb, renderedContrast } from './oklch';
+import { hueDistance, isInSrgb } from './oklch';
 import { CAMBIUM_NAMESPACE } from './provenance';
 import { type Ramp, RampSchema, type RampStep } from './token-set';
 import {
@@ -11,7 +11,7 @@ import {
 } from './oklch-scale-engine';
 import { BALANCED, RAMP_NAMES, type RampName, SCHEME_NAMES } from './scale-engine';
 import { STEP_ROLES } from './step-roles';
-import { testScaleEngineContract } from './scale-engine-contract';
+import { paintedContrast, testScaleEngineContract } from './scale-engine-contract';
 
 describe('createOklchScaleEngine', () => {
 	testScaleEngineContract(() => createOklchScaleEngine());
@@ -103,7 +103,7 @@ describe('createOklchScaleEngine specifics', () => {
 		if (!green.ok) return;
 
 		const ramp = green.schemes.light.brand;
-		const measured = renderedContrast(ramp[10]!, ramp[1]!);
+		const measured = paintedContrast(ramp[10]!, ramp[1]!);
 
 		// Only the floor is asserted. Pinning how close the solver lands would fail a legitimate
 		// retune of the curve, which is the kind of test `docs/agents/testing.md` warns against.
@@ -230,7 +230,7 @@ describe('createOklchScaleEngine across the hue circle', () => {
 					return STEP_ROLES.filter((role) => role.minWcagVsStep2 !== null)
 						.map((role) => ({
 							role,
-							measured: renderedContrast(ramp[role.step - 1]!, ramp[1]!),
+							measured: paintedContrast(ramp[role.step - 1]!, ramp[1]!),
 						}))
 						.filter(({ role, measured }) => measured < role.minWcagVsStep2!)
 						.map(

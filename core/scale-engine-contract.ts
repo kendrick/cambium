@@ -40,7 +40,10 @@ const toSrgb = converter('rgb');
 function linearChannel(raw: number | undefined): number {
 	const byte = Math.round(Math.max(0, Math.min(1, raw ?? 0)) * 255) / 255;
 
-	return byte <= 0.03928 ? byte / 12.92 : ((byte + 0.055) / 1.055) ** 2.4;
+	// 0.04045 is what WCAG 2.2 states. An older 0.03928 still circulates from an earlier draft of
+	// the same curve, and no 8-bit channel lands between the two, so both pick the same branch for
+	// every value this function ever sees. Matching the spec is what keeps this a transcription.
+	return byte <= 0.04045 ? byte / 12.92 : ((byte + 0.055) / 1.055) ** 2.4;
 }
 
 function relativeLuminance(color: Oklch): number {
@@ -51,8 +54,13 @@ function relativeLuminance(color: Oklch): number {
 	);
 }
 
-/** WCAG contrast between two colours once both are rounded to 8-bit sRGB. */
-function paintedContrast(color: Oklch, background: Oklch): number {
+/**
+ * WCAG contrast between two colours once both are rounded to 8-bit sRGB.
+ *
+ * Exported for the engine-specific sweeps in `core/oklch-scale-engine.test.ts`, which grade the
+ * same floors over hues this contract does not reach and owe their readers the same independence.
+ */
+export function paintedContrast(color: Oklch, background: Oklch): number {
 	const one = relativeLuminance(color);
 	const other = relativeLuminance(background);
 
