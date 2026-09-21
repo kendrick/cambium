@@ -90,7 +90,8 @@ const TIDY = `// ${NOTE}\nconst x = { a: 1, b: 2 };\nexport { x };\n`;
 
 // The shape of a canary filename, and the only shape the sweep will touch. Nobody names a file this
 // way by hand, which is the point: content alone is too loose a test, and a sweep that trusted it
-// deleted a copy of this very suite that a mutation run was using as its control.
+// deleted a copy of this very suite that a mutation run was using as its control. The same
+// predictability is escape 1 in the list further down, and the two cannot both be fixed.
 //
 // Digits belong in the extension class. Without them this read `[a-z]+`, which matches `.jsonc` and
 // not `.json5`, so every `.json5` stray was invisible to the sweep at any age and survived every
@@ -316,30 +317,43 @@ describe('pnpm format', () => {
 	// output, so a tree-wide write across a clean tree changes no bytes and moves no timestamps.
 	// There is nothing left to measure. Only a file that is wrong on purpose has to change.
 	//
-	// That bounds the problem, because a write can dodge such a file on exactly three axes, and every
-	// one of them cost this guard a round of review:
+	// So this guard samples. It catches evasions that have been demonstrated against it, one at a
+	// time, and it says nothing about the ones nobody has thought of yet. What it does catch, each
+	// one failing in the mutation matrix:
 	//
-	//   where it lands      one canary in every directory oxfmt walks, at every depth
-	//   what it opens       one canary for every extension oxfmt rewrites, in each of those
-	//   how it enumerates   every canary goes into the index, so `git ls-files` reports it
+	//   a tree-wide write, with or without its summary sent to /dev/null
+	//   a write that enumerates source directories, and one scoped to a nested path at any depth
+	//   a write that excludes an extension
+	//   a write enumerated from `git ls-files` rather than from a tree walk
 	//
-	// Close all three and a write that could cost a peer an edit has to hit one, because the file a
-	// peer is halfway through is unformatted, and every file oxfmt would rewrite now shares a
-	// directory, an extension and an index entry with a canary. What is left over is writes that
-	// change no bytes, and those can lose nobody's work.
+	// And one verified directly rather than through the matrix: a walk pruned by a personal
+	// `core.excludesFile`, which git reads and oxfmt does not.
 	//
-	// Two residues, named rather than papered over.
+	// Four escapes are known. They are written down so the next reader inherits them instead of
+	// finding them the hard way:
 	//
-	// A write enumerating the committed tree, say `git ls-tree -r HEAD`, sees no canary, because no
-	// canary is ever committed. Closing that means leaving a committed file mis-formatted for the
-	// length of this test, and the obvious way to do it is not safe here: Vitest runs test files in
-	// parallel, so a source file broken for a second breaks whatever imports it. Measured rather
-	// than assumed, by holding `core/provenance.ts` wrong for 1.2s during a full run: 18 of the 43
-	// files in the unit project failed, three times out of three.
+	//   1. A glob that excludes the canary name shape. The names are random, the shape is not, so
+	//      `oxfmt --write . '!**/????????????.*'` rewrites the tree and passes every test here.
+	//   2. An enumeration that cannot see an intent-to-add entry. `git diff --cached --name-only` and
+	//      `git ls-tree -r HEAD` both report nothing for a canary. Mis-formatting a committed file
+	//      would cover both, and it is not safe here, because Vitest runs test files in parallel.
+	//      Holding `core/provenance.ts` wrong for 1.2s failed 18 of the 43 files in the unit project,
+	//      three times out of three.
+	//   3. `.git/info/exclude`. `ignoredDirectories` switches `core.excludesFile` off, and git offers
+	//      no equivalent switch for this one, so its ignore model can still diverge from oxfmt's and
+	//      prune a directory the formatter walks.
+	//   4. `sweepStrays` reads absence from HEAD as permission to delete, so it removes a staged but
+	//      uncommitted file that matches the canary shape, carries the marker, and is old enough.
 	//
-	// An extension a future oxfmt learns to rewrite arrives with no fixture. The coverage test below
-	// catches that the moment such a file is tracked here, which is the moment it can cost anyone
-	// anything, but the window before that is real.
+	// The list is open, and a fifth axis would not close it. A canary has to be tellable from a real
+	// file to work at all, which is exactly what a selector needs in order to skip one. More canaries
+	// do not change that. They move the selector.
+	//
+	// Living with that is defensible for one reason. oxfmt skips a file that already matches its
+	// output, so the writes this guard cannot see are writes that change no bytes, and a write that
+	// changes no bytes cannot cost a peer an edit. The escapes above are real because a peer's
+	// in-flight file is unformatted and therefore changeable. They are also narrow, and that is the
+	// whole of what this guard buys.
 	it(
 		'writes only the file it was handed',
 		async () => {
