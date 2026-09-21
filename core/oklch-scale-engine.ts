@@ -6,6 +6,7 @@ import {
 	type Oklch,
 	oklchDistance,
 	quantizeToSrgb,
+	renderedContrast,
 	solveLightnessForContrast,
 } from './oklch';
 import { derived, invented, observed, type SeedField } from './provenance';
@@ -126,10 +127,51 @@ const DIRECTION = { light: -1, dark: 1 } as const;
  * solve was aiming at. One pass of each lands just under the floor for a saturated hue. Alternating
  * them converges in two or three rounds because every mapping step only ever reduces chroma.
  *
- * The margin absorbs quantization. Rounding to six decimal places moves contrast in the last
- * decimal, and a step solved to exactly the floor can round back under it.
+ * The margin absorbs six-decimal rounding, and that is the whole of what it is for. A step solved
+ * to exactly the floor can round back under it in the last decimal, and 0.0005 covers that. It does
+ * not cover the byte grid. A colour reaches a screen as three 8-bit channels, and rounding into
+ * those moves contrast by roughly fifty times as much. #72 found five ramp steps clearing the floor
+ * in OKLCH and missing it as bytes, the worst by 0.0131, which is 5.8 margins.
+ *
+ * `meetRenderedFloor` below is what covers it. That function solves, quantizes, measures the pair a
+ * browser would paint, and raises the exact-space target until the bytes clear. Two alternatives
+ * keep getting re-proposed and #72 rejected both.
+ *
+ * Widening the margin was the first. It is the mistake already made once: 1.0005 was sized against
+ * six-decimal rounding and then trusted against a quantizer nobody had measured it for, and picking
+ * a bigger number from a bigger sample repeats the move. A margin sized from a sample cannot make
+ * the rule true, only unlikely to be false, so it leaves no invariant to write down. It also moves
+ * all 448 floor-carrying steps to fix 5.
+ *
+ * Leaving each export adapter to re-verify was the second. An adapter that catches the miss has no
+ * move: changing the colour diverges from the token set it was handed, so it either ships the
+ * violation or rejects a set the engine called valid. The obligation would also have to be
+ * re-derived in every adapter, and silently skipped by any one of them.
+ *
+ * This is not #8. That one checks declared semantic pairs and emits a repair report rather than a
+ * mutation; the steps failing here are primitive ramp steps, which its scope never reaches. #8
+ * measures at full precision too, so solving it here is what makes #8's input honest.
+ *
+ * What the cushion still protects is `meetFloor`'s own guarantee, stated in exact space, and no
+ * caller currently leans on it: `meetRenderedFloor` rounds to six decimals before it measures a
+ * byte, so its check already contains whatever the cushion catches. #72's mutation run measured
+ * exactly that — set this to 1 and the whole suite stays green. Removing it would be tuning against
+ * a passing suite, so it stays, but nobody should read it as load-bearing.
  */
 const FLOOR_MARGIN = 1.0005;
+
+/**
+ * How far `meetRenderedFloor` raises its target on a first miss, before the doubling takes over.
+ *
+ * The same number as `FLOOR_MARGIN` and deliberately not the same constant. One cushions
+ * six-decimal rounding inside a single solve, the other seeds a ladder across the byte grid, and
+ * wiring them together means setting the cushion to 1 flattens the ladder and takes 128 tests with
+ * it.
+ *
+ * Small on purpose. Most misses clear on the first escalation, and a larger opening step would walk
+ * every one of them further from where the curve put them than it has to go.
+ */
+const RENDERED_LADDER_STEP = 1.0005;
 
 function meetFloor(
 	color: Oklch,
@@ -152,6 +194,69 @@ function meetFloor(
 	}
 
 	return contrastFromOklch(candidate, background) >= floor ? candidate : null;
+}
+
+/** The form every step is stored and serialized in, which is what a floor has to hold for. */
+function toStoredPrecision(color: Oklch): Oklch {
+	return quantizeToSrgb(color);
+}
+
+/**
+ * A step that clears its floor against step 2 once both are 8-bit sRGB, which is the only place the
+ * floor means anything. Returns the stored six-decimal colour rather than the exact-space solve,
+ * because the stored value is the one that gets serialized and so the one the floor has to hold for.
+ *
+ * Same shape as `meetFloor` one layer out. `meetFloor` converges a solve against gamut mapping.
+ * This function converges the same solve against the byte grid, by raising the exact-space floor
+ * and re-solving until the stored pair clears as bytes.
+ *
+ * Each round escalates off the contrast the last solve actually reached, never off the floor it was
+ * asked for. Those two differ whenever the curve already placed the step clear of its floor, which
+ * is the common case. Ask again for a number the colour already beats and the solve hands back the
+ * same colour, so the loop stands still while `required` climbs behind it. Escalating off the
+ * achieved figure is what makes each round move the colour.
+ *
+ * The overshoot doubles each round, because contrast over the byte grid is a step function and the
+ * plateaus are not one size. Most misses clear on the first escalation, on a lightness move of
+ * 0.0002, which is where light/success 11 goes from 4.4997 to 4.5533. A cyan brand at hue 180 sits
+ * on a plateau nine times wider, and a fixed step fine enough to keep the first case tight crawls
+ * across the second. Doubling holds the common case to the smallest move that works and still
+ * reaches the far plateaus in a handful of rounds.
+ *
+ * Eight rounds is the budget, which is a backstop rather than a number real input reaches. The
+ * ladder was swept across 360 hues, nine anchors including pure black and pure white, both schemes
+ * and all eight floor-carrying steps: 51,840 cases, every one solved, none past 5 rounds, worst
+ * lightness shift 0.005. That sweep is too slow for every commit, so
+ * `core/oklch-scale-engine.test.ts` runs a coarser one that fails the same way if this stops
+ * converging.
+ *
+ * Exhausting the ladder returns null, which surfaces as `unreachable-floor` and a readable refusal
+ * in `scripts/lib/cli.mjs`. Nothing in the sweep reached it, and shipping a byte under a floor the
+ * token set declares is worse than refusing the seed.
+ */
+function meetRenderedFloor(
+	color: Oklch,
+	background: Oklch,
+	floor: number,
+	direction: -1 | 1,
+): Oklch | null {
+	let required = floor;
+	let overshoot = RENDERED_LADDER_STEP;
+
+	for (let attempt = 0; attempt < 8; attempt += 1) {
+		const solved = meetFloor(color, background, required, direction);
+
+		if (!solved) return null;
+
+		const stored = toStoredPrecision(solved);
+
+		if (renderedContrast(stored, background) >= floor) return stored;
+
+		required = Math.max(required, contrastFromOklch(stored, background)) * overshoot;
+		overshoot = 1 + (overshoot - 1) * 2;
+	}
+
+	return null;
 }
 
 /**
@@ -207,7 +312,10 @@ function inventedRamp(ramp: RampName, reason: string): StepProvenance {
  * step 2 where blue lands at 4.53. Radix absorbed that by hand-tuning thirty-one scales. Solving
  * for the target is how one curve covers every hue instead.
  *
- * Quantizing last keeps the rounding out of the arithmetic that fed it.
+ * Quantizing last keeps the rounding out of the arithmetic that fed it, which on its own leaves
+ * nothing downstream checking what the rounding did. So step 2 is quantized once up front and every
+ * floor is settled against that stored pair, and the value the solve aims at is the value a browser
+ * paints.
  */
 function buildRamp(
 	anchor: Oklch,
@@ -230,21 +338,25 @@ function buildRamp(
 		return fitToSrgbGamut({ l: lightness[index]!, c: chroma, h: anchor.h });
 	});
 
-	const background = placed[1]!;
+	const background = toStoredPrecision(placed[1]!);
 	const steps: RampStep[] = [];
 
 	for (const [index, color] of placed.entries()) {
 		const role = STEP_ROLES[index]!;
 		const solved =
 			role.minWcagVsStep2 === null
-				? color
-				: meetFloor(color, background, role.minWcagVsStep2, direction);
+				? toStoredPrecision(color)
+				: meetRenderedFloor(color, background, role.minWcagVsStep2, direction);
 
 		if (!solved) return { ok: false, step: role.step };
 
-		const { l, c, h } = quantizeToSrgb({ ...solved, h: normalizeHue(solved.h) });
-
-		steps.push({ step: role.step, l, c, h, $extensions: provenance(role) });
+		steps.push({
+			step: role.step,
+			l: solved.l,
+			c: solved.c,
+			h: solved.h,
+			$extensions: provenance(role),
+		});
 	}
 
 	return { ok: true, ramp: steps as Ramp };

@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { STEP_ROLES } from '../../core/step-roles';
 import { loadSchemes } from './cli.mjs';
+import { contrastFromOklch, readOklch } from '../../core/oklch';
 import { asCulori, measureRamp, renderSwatchPage } from './swatches.mjs';
 
 // scripts/lib/swatches.mjs is plain, untyped JS, so its exports carry no declared return shape
@@ -41,23 +42,79 @@ describe('measureRamp with stepRoles', () => {
 	});
 });
 
+describe('measureRamp agrees with the hex it paints', () => {
+	// measureStep paints `hex` and reports `wcag` from `renderedContrast`, which builds its bytes
+	// from the rgb converter rather than from the hex string. Two paths to one byte triple, and a
+	// cell whose number describes a different colour from the one it shows is the exact failure this
+	// harness exists to catch, so the agreement is asserted rather than assumed. It also backs the
+	// claim in `renderedContrast`'s docblock that skipping the `formatHex` import costs nothing.
+	it('reports the ratio the painted hex pair actually has', () => {
+		const background = { mode: 'oklch', l: 0.982, c: 0.006911, h: 157.7 };
+		const drift: string[] = [];
+
+		for (let l = 0; l <= 1.0001; l += 0.05) {
+			for (let c = 0; c <= 0.3001; c += 0.05) {
+				for (let h = 0; h < 360; h += 15) {
+					const [measured, painted] = measureRamp([
+						{ mode: 'oklch', l, c, h },
+						background,
+					]) as Array<{ hex: string; wcag: number }>;
+					// Both hex strings come from measureStep itself, so the comparison is against the
+					// colours the page paints rather than against a second opinion computed here.
+					const viaHex = contrastFromOklch(readOklch(measured!.hex), readOklch(painted!.hex));
+
+					if (Math.abs(measured!.wcag - viaHex) > 1e-9) {
+						drift.push(`${l}/${c}/${h}: reported ${measured!.wcag}, hex pair ${viaHex}`);
+					}
+				}
+			}
+		}
+
+		expect(drift).toEqual([]);
+	});
+});
+
 describe('measureRamp against a real ramp', () => {
-	// The step-11 success ramp for scripts/fixtures/seed.json under BALANCED clears its 4.5 WCAG
-	// floor at full precision (4.5159) but drops under it once quantized to the 8-bit hex the cell
-	// actually paints (4.4997). core/oklch-scale-engine.ts's FLOOR_MARGIN (1.0005, a 0.00225 floor
-	// cushion at 4.5) was sized to absorb six-decimal rounding, not sRGB byte quantization, so this
-	// straddle is a real gap rather than a fixture artifact. Deterministic: harmonization is 0 in
-	// BALANCED, so the success ramp's hue never depends on the seed's own brand colour.
-	it('flags light/success step 11 as failing its rendered floor while its exact colour clears it', async () => {
-		const seedPath = fileURLToPath(new URL('../fixtures/seed.json', import.meta.url));
-		const { schemes } = await loadSchemes(seedPath);
-		const steps = measureRamp(schemes.light.success.map(asCulori), STEP_ROLES) as MeasuredStep[];
+	// The light/success ramp core/oklch-scale-engine.ts produced for scripts/fixtures/seed.json
+	// before #72, frozen here rather than generated. Step 11 clears its 4.5 WCAG floor at full
+	// precision (4.5159) and drops under it as the 8-bit hex the cell paints (4.4997), which is
+	// exactly the straddle this harness exists to make visible. #72 stopped the engine emitting a
+	// ramp like this, so these twelve triples are retained precisely because nothing generates them
+	// any more. Delete them and the straddle path has no real case to run on.
+	const PRE_72_LIGHT_SUCCESS = [
+		[0.994, 0.002525, 157.7],
+		[0.982, 0.006911, 157.7],
+		[0.959, 0.01648, 157.7],
+		[0.932, 0.029238, 157.7],
+		[0.9, 0.039471, 157.7],
+		[0.859, 0.050635, 157.7],
+		[0.806, 0.064722, 157.7],
+		[0.734, 0.084126, 157.7],
+		[0.6406, 0.1329, 157.7],
+		[0.6136, 0.131704, 157.7],
+		[0.544, 0.096087, 157.7],
+		[0.332, 0.042528, 157.7],
+	].map(([l, c, h]) => ({ mode: 'oklch', l, c, h }));
+
+	it('flags a step as failing its rendered floor while its exact colour clears it', () => {
+		const steps = measureRamp(PRE_72_LIGHT_SUCCESS, STEP_ROLES) as MeasuredStep[];
 		const step11 = steps[10]!;
 
 		expect(step11.step).toBe(11);
 		expect(step11.wcag).toBeCloseTo(4.4997, 3);
 		expect(step11.failsContrast).toBe(true);
 		expect(step11.straddlesFloor).toBe(true);
+	});
+
+	// The other half of the same claim, and the one that would have caught #72 from this side: a
+	// ramp the current engine generates has to come back clean, or the harness is reporting a
+	// defect the engine already fixed.
+	it('flags nothing on the ramp the engine generates today', async () => {
+		const seedPath = fileURLToPath(new URL('../fixtures/seed.json', import.meta.url));
+		const { schemes } = await loadSchemes(seedPath);
+		const steps = measureRamp(schemes.light.success.map(asCulori), STEP_ROLES) as MeasuredStep[];
+
+		expect(steps.filter((step) => step.failsContrast)).toEqual([]);
 	});
 });
 
