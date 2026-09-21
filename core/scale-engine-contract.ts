@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { type BrandSeed, BrandSeedSchema, type OklchTriple } from './brand-seed';
-import { hueDistance, isInP3, isInSrgb, oklchDistance, renderedContrast } from './oklch';
+import { converter } from 'culori/fn';
+import { hueDistance, isInP3, isInSrgb, type Oklch, oklchDistance } from './oklch';
 import {
 	ANCHOR_TOLERANCE,
 	BALANCED,
@@ -23,10 +24,40 @@ import { type Ramp, RampSchema } from './token-set';
  * Contrast is measured here rather than read from the engine's own report, because a contract that
  * asks an implementation to grade itself tests nothing.
  *
+ * `renderedContrast` stays out of this file for the same reason. The engine stops solving once that
+ * function reports a pair clear of its floor, so the two would always agree. `paintedContrast`
+ * below rounds to bytes and works the WCAG formula itself, a second implementation that can
+ * disagree with the first.
+ *
  * The table is the authority on what a ramp owes. Assertions read it rather than restating its
  * numbers, so retuning a target is one edit to data instead of an edit to data plus a hunt through
  * expectations still holding the old value.
  */
+
+const toSrgb = converter('rgb');
+
+/** One sRGB channel rounded to a byte, then linearised the way WCAG relative luminance wants it. */
+function linearChannel(raw: number | undefined): number {
+	const byte = Math.round(Math.max(0, Math.min(1, raw ?? 0)) * 255) / 255;
+
+	return byte <= 0.03928 ? byte / 12.92 : ((byte + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance(color: Oklch): number {
+	const rgb = toSrgb({ mode: 'oklch', ...color })!;
+
+	return (
+		0.2126 * linearChannel(rgb.r) + 0.7152 * linearChannel(rgb.g) + 0.0722 * linearChannel(rgb.b)
+	);
+}
+
+/** WCAG contrast between two colours once both are rounded to 8-bit sRGB. */
+function paintedContrast(color: Oklch, background: Oklch): number {
+	const one = relativeLuminance(color);
+	const other = relativeLuminance(background);
+
+	return (Math.max(one, other) + 0.05) / (Math.min(one, other) + 0.05);
+}
 
 const STATUS_RAMPS = ['danger', 'warning', 'success', 'info'] as const;
 
@@ -163,7 +194,7 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 				for (const role of STEP_ROLES) {
 					if (role.minWcagVsStep2 === null) continue;
 
-					const measured = renderedContrast(ramp[role.step - 1]!, ramp[1]!);
+					const measured = paintedContrast(ramp[role.step - 1]!, ramp[1]!);
 
 					expect(
 						measured,
