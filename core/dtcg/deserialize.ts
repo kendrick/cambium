@@ -71,14 +71,15 @@ export function deserializeDtcg(lightDocument: unknown, darkDocument: unknown): 
 
 	checkDocumentsAgree(light, dark);
 
-	const lightScheme = schemeFrom(light);
-
 	// The top level is the light scheme a second time, which is what `checkMirroredLayers` requires.
-	// Spreading one object into both slots states "identical" by identity, the way
-	// `dtcg.fixture.ts` does, and the parse below clones them apart.
+	// Read twice rather than spread from one object into both slots: the two copies are what lets a
+	// tool annotate one of them, which is the whole reason `checkMirroredLayers` exempts a foreign
+	// namespace from the mirror. Sharing an object between the slots would make that impossible,
+	// since annotating either copy would write through to the other. Two reads of one document give
+	// two equal and independent copies, which is what the schema models.
 	const draft = {
-		...lightScheme,
-		schemes: { light: lightScheme, dark: schemeFrom(dark) },
+		...schemeFrom(light),
+		schemes: { light: schemeFrom(light), dark: schemeFrom(dark) },
 		radius: { source: 'derived', values: dimensionScale(light, [DTCG_GROUP.radius]) },
 		typography: { source: 'derived', values: typographyOf(light) },
 		tracking: { source: 'derived', values: trackingScale(light) },
@@ -246,9 +247,21 @@ function mapGroup<T>(
  * namespace the serializer invented, which must never reach a `TokenSet`: a round trip that kept it
  * would hand back a token set carrying a namespace the original never had.
  *
- * Everything else, `com.cambium` and any foreign namespace alike, comes back untouched. DTCG 5.2.3
- * requires preserving extension data a tool does not understand, and `TokenExtensionsSchema` is the
- * one loose object in the internal model so that it can.
+ * Everything else, `com.cambium` and any foreign namespace alike, comes back preserved in content.
+ * DTCG 5.2.3 requires preserving extension data a tool does not understand, and
+ * `TokenExtensionsSchema` is the one loose object in the internal model so that it can.
+ *
+ * Preserved in content, and detached in identity, which is the distinction this function exists to
+ * enforce. Every other value in the token set is rebuilt out of primitives, `{ l, c, h }` and
+ * `{ value, unit }` among them, so it is a fresh object by construction. A foreign payload is
+ * the one thing carried across whole, and `TokenExtensionsSchema` being a `looseObject` means Zod
+ * passes an unknown namespace through by reference rather than rebuilding it. Left alone, the token
+ * set and the documents it was read from would share one object, so a caller annotating the token
+ * set afterwards would edit the documents too, in silence and long after this function returned.
+ *
+ * `structuredClone` rather than a hand-rolled copy: it is the function the persistence path already
+ * uses, which `core/provenance.test.ts` pins, so a payload that cannot survive it could never have
+ * been stored anyway. It also handles a cycle, which a recursive copy written here would not.
  */
 function extensionsOf(
 	token: Node,
@@ -259,7 +272,16 @@ function extensionsOf(
 		...path,
 		'$extensions',
 	]);
-	const { [CAMBIUM_DTCG_NAMESPACE]: transport, ...own } = extensions;
+	const { [CAMBIUM_DTCG_NAMESPACE]: transport, ...carried } = extensions;
+	let own: Node;
+
+	try {
+		own = structuredClone(carried);
+	} catch {
+		throw new Error(
+			`${label(doc, [...path, '$extensions'])} holds extension data that cannot be copied, so it could not be stored either`,
+		);
+	}
 
 	if (transport === undefined) return { own, transport: undefined };
 
@@ -378,7 +400,11 @@ function cubicBezierOf(value: unknown, doc: Doc, path: readonly string[]): numbe
 		throw new Error(`${label(doc, path)} is not four cubic-bezier coordinates`);
 	}
 
-	return value as number[];
+	// Copied rather than handed on. `CubicBezierValueSchema` is a Zod tuple and does rebuild the
+	// array, so returning the document's own would happen to be safe today; leaning on that would
+	// make this module's "shares nothing with its input" guarantee a property of Zod's internals
+	// rather than of the code here.
+	return [...(value as number[])];
 }
 
 function dimensionScale(doc: Doc, path: readonly string[]) {

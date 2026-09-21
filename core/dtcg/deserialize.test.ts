@@ -79,6 +79,22 @@ function stamp(document: unknown, path: readonly string[], key: string): void {
 }
 
 /**
+ * Every object reachable from a value, by identity. Used to assert that the token set and the
+ * documents share none, which is a property rather than a list of places someone thought to check.
+ *
+ * Guards against revisiting, so a value that appears twice is counted once and a cycle terminates.
+ */
+function objectsIn(node: unknown, found = new Set<object>()): Set<object> {
+	if (typeof node !== 'object' || node === null || found.has(node)) return found;
+
+	found.add(node);
+
+	for (const value of Object.values(node)) objectsIn(value, found);
+
+	return found;
+}
+
+/**
  * Every `$extensions` namespace anywhere in a value, so a leaked transport namespace is found
  * rather than spot-checked.
  */
@@ -409,7 +425,14 @@ describe('deserializeDtcg', () => {
 		expect(second).toBe(first);
 	});
 
-	it('does not touch the documents it was given', () => {
+	/**
+	 * Renamed from "does not touch the documents it was given", which claimed more than it checked.
+	 * It pins that nothing is written during the call, and that was true while the returned token set
+	 * still held live references into the documents, so a caller could edit them through the value
+	 * this function handed back, long after it returned, and this case went on passing. The property
+	 * asserted at the wrong moment is the tell; `detaches the token set` below pins the rest.
+	 */
+	it('does not mutate the documents while reading them', () => {
 		const light = structuredClone(SPEC_LIGHT_DOCUMENT);
 		const dark = structuredClone(SPEC_DARK_DOCUMENT);
 
@@ -417,5 +440,90 @@ describe('deserializeDtcg', () => {
 
 		expect(light).toEqual(SPEC_LIGHT_DOCUMENT);
 		expect(dark).toEqual(SPEC_DARK_DOCUMENT);
+	});
+
+	/**
+	 * The structural half, asserted over identities rather than over a list of places worth checking.
+	 *
+	 * `TokenExtensionsSchema` is a `looseObject`, so Zod hands an unknown namespace through by
+	 * reference, and a foreign payload is the one value this deserializer carries across whole rather
+	 * than rebuilding out of primitives. That made the returned token set and the documents share an
+	 * object, and a caller annotating the token set afterwards edited the documents in silence.
+	 *
+	 * Walking every reachable object and intersecting the two sets is what makes this a property
+	 * instead of a spot check: a new family that carries some other value across whole fails here
+	 * without anyone remembering to add a case for it. A payload with nesting and an array is used
+	 * because a shallow copy would pass a test that only looked one level down.
+	 */
+	it('detaches the token set from both documents, sharing no object with either', () => {
+		const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+		const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+		for (const document of [light, dark]) {
+			(document.radius.md.$extensions as Extensions)['com.acme'] = {
+				audit: { reviewer: 'original' },
+				tags: ['reviewed'],
+			};
+		}
+
+		expect(violationLines(light)).toEqual([]);
+		expect(violationLines(dark)).toEqual([]);
+
+		const tokenSet = deserializeDtcg(light, dark);
+		const documentObjects = new Set([...objectsIn(light), ...objectsIn(dark)]);
+
+		expect([...objectsIn(tokenSet)].filter((held) => documentObjects.has(held))).toEqual([]);
+	});
+
+	it('leaves both documents alone when the token set is deeply edited afterwards', () => {
+		const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+		const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+		for (const document of [light, dark]) {
+			(document.radius.md.$extensions as Extensions)['com.acme'] = {
+				audit: { reviewer: 'original' },
+			};
+		}
+
+		const lightBefore = structuredClone(light);
+		const darkBefore = structuredClone(dark);
+
+		const tokenSet = deserializeDtcg(light, dark);
+		const payload = tokenSet.radius.values.md.$extensions['com.acme'] as {
+			audit: { reviewer: string };
+		};
+
+		payload.audit.reviewer = 'edited by the caller';
+
+		expect(light).toEqual(lightBefore);
+		expect(dark).toEqual(darkBefore);
+	});
+
+	/**
+	 * The same property inside the token set. `checkMirroredLayers` exempts a foreign namespace from
+	 * the mirror precisely so a tool can annotate one copy of the light scheme, so the two copies
+	 * sharing one payload object would make the thing the carve-out exists for impossible: annotating
+	 * either copy would write through to the other.
+	 */
+	it('gives the mirrored light scheme two independent copies of a foreign payload', () => {
+		const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+
+		(light.color.primitive.brand['1'].$extensions as Extensions)['com.acme'] = {
+			audit: { reviewer: 'original' },
+		};
+
+		const tokenSet = deserializeDtcg(light, SPEC_DARK_DOCUMENT);
+		const top = tokenSet.primitives.brand[0].$extensions['com.acme'] as {
+			audit: { reviewer: string };
+		};
+
+		top.audit.reviewer = 'edited by the caller';
+
+		expect(tokenSet.schemes.light.primitives.brand[0].$extensions['com.acme']).toEqual({
+			audit: { reviewer: 'original' },
+		});
+		expect((light.color.primitive.brand['1'].$extensions as Extensions)['com.acme']).toEqual({
+			audit: { reviewer: 'original' },
+		});
 	});
 });

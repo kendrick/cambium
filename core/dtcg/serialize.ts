@@ -45,8 +45,10 @@ export type DtcgDocumentPair = { light: DtcgDocument; dark: DtcgDocument };
  * Writes the internal `TokenSet` out as two DTCG 2025.10 documents, one per scheme.
  *
  * Pure in the sense the acceptance criterion asks for: same token set in, same bytes out. Nothing
- * here reads the DOM, the network, storage, or module state, and the input comes back untouched,
- * because every token is built fresh rather than annotated in place.
+ * here reads the DOM, the network, storage, or module state. Purity has two halves and both are
+ * held: serializing does not touch the token set, and the returned documents share no object with
+ * it, so a caller that annotates a document afterwards cannot reach back into the set through it.
+ * `detach` below carries the second half and says why it cannot be left to the builders.
  *
  * Key order follows insertion order, which follows the order the token set holds its families and
  * names in, so one token set always writes one byte sequence. Ramp steps need no care at all: they
@@ -77,9 +79,37 @@ export function serializeDtcg(tokenSet: TokenSet): DtcgDocumentPair {
 	rejectReservedNamespace(set, '');
 
 	return {
-		light: documentFor(set, mirroredLightScheme(set)),
-		dark: documentFor(set, set.schemes.dark),
+		light: detach(documentFor(set, mirroredLightScheme(set))),
+		dark: detach(documentFor(set, set.schemes.dark)),
 	};
+}
+
+/**
+ * Cuts every reference the document still holds into the parsed token set, and into the caller's.
+ *
+ * `TokenSetSchema.parse` rebuilds the structure it knows about, so a ramp, a record and a tuple
+ * all come back as fresh objects. It cannot rebuild what it does not know: `TokenExtensionsSchema`
+ * is a `looseObject`, and Zod passes an unrecognised key through by reference. A foreign
+ * namespace's payload is therefore one object shared by the caller's token set and the parse, and
+ * the builders hand that same object on to the document. A caller who annotates a serialized
+ * document before writing it then edits the token set as a side effect, with nothing to say so.
+ *
+ * The data that leaks is exactly the data `TokenExtensionsSchema` is loose in order to preserve,
+ * per DTCG 5.2.3, so the leak scales with how well another tool's annotations survive the pipeline.
+ *
+ * Cloning the whole document rather than deep-copying each foreign payload is a deliberate trade.
+ * Copying payloads is cheaper on a set that has none, which is every set the pipeline builds
+ * today, but it has to be remembered at each of the nine token builders and at every builder
+ * anyone adds later, and the failure is silent. One sweep at the exit cannot be forgotten. It
+ * costs about 0.37ms against serialization's 0.44ms for a 172-token document, which is the wrong
+ * order of magnitude to trade correctness for at export time.
+ *
+ * It also buys light and dark independence, which the builders do not give on their own: both
+ * documents read the same parsed non-colour families, so before this they shared every non-colour
+ * `$extensions` object and every easing tuple, and editing one scheme's easing edited the other's.
+ */
+function detach(document: DtcgDocument): DtcgDocument {
+	return structuredClone(document);
 }
 
 /**

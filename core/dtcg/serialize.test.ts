@@ -414,11 +414,71 @@ describe('serializeDtcg', () => {
 		);
 	});
 
-	it('does not touch the token set it was given', () => {
+	/**
+	 * Renamed from "does not touch the token set it was given", which oversold it. It pins the
+	 * inbound half of purity only: that the act of serializing writes nothing back. The outbound
+	 * half, that the returned documents do not alias the set, is a separate property and the case
+	 * below is the one that holds it. Both halves are worth pinning, so this one stays.
+	 */
+	it('writes nothing back to the token set while serializing it', () => {
 		const before = JSON.stringify(seedTokenSet);
 
 		serializeDtcg(seedTokenSet);
 
 		expect(JSON.stringify(seedTokenSet)).toBe(before);
+	});
+
+	/**
+	 * `TokenSetSchema.parse` rebuilds the structure it knows and passes an unrecognised
+	 * `$extensions` key through by reference, so before the exit clone a foreign payload was one
+	 * object shared by the caller's set and the document built from it. Nothing this pipeline
+	 * produces carries such a payload, which is why the seed set cannot exercise this and the
+	 * fixture has to be annotated first.
+	 *
+	 * The mutations below go through the document, deep, at the places that aliased: inside a
+	 * foreign payload, inside Cambium's own payload, and into an easing tuple. The assertion is on
+	 * the token set, because that is what must not have moved.
+	 */
+	it('returns documents that share no object with the token set', () => {
+		const set = structuredClone(SPEC_TOKEN_SET) as TokenSet;
+
+		// Two separate objects of equal content, not one written twice: the mirror check compares
+		// these by value, and sharing one here would hide an aliasing bug rather than expose it.
+		(set.primitives.brand[0].$extensions as Record<string, unknown>)['com.acme'] = {
+			audit: { reviewer: 'original' },
+		};
+		(set.schemes.light.primitives.brand[0].$extensions as Record<string, unknown>)['com.acme'] = {
+			audit: { reviewer: 'original' },
+		};
+
+		const before = JSON.stringify(set);
+		const { light } = serializeDtcg(set);
+		const extensions = nodeAt(light, ['color', 'primitive', 'brand', '1', '$extensions']) as Record<
+			string,
+			unknown
+		>;
+
+		(extensions['com.acme'] as { audit: { reviewer: string } }).audit.reviewer =
+			'edited through the document';
+		(extensions[CAMBIUM_NAMESPACE] as { rationale: string }).rationale = 'edited';
+		(nodeAt(light, ['motion', 'easing', 'standard']) as { $value: number[] }).$value[0] = 99;
+
+		expect(JSON.stringify(set)).toBe(before);
+	});
+
+	/**
+	 * The eight non-colour families are one copy on the token set written into both documents, so
+	 * the values touched below are the ones that aliased across the pair before the exit clone.
+	 * Editing light's easing used to edit dark's, which no caller would expect of two documents
+	 * handed over as separate values.
+	 */
+	it('returns a light and a dark document that share no object with each other', () => {
+		const { light, dark } = serializeDtcg(seedTokenSet);
+		const darkBefore = JSON.stringify(dark);
+
+		(nodeAt(light, ['motion', 'easing', 'standard']) as { $value: number[] }).$value[0] = 99;
+		(nodeAt(light, ['radius', 'md', '$extensions']) as Record<string, unknown>).edited = true;
+
+		expect(JSON.stringify(dark)).toBe(darkBefore);
 	});
 });
