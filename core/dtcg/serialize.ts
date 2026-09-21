@@ -18,6 +18,7 @@ import {
 import {
 	CAMBIUM_DTCG_NAMESPACE,
 	DTCG_GROUP,
+	DTCG_SEGMENT_PATTERN,
 	type DtcgColorToken,
 	type DtcgColorValue,
 	type DtcgCubicBezierToken,
@@ -73,10 +74,90 @@ export function serializeDtcg(tokenSet: TokenSet): DtcgDocumentPair {
 	// the type true and fails with a Zod path instead of nineteen Ajv diagnostics downstream.
 	const set = TokenSetSchema.parse(tokenSet);
 
+	rejectReservedNamespace(set, '');
+
 	return {
 		light: documentFor(set, mirroredLightScheme(set)),
 		dark: documentFor(set, set.schemes.dark),
 	};
+}
+
+/**
+ * The dotted group paths this file builds token paths from. Assembled out of `DTCG_GROUP` rather
+ * than typed as strings, for the reason `dtcg-types.ts` gives: a path a consumer joins from those
+ * constants and a path this file writes have to be the same path, and a literal in the middle of a
+ * function is the one spelling nothing checks.
+ */
+const GROUP_PATH = {
+	colorPrimitive: `${DTCG_GROUP.color}.${DTCG_GROUP.primitive}`,
+	colorSemantic: `${DTCG_GROUP.color}.${DTCG_GROUP.semantic}`,
+	typographySize: `${DTCG_GROUP.typography}.${DTCG_GROUP.size}`,
+	typographyWeight: `${DTCG_GROUP.typography}.${DTCG_GROUP.weight}`,
+	typographyLineHeight: `${DTCG_GROUP.typography}.${DTCG_GROUP.lineHeight}`,
+	motionDuration: `${DTCG_GROUP.motion}.${DTCG_GROUP.duration}`,
+	motionEasing: `${DTCG_GROUP.motion}.${DTCG_GROUP.easing}`,
+} as const;
+
+/**
+ * DTCG forbids a dot, a brace, and a leading `$` in a name, and the internal model allows all
+ * three: every family keys its tokens by `z.record(z.string().min(1), ...)`, so `radius.values`
+ * may legally hold `"compact.md"` and a semantic layer may legally hold `"$primary"`. Those parse,
+ * they persist, and they serialize into a document the published schema then rejects, which is the
+ * consumer boundary `AGENTS.md` names: right in our representation, wrong the moment the schema
+ * evaluates it.
+ *
+ * Nothing the pipeline builds today has such a key, because every family's names come from a fixed
+ * list. This guards the other door: `serializeDtcg` parses whatever it is handed, and #20 hands it
+ * archive JSON that no Cambium run necessarily produced.
+ *
+ * Throwing here rather than widening `TokenSetSchema` is deliberate. The restriction is DTCG's,
+ * not the model's, so it belongs on the edge that talks to DTCG; putting it in the schema would
+ * reach persistence and reject archives that are valid everywhere except on the way out.
+ *
+ * Every name this file emits goes through here except the group names themselves, which are
+ * `DTCG_GROUP` constants, and `focusRing`'s `width` and `offset`, which `FocusRingSchema` fixes as
+ * the only two keys it accepts. All of those are literals in this file rather than data.
+ */
+function checkSegment(name: string, group: string): void {
+	if (!DTCG_SEGMENT_PATTERN.test(name)) {
+		throw new Error(`"${name}" is not a legal DTCG name (key of ${group})`);
+	}
+}
+
+/**
+ * `com.cambium.dtcg` is this serializer's to write and nobody else's, so a `TokenSet` carrying one
+ * is malformed by our own rule even though `TokenExtensionsSchema` is loose enough to hold it.
+ *
+ * The damage is quiet without this. `trackingToken` spreads the payload it is given and then
+ * writes `{ unit: 'em' }` over any `com.cambium.dtcg` already there, and the deserializer strips
+ * the namespace on the way back because it knows serialization invented it, so the original
+ * annotation is gone and the round trip comes back deep-unequal with nothing to show which token
+ * lost what.
+ *
+ * Foreign `$extensions` payloads are not walked into. A namespace belonging to another tool may
+ * hold whatever keys it likes, including one spelled `$extensions` holding one spelled
+ * `com.cambium.dtcg`, and that is its data rather than a claim about one of our tokens.
+ */
+function rejectReservedNamespace(node: unknown, path: string): void {
+	if (typeof node !== 'object' || node === null) return;
+
+	for (const [key, value] of Object.entries(node)) {
+		if (key === '$extensions') {
+			if (
+				typeof value === 'object' &&
+				value !== null &&
+				Object.hasOwn(value, CAMBIUM_DTCG_NAMESPACE)
+			) {
+				throw new Error(
+					`${path} carries ${CAMBIUM_DTCG_NAMESPACE}, which only serialization may write`,
+				);
+			}
+
+			continue;
+		}
+
+		rejectReservedNamespace(value, path === '' ? key : `${path}.${key}`);
+	}
 }
 
 /**
@@ -98,55 +179,73 @@ function documentFor(set: TokenSet, scheme: Scheme): DtcgDocument {
 
 	return {
 		[DTCG_GROUP.color]: {
-			[DTCG_GROUP.primitive]: mapGroup(scheme.primitives, rampGroup),
-			[DTCG_GROUP.semantic]: mapGroup(scheme.semantic, aliasToken),
+			[DTCG_GROUP.primitive]: mapGroup(scheme.primitives, GROUP_PATH.colorPrimitive, rampGroup),
+			[DTCG_GROUP.semantic]: mapGroup(scheme.semantic, GROUP_PATH.colorSemantic, aliasToken),
 		},
-		[DTCG_GROUP.radius]: mapGroup(set.radius.values, (token, name) =>
-			dimensionToken(token, `radius.${name}`),
-		),
-		[DTCG_GROUP.spacing]: mapGroup(set.spacing.values, (token, name) =>
-			dimensionToken(token, `spacing.${name}`),
-		),
+		[DTCG_GROUP.radius]: mapGroup(set.radius.values, DTCG_GROUP.radius, dimensionToken),
+		[DTCG_GROUP.spacing]: mapGroup(set.spacing.values, DTCG_GROUP.spacing, dimensionToken),
 		[DTCG_GROUP.typography]: {
-			[DTCG_GROUP.size]: mapGroup(typography.size, (token, name) =>
-				dimensionToken(token, `typography.size.${name}`),
+			[DTCG_GROUP.size]: mapGroup(typography.size, GROUP_PATH.typographySize, dimensionToken),
+			[DTCG_GROUP.weight]: mapGroup(typography.weight, GROUP_PATH.typographyWeight, weightToken),
+			[DTCG_GROUP.lineHeight]: mapGroup(
+				typography.lineHeight,
+				GROUP_PATH.typographyLineHeight,
+				numberToken,
 			),
-			[DTCG_GROUP.weight]: mapGroup(typography.weight, weightToken),
-			[DTCG_GROUP.lineHeight]: mapGroup(typography.lineHeight, numberToken),
 		},
-		[DTCG_GROUP.tracking]: mapGroup(set.tracking.values, trackingToken),
-		[DTCG_GROUP.shadow]: mapGroup(scheme.shadow.values, shadowToken),
+		[DTCG_GROUP.tracking]: mapGroup(set.tracking.values, DTCG_GROUP.tracking, trackingToken),
+		[DTCG_GROUP.shadow]: mapGroup(scheme.shadow.values, DTCG_GROUP.shadow, shadowToken),
 		[DTCG_GROUP.motion]: {
-			[DTCG_GROUP.duration]: mapGroup(motion.duration, durationToken),
-			[DTCG_GROUP.easing]: mapGroup(motion.easing, easingToken),
+			[DTCG_GROUP.duration]: mapGroup(motion.duration, GROUP_PATH.motionDuration, durationToken),
+			[DTCG_GROUP.easing]: mapGroup(motion.easing, GROUP_PATH.motionEasing, easingToken),
 		},
-		[DTCG_GROUP.opacity]: mapGroup(set.opacity.values, numberToken),
-		[DTCG_GROUP.zIndex]: mapGroup(set.zIndex.values, numberToken),
+		[DTCG_GROUP.opacity]: mapGroup(set.opacity.values, DTCG_GROUP.opacity, numberToken),
+		[DTCG_GROUP.zIndex]: mapGroup(set.zIndex.values, DTCG_GROUP.zIndex, numberToken),
 		[DTCG_GROUP.focusRing]: {
-			width: dimensionToken(focusRing.width, 'focusRing.width'),
-			offset: dimensionToken(focusRing.offset, 'focusRing.offset'),
+			width: dimensionToken(focusRing.width, `${DTCG_GROUP.focusRing}.width`),
+			offset: dimensionToken(focusRing.offset, `${DTCG_GROUP.focusRing}.offset`),
 		},
 	};
 }
 
+/**
+ * The one place a token's name becomes a document key, which is why the DTCG name check lives here
+ * rather than at each family. Each builder is handed the finished dotted path instead of the bare
+ * name, so an error downstream (an `em` radius, a rem tracking value) locates the token the same
+ * way this one does.
+ */
 function mapGroup<T>(
 	values: Record<string, T>,
-	node: (value: T, name: string) => DtcgGroup | DtcgToken,
+	group: string,
+	node: (value: T, path: string) => DtcgGroup | DtcgToken,
 ): DtcgGroup {
 	return Object.fromEntries(
-		Object.entries(values).map(([name, value]) => [name, node(value, name)]),
+		Object.entries(values).map(([name, value]) => {
+			checkSegment(name, group);
+
+			return [name, node(value, `${group}.${name}`)];
+		}),
 	);
 }
 
 /** A scalar family wraps its payload under `value` so it has somewhere to hang `$extensions`. */
 type ScalarToken<T> = { value: T; $extensions: TokenExtensions };
 
-function rampGroup(ramp: Ramp): DtcgGroup {
+/**
+ * A step name cannot fail `checkSegment` today: `RampStepSchema` bounds `step` to an integer 1
+ * through 12. It is checked anyway so that "every name this document holds went through the DTCG
+ * pattern" is true by reading this file, rather than true only for a reader who also goes and
+ * re-derives what `RampStepSchema` allows.
+ */
+function rampGroup(ramp: Ramp, path: string): DtcgGroup {
 	return Object.fromEntries(
-		ramp.map((step): [string, DtcgColorToken] => [
-			String(step.step),
-			{ $type: 'color', $value: colorValue(step), $extensions: step.$extensions },
-		]),
+		ramp.map((step): [string, DtcgColorToken] => {
+			const name = String(step.step);
+
+			checkSegment(name, path);
+
+			return [name, { $type: 'color', $value: colorValue(step), $extensions: step.$extensions }];
+		}),
 	);
 }
 
@@ -231,11 +330,9 @@ function numberToken(scalar: ScalarToken<number>): DtcgNumberToken {
  * deserializer reads back as em—a wrong number wearing the right shape, which is the failure
  * that survives a round trip looking correct.
  */
-function trackingToken(tracking: SignedDimension, name: string): DtcgNumberToken {
+function trackingToken(tracking: SignedDimension, path: string): DtcgNumberToken {
 	if (tracking.unit !== 'em') {
-		throw new Error(
-			`tracking.${name} is in ${tracking.unit}, and only em rides ${CAMBIUM_DTCG_NAMESPACE}`,
-		);
+		throw new Error(`${path} is in ${tracking.unit}, and only em rides ${CAMBIUM_DTCG_NAMESPACE}`);
 	}
 
 	return {
@@ -245,9 +342,7 @@ function trackingToken(tracking: SignedDimension, name: string): DtcgNumberToken
 	};
 }
 
-function shadowToken(shadow: Shadow, name: string): DtcgShadowToken {
-	const path = `shadow.${name}`;
-
+function shadowToken(shadow: Shadow, path: string): DtcgShadowToken {
 	return {
 		$type: 'shadow',
 		$value: {

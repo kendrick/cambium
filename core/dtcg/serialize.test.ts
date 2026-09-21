@@ -344,6 +344,55 @@ describe('serializeDtcg', () => {
 		expect(() => serializeDtcg(set)).toThrow(/com\.example/);
 	});
 
+	/**
+	 * Every family keys its tokens by `z.record(z.string().min(1), ...)`, so a dot, a brace or a
+	 * leading `$` in a token name parses, persists, and only becomes wrong when DTCG reads it. The
+	 * `TokenSetSchema` assertion in each case below is load-bearing: without it, a set that failed
+	 * to parse would throw for an unrelated reason and the case would pass having measured nothing.
+	 *
+	 * What is asserted is that the guard fires and names the key. Asserting instead that the
+	 * document comes back schema-invalid would grade the published schema, which needs no help from
+	 * this file, and would keep passing if the guard were deleted tomorrow.
+	 */
+	it('refuses a non-colour token name DTCG forbids', () => {
+		const set = structuredClone(SPEC_TOKEN_SET) as TokenSet;
+
+		set.radius.values['compact.md'] = set.radius.values.md;
+
+		expect(TokenSetSchema.safeParse(set).success).toBe(true);
+		expect(() => serializeDtcg(set)).toThrow(/compact\.md/);
+	});
+
+	it('refuses a semantic token name DTCG forbids', () => {
+		const set = structuredClone(SPEC_TOKEN_SET) as TokenSet;
+
+		// Both copies, because `checkMirroredLayers` wants the top level to equal `schemes.light`.
+		// The clone may already share one object between them, in which case the second write is a
+		// no-op; writing both is what keeps this case honest if that ever stops being true.
+		set.semantic.$primary = set.semantic.primary;
+		set.schemes.light.semantic.$primary = set.schemes.light.semantic.primary;
+
+		expect(TokenSetSchema.safeParse(set).success).toBe(true);
+		expect(() => serializeDtcg(set)).toThrow(/\$primary/);
+	});
+
+	/**
+	 * The plan's rule is that `com.cambium.dtcg` never appears in a `TokenSet`, because
+	 * serialization invents it and the deserializer strips it again. A set carrying one is malformed
+	 * by that rule, and overwriting it in `trackingToken` would lose the original payload silently:
+	 * the round trip would come back deep-unequal with nothing naming the token that lost data.
+	 */
+	it('refuses a token set that already carries the reserved transport namespace', () => {
+		const set = structuredClone(SPEC_TOKEN_SET) as TokenSet;
+
+		(set.tracking.values.tight.$extensions as Record<string, unknown>)[CAMBIUM_DTCG_NAMESPACE] = {
+			unit: 'em',
+		};
+
+		expect(TokenSetSchema.safeParse(set).success).toBe(true);
+		expect(() => serializeDtcg(set)).toThrow(/tracking.*com\.cambium\.dtcg/);
+	});
+
 	it('is deterministic: the same token set serializes to the same bytes', () => {
 		const first = JSON.stringify(serializeDtcg(seedTokenSet));
 		const second = JSON.stringify(serializeDtcg(structuredClone(seedTokenSet)));

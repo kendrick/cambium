@@ -285,35 +285,118 @@ describe('deserializeDtcg', () => {
 	 * The placement above puts `$extensions` on the `radius` group, where the token set has no slot
 	 * and it is read past. These put it on the `radius.md` token, where it has one. Same key, and the
 	 * answers differ because the node under it does.
+	 *
+	 * The `$`-prefixed cases are the ones that caught a real defect. A payload is an arbitrary object
+	 * and a vendor may put anything in it, `$note` included, so a comparison that decides "group" by
+	 * looking for `$type` decides it about the payload too and skips the very key the two documents
+	 * disagree about. Each case below therefore asserts the path the message names, not just that
+	 * something threw: a throw for the wrong reason would pass a bare `toThrow` and prove nothing.
 	 */
+	type Extensions = Record<string, unknown>;
+
 	const tokenDisagreements: {
 		what: string;
-		spoil: (document: typeof SPEC_LIGHT_DOCUMENT) => void;
+		inLight: (extensions: Extensions) => void;
+		inDark?: (extensions: Extensions) => void;
+		names: string;
 	}[] = [
 		{
 			what: 'a foreign namespace on one document only',
-			spoil: (document) => {
-				(document.radius.md.$extensions as Record<string, unknown>)['com.example'] = {
-					note: 'a',
-				};
+			inLight: (extensions) => {
+				extensions['com.example'] = { note: 'a' };
 			},
+			names: 'radius.md.$extensions.com.example',
 		},
 		{
 			what: 'two provenance rationales for one token',
-			spoil: (document) => {
-				document.radius.md.$extensions['com.cambium'].rationale = 'a different reason';
+			inLight: (extensions) => {
+				(extensions['com.cambium'] as { rationale: string }).rationale = 'a different reason';
 			},
+			names: 'radius.md.$extensions.com.cambium.rationale',
+		},
+		{
+			what: 'a foreign payload differing only at a $-prefixed key',
+			inLight: (extensions) => {
+				extensions['com.example'] = { $note: 'a' };
+			},
+			inDark: (extensions) => {
+				extensions['com.example'] = { $note: 'b' };
+			},
+			names: 'radius.md.$extensions.com.example.$note',
+		},
+		{
+			what: 'a $-prefixed key buried deeper in a foreign payload',
+			inLight: (extensions) => {
+				extensions['com.example'] = { deep: { $note: 'a' } };
+			},
+			inDark: (extensions) => {
+				extensions['com.example'] = { deep: { $note: 'b' } };
+			},
+			names: 'radius.md.$extensions.com.example.deep.$note',
+		},
+		{
+			what: 'a $-prefixed key inside an array in a foreign payload',
+			inLight: (extensions) => {
+				extensions['com.example'] = [{ $note: 'a' }];
+			},
+			inDark: (extensions) => {
+				extensions['com.example'] = [{ $note: 'b' }];
+			},
+			names: 'radius.md.$extensions.com.example.0.$note',
+		},
+		{
+			what: 'a foreign payload that is an array of plain values',
+			inLight: (extensions) => {
+				extensions['com.example'] = ['a'];
+			},
+			inDark: (extensions) => {
+				extensions['com.example'] = ['b'];
+			},
+			names: 'radius.md.$extensions.com.example.0',
+		},
+		{
+			what: 'a foreign payload that is an array on one document and an object on the other',
+			inLight: (extensions) => {
+				extensions['com.example'] = ['a'];
+			},
+			inDark: (extensions) => {
+				extensions['com.example'] = { a: 1 };
+			},
+			names: 'radius.md.$extensions.com.example',
+		},
+		{
+			what: 'a com.cambium payload differing at a $-prefixed key',
+			inLight: (extensions) => {
+				(extensions['com.cambium'] as Extensions).$note = 'a';
+			},
+			inDark: (extensions) => {
+				(extensions['com.cambium'] as Extensions).$note = 'b';
+			},
+			names: 'radius.md.$extensions.com.cambium.$note',
+		},
+		{
+			what: 'an $extensions namespace that is itself $-prefixed',
+			inLight: (extensions) => {
+				extensions.$weird = 'a';
+			},
+			inDark: (extensions) => {
+				extensions.$weird = 'b';
+			},
+			names: 'radius.md.$extensions.$weird',
 		},
 	];
 
-	for (const { what, spoil } of tokenDisagreements) {
+	for (const { what, inLight, inDark, names } of tokenDisagreements) {
 		it(`still refuses ${what}, because a token's $extensions is kept once`, () => {
 			const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+			const dark = structuredClone(SPEC_DARK_DOCUMENT);
 
-			spoil(light);
+			inLight(light.radius.md.$extensions as Extensions);
+			inDark?.(dark.radius.md.$extensions as Extensions);
 
 			expect(violationLines(light)).toEqual([]);
-			expect(() => deserializeDtcg(light, SPEC_DARK_DOCUMENT)).toThrow(/radius\.md\.\$extensions/);
+			expect(violationLines(dark)).toEqual([]);
+			expect(() => deserializeDtcg(light, dark)).toThrow(names);
 		});
 	}
 

@@ -652,7 +652,14 @@ function checkDocumentsAgree(light: Doc, dark: Doc): void {
 	for (const doc of [light, dark]) requireOnly(doc.root, ROOT_GROUPS, doc, []);
 
 	for (const group of SHARED_GROUPS) {
-		const difference = firstDifference(groupAt(light, [group]), groupAt(dark, [group]), [group]);
+		// `groupAt` returns a DTCG group node, which is the one place the walk starts knowing where it
+		// is. Everything below is worked out from there rather than guessed at from the node's shape.
+		const difference = firstDifference(
+			groupAt(light, [group]),
+			groupAt(dark, [group]),
+			[group],
+			true,
+		);
 
 		if (difference !== undefined) {
 			throw new Error(
@@ -677,16 +684,30 @@ function checkDocumentsAgree(light: Doc, dark: Doc): void {
  * instead: a `TokenSet` has nowhere to put a group's metadata, so there is no copy to keep and
  * nothing is lost by not comparing it.
  *
- * A token's own keys are a different matter and stay compared, `$extensions` above all. On a token
- * in one of these families the `com.cambium` payload is data the token set keeps, in a slot it
- * keeps once, so two documents claiming different provenance for one token is a real disagreement
- * with no honest answer. `$value` and `$type` are the same. That is what `holdsTokens` below
- * separates: reserved names are skipped only where a group is being compared.
+ * `atGroupNode` is what confines that skip to a real DTCG group, and it is a parameter rather than
+ * a test on the node because no test on the node can answer it. A group is recognisable only by
+ * where it sits: an `$extensions` payload, a vendor's object inside one, and a group all look
+ * alike, so asking "does this carry `$type`?" answers "group" about a payload and skips a
+ * vendor's `$`-prefixed key. That read one document's payload and discarded the other's in silence,
+ * in the one function whose job is to refuse exactly that. The position is tracked instead: the
+ * caller starts the walk at a group, a named child of a group is another group only if it carries
+ * no `$type`, and once the walk steps into a token nothing below it is ever skipped again.
+ *
+ * The path would have served as well and was the other candidate. It loses because reading position
+ * off a dotted path means writing down which depths hold tokens under which family, and that is the
+ * document's shape stated a second time, free to drift from the tree the walk is actually standing
+ * in. `atGroupNode` is computed from that tree on the way down and cannot disagree with it.
+ *
+ * So a token's own keys stay compared, `$extensions` above all: the `com.cambium` payload is data
+ * the token set keeps in a slot it keeps once, and two documents claiming different provenance for
+ * one token is a real disagreement with no honest answer. Everything inside that payload, to any
+ * depth and through any array, is compared with it.
  */
 function firstDifference(
 	light: unknown,
 	dark: unknown,
 	path: readonly string[],
+	atGroupNode: boolean,
 ): string | undefined {
 	if (light === dark) return undefined;
 
@@ -698,14 +719,18 @@ function firstDifference(
 
 	const left = light as Node;
 	const right = dark as Node;
-	const comparingGroup = holdsTokens(left) && holdsTokens(right);
 
 	for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
-		if (comparingGroup && isReservedName(key)) continue;
+		if (atGroupNode && isReservedName(key)) continue;
 
 		if (!Object.hasOwn(left, key) || !Object.hasOwn(right, key)) return [...path, key].join('.');
 
-		const difference = firstDifference(left[key], right[key], [...path, key]);
+		// Both sides have to be groups for the child to count as one. A `$type` on one document and
+		// not the other means one is a token where the other is a group, and that is a disagreement to
+		// report rather than a difference to skip.
+		const childAtGroupNode = atGroupNode && isGroupChild(left[key]) && isGroupChild(right[key]);
+
+		const difference = firstDifference(left[key], right[key], [...path, key], childAtGroupNode);
 
 		if (difference !== undefined) return difference;
 	}
@@ -714,11 +739,14 @@ function firstDifference(
 }
 
 /**
- * Whether a node holds tokens rather than being one, by the same `$type` test `groupAt` makes. Both
- * sides have to clear it before reserved names are skipped: a `$type` on one document and not the
- * other means one is a token where the other is a group, which is a disagreement worth reporting
- * rather than a difference worth skipping.
+ * Whether a named child of a group is itself a group rather than a token, by the same `$type` test
+ * `groupAt` makes.
+ *
+ * Only ever asked of a node whose parent is already known to be a group, and that precondition is
+ * what keeps the `$type` test honest: DTCG gives a group nothing but groups and tokens under its
+ * named keys, so the absence of `$type` settles which. Asked of an arbitrary nested object the same
+ * test answers "group" about something that is not one, which is the defect this replaced.
  */
-function holdsTokens(node: Node): boolean {
-	return !('$type' in node);
+function isGroupChild(node: unknown): boolean {
+	return typeof node === 'object' && node !== null && !Array.isArray(node) && !('$type' in node);
 }
