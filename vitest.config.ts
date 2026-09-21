@@ -1,9 +1,11 @@
 import { defineConfig } from 'vitest/config';
 
-// Node is enough for everything Vitest runs here: the pure core, the RecordStore contract under
-// fake-indexeddb, and the bundle measurement. Vitest gets no browser tier at all. Rendered-component
-// and axe checks belong to the Playwright suite instead, because jsdom does no layout and resolves
-// no cascade, so the colour rules are inert there. See docs/agents/testing.md.
+// Node is enough for whatever Vitest runs here, and the set keeps growing: today the pure core, the
+// RecordStore contract under fake-indexeddb, the bundle measurement, and package-scripts.test.ts,
+// which spawns pnpm as a subprocess and costs seconds where the rest cost milliseconds. Vitest gets
+// no browser tier at all. Rendered-component and axe checks belong to the Playwright suite instead,
+// because jsdom does no layout and resolves no cascade, so the colour rules are inert there.
+// See docs/agents/testing.md.
 const node = {
 	environment: 'node' as const,
 	globals: true,
