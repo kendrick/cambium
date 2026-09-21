@@ -91,7 +91,14 @@ const TIDY = `// ${NOTE}\nconst x = { a: 1, b: 2 };\nexport { x };\n`;
 // The shape of a canary filename, and the only shape the sweep will touch. Nobody names a file this
 // way by hand, which is the point: content alone is too loose a test, and a sweep that trusted it
 // deleted a copy of this very suite that a mutation run was using as its control.
-const CANARY_NAME = /^[0-9a-f]{12}\.[a-z]+$/;
+//
+// Digits belong in the extension class. Without them this read `[a-z]+`, which matches `.jsonc` and
+// not `.json5`, so every `.json5` stray was invisible to the sweep at any age and survived every
+// later run. A killed run left fourteen of them, `pnpm format:check` stayed red on files nobody
+// could find by rerunning the suite, and `pnpm format` then tidied them into silent litter. The
+// test below is what keeps this pattern and `MESSY` agreeing, because eyeballing two lists is how
+// they came apart in the first place.
+const CANARY_NAME = /^[0-9a-f]{12}\.[a-z0-9]+$/;
 
 async function runScript(script: string, target?: string): Promise<string> {
 	const args = target ? [script, target] : [script];
@@ -219,6 +226,11 @@ async function walkedDirectories(): Promise<string[]> {
  * whatever happened to match. Committed files are exempt on top of that, since no canary is ever
  * committed and the rule costs nothing.
  *
+ * `MESSY` is deliberately not one of the gates. A stray is litter from some earlier version of this
+ * file, which may have planted extensions the current one does not, and a sweep that consulted the
+ * live set would walk straight past exactly those. The name shape and the marker already say what a
+ * file is without asking what this run happens to plant.
+ *
  * Age is the fourth gate, and it is what makes two of these runs able to share a checkout. A peer's
  * canaries are live files that look exactly like strays, so anything younger than `TIMEOUT` is left
  * alone: Vitest has already failed any run that has been going longer than that, so nothing newer
@@ -240,12 +252,7 @@ async function sweepStrays(directories: string[]): Promise<void> {
 		directories.map(async (directory) => {
 			const entries = await readdir(directory, { withFileTypes: true });
 			const suspects = entries
-				.filter(
-					(entry) =>
-						entry.isFile() &&
-						CANARY_NAME.test(entry.name) &&
-						EXTENSIONS.includes(extname(entry.name)),
-				)
+				.filter((entry) => entry.isFile() && CANARY_NAME.test(entry.name))
 				.map((entry) => join(directory, entry.name))
 				.filter(uncommitted);
 
@@ -283,8 +290,12 @@ async function sweepStrays(directories: string[]): Promise<void> {
  * tree and steps around any canary whose path a script can predict. A plain file rather than a
  * directory, so a peer's canary never looks like somewhere this run should plant.
  */
+function canaryName(extension: string): string {
+	return `${randomUUID().replaceAll('-', '').slice(0, 12)}${extension}`;
+}
+
 async function plantCanary(directory: string, extension: string): Promise<string> {
-	const canary = join(directory, `${randomUUID().replaceAll('-', '').slice(0, 12)}${extension}`);
+	const canary = join(directory, canaryName(extension));
 
 	await writeFile(canary, MESSY[extension]);
 
@@ -425,6 +436,24 @@ describe('pnpm format', () => {
 		},
 		TIMEOUT,
 	);
+
+	// Planting and sweeping read two different descriptions of the same filename, and they drifted:
+	// the sweep's pattern spelled its extension `[a-z]+`, which has no digits, so `.json5` canaries
+	// were planted and then never swept. Nothing compared the two, because a human reading them saw
+	// `.ts` and `.jsonc` match and stopped there. This compares them for every extension, and it
+	// calls the real generator rather than a copy of it, so a change to either side has to face it.
+	it('can sweep every name it plants', () => {
+		for (const extension of EXTENSIONS) {
+			const name = canaryName(extension);
+
+			expect(extname(name), `extname does not round-trip ${extension}`).toBe(extension);
+			expect(CANARY_NAME.test(name), `${name} is planted but the sweep cannot see it`).toBe(true);
+		}
+
+		// An extension in both lists would be planted and simultaneously declared unformatted, which
+		// makes the coverage test above vacuous for it.
+		expect(EXTENSIONS.filter((extension) => UNFORMATTED.includes(extension))).toEqual([]);
+	});
 });
 
 describe('pnpm format:check', () => {
