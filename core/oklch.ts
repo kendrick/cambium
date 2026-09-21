@@ -96,6 +96,35 @@ export function compositeOver(backdrop: Oklch, source: Oklch, alpha: number): Ok
 	return { l: mixed.l ?? 0, c: mixed.c ?? 0, h: canonicalHue(mixed.h) };
 }
 
+/** The sRGB triple a display actually receives, each channel clamped and then rounded to a byte. */
+function toDisplayedSrgb(color: Oklch) {
+	const rgb = toRgb({ mode: 'oklch', ...color })!;
+	const byte = (channel: number | undefined) => Math.round(displayable(channel) * 255) / 255;
+
+	return { mode: 'rgb', r: byte(rgb.r), g: byte(rgb.g), b: byte(rgb.b) } as const;
+}
+
+/**
+ * WCAG contrast between two colours as a screen shows them, with both ends rounded to 8-bit sRGB
+ * first.
+ *
+ * `quantizeToSrgb` below does not do this, whatever its name suggests. That function rounds the
+ * three OKLCH channels to six decimals and floors chroma back into gamut, and never touches a byte
+ * grid. The two roundings sit about fifty times apart, so a step solved a hair over a contrast floor
+ * in OKLCH can serialize to a byte pair under it. #72 is what that cost: five ramp steps below the
+ * floor they declared, the worst by 0.0131 against a cushion of 0.0023.
+ *
+ * Both ends round. Measuring a step's byte against a full-precision background is the same defect
+ * one layer down.
+ *
+ * The bytes come from the `rgb` converter already registered above rather than from culori's
+ * `formatHex`. The two agree bit for bit across 15,660 samples spanning lightness, chroma and hue,
+ * and this way costs no new import against the first-load headroom `lib/bundle-budget.ts` defends.
+ */
+export function renderedContrast(color: Oklch, background: Oklch): number {
+	return wcagContrast(toDisplayedSrgb(color), toDisplayedSrgb(background));
+}
+
 export function isInSrgb(color: Oklch): boolean {
 	const rgb = toRgb({ mode: 'oklch', ...color });
 

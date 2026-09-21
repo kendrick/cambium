@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { BrandSeedSchema } from './brand-seed';
-import { contrastFromOklch, hueDistance, isInSrgb } from './oklch';
+import { hueDistance, isInSrgb } from './oklch';
 import { CAMBIUM_NAMESPACE } from './provenance';
 import { type Ramp, RampSchema, type RampStep } from './token-set';
 import {
@@ -10,7 +10,8 @@ import {
 	OKLCH_SCALE_ENGINE_ID,
 } from './oklch-scale-engine';
 import { BALANCED, RAMP_NAMES, type RampName, SCHEME_NAMES } from './scale-engine';
-import { testScaleEngineContract } from './scale-engine-contract';
+import { STEP_ROLES } from './step-roles';
+import { paintedContrast, testScaleEngineContract } from './scale-engine-contract';
 
 describe('createOklchScaleEngine', () => {
 	testScaleEngineContract(() => createOklchScaleEngine());
@@ -102,7 +103,7 @@ describe('createOklchScaleEngine specifics', () => {
 		if (!green.ok) return;
 
 		const ramp = green.schemes.light.brand;
-		const measured = contrastFromOklch(ramp[10]!, ramp[1]!);
+		const measured = paintedContrast(ramp[10]!, ramp[1]!);
 
 		// Only the floor is asserted. Pinning how close the solver lands would fail a legitimate
 		// retune of the curve, which is the kind of test `docs/agents/testing.md` warns against.
@@ -214,6 +215,33 @@ describe('createOklchScaleEngine across the hue circle', () => {
 				expect(ramp.filter((step) => !isInSrgb(step))).toEqual([]);
 			}
 		}
+	});
+
+	// The contract asserts this on four seeds. Four seeds are not the circle, and the byte grid is
+	// what makes the difference: its plateaus move with hue, so the steps that miss are nowhere near
+	// the hues anyone picked by hand. #72 shipped because the only check ran in the producer's units;
+	// running the consumer's units on four hues would have been the next way to miss it.
+	it('clears every declared floor in rendered 8-bit sRGB across the circle', () => {
+		const missed = sweep().flatMap(({ hue, l, c, generated }) =>
+			SCHEME_NAMES.flatMap((scheme) =>
+				RAMP_NAMES.flatMap((name) => {
+					const ramp = generated.schemes[scheme][name];
+
+					return STEP_ROLES.filter((role) => role.minWcagVsStep2 !== null)
+						.map((role) => ({
+							role,
+							measured: paintedContrast(ramp[role.step - 1]!, ramp[1]!),
+						}))
+						.filter(({ role, measured }) => measured < role.minWcagVsStep2!)
+						.map(
+							({ role, measured }) =>
+								`seed ${l}/${c}/${hue} ${scheme} ${name} step ${role.step}: ${measured.toFixed(4)} under ${role.minWcagVsStep2}`,
+						);
+				}),
+			),
+		);
+
+		expect(missed).toEqual([]);
 	});
 
 	it('keeps every derived accent clear of every status hue', () => {

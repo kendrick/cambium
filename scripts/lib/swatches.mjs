@@ -4,7 +4,7 @@ import { formatHex } from 'culori/fn';
 // ADR-0003 puts culori mode registration in one module and keeps it there. Importing the core's
 // colour module for its side effect is what makes this harness measure through the same registered
 // set the engine uses, rather than a second set that could drift out of step with it.
-import { contrastFromOklch, isInSrgb, readOklch } from '../../core/oklch.ts';
+import { contrastFromOklch, isInSrgb, readOklch, renderedContrast } from '../../core/oklch.ts';
 
 /**
  * APCA comes from chroma-js because `apca-w3` is patent-pending, restricted by field of use, and
@@ -23,20 +23,21 @@ function apcaOf(color, background) {
  * `core/step-roles.ts` states every floor against, so the same measurement doubles as the
  * evaluation harness's pass/fail check when `stepRole` is supplied.
  *
- * `wcag` and `failsContrast` are measured from `hex`, the same 8-bit sRGB string the cell paints,
- * not from `oklch`'s full-precision channels. `core/oklch-scale-engine.ts`'s FLOOR_MARGIN only
- * cushions six-decimal rounding; a step solved just inside that margin can still round to a hex
- * pair that has already dropped below the floor, and this is a harness whose entire job is
- * judging the colour a person actually sees. The full-precision figure is measured again, lazily,
- * only when `stepRole` declares a floor to compare it against (see `straddlesFloor` below) — the
- * Radix and Tailwind taste reference in `scripts/swatches.mjs` calls this with no `stepRoles` at
- * all, and a second contrast measurement nobody reads on every one of those cells would be waste.
+ * `wcag` and `failsContrast` are measured over the 8-bit sRGB pair the cell paints rather than over
+ * `oklch`'s full-precision channels, through the same `renderedContrast` the engine solves against.
+ * Sharing that function is the point. A harness whose job is judging the colour a person sees must
+ * not hold a second opinion about what that colour is, and holding one is how #72 stayed invisible
+ * from this side. The full-precision figure is measured again, lazily, only when `stepRole` declares
+ * a floor to compare it against (see `straddlesFloor` below) — the Radix and Tailwind taste
+ * reference in
+ * `scripts/swatches.mjs` calls this with no `stepRoles` at all, and a second contrast measurement
+ * nobody reads on every one of those cells would be waste.
  */
 function measureStep(step, color, background, stepRole) {
 	const oklch = readOklch(color);
+	const backgroundOklch = readOklch(background);
 	const hex = formatHex(color);
-	const backgroundHex = formatHex(background);
-	const wcag = contrastFromOklch(readOklch(hex), readOklch(backgroundHex));
+	const wcag = renderedContrast(oklch, backgroundOklch);
 
 	const floor = stepRole?.minWcagVsStep2 ?? null;
 	const failsContrast = floor != null && wcag < floor;
@@ -44,7 +45,7 @@ function measureStep(step, color, background, stepRole) {
 	// in a way no amount of looking at this one swatch reveals: the next release of culori, or a
 	// different rounding path, could tip it either way. Surfacing that is worth more than silently
 	// filing it under "fails" or "passes".
-	const exactFails = floor != null && contrastFromOklch(oklch, readOklch(background)) < floor;
+	const exactFails = floor != null && contrastFromOklch(oklch, backgroundOklch) < floor;
 	const straddlesFloor = floor != null && exactFails !== failsContrast;
 
 	return {
