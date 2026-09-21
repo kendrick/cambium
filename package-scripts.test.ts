@@ -11,12 +11,14 @@ const run = promisify(execFile);
 // This file sits at the repo root, so its own directory is the root oxfmt falls back to.
 const ROOT = import.meta.dirname;
 
-// oxfmt reports what it touched in exactly one place: `Finished in 16ms on 147 files using 14
-// threads`, on stdout. Nothing else in the output tells a one-file run from a whole-tree one.
+// oxfmt totals what it touched in exactly one place: `Finished in 16ms on 147 files using 14
+// threads`, on stdout. Under `--check` it also lists every file that needs formatting, which is
+// what the reachability assertion reads.
 const FILE_COUNT = /Finished in .+ on (\d+) files/;
 
-// Each test spawns pnpm, which pays its own startup before oxfmt runs at all. That fits inside
-// Vitest's 5s default on a warm local checkout and has no margin left on a cold or loaded one.
+// Every test spawns pnpm, which pays its own startup before oxfmt runs at all, and the first one
+// spawns it twice plus a git per level of the walk. That fits inside Vitest's 5s default on a warm
+// local checkout and has no margin left on a cold or loaded one.
 const TIMEOUT = 30_000;
 
 // Spacing alone, so the formatted result stays stable across oxfmt versions and the assertions
@@ -75,15 +77,50 @@ async function ignoredDirectories(candidates: string[]): Promise<Set<string>> {
 	}
 }
 
-/** Every place inside the repo a tree-wide write can land: the root, and each directory below it. */
-async function walkedDirectories(): Promise<string[]> {
-	const entries = await readdir(ROOT, { withFileTypes: true });
-	const candidates = entries
-		.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-		.map((entry) => join(ROOT, entry.name));
-	const ignored = await ignoredDirectories(candidates);
+/**
+ * The subdirectories of `parent`, minus `.git`. Dot-prefixed names stay in otherwise, because oxfmt
+ * walks them: a mis-formatted file under `.github` is reported like any other. `.git` has to be
+ * named here because `git check-ignore` does not report git's own directory as ignored.
+ */
+async function childDirectories(parent: string): Promise<string[]> {
+	const entries = await readdir(parent, { withFileTypes: true });
 
-	return [ROOT, ...candidates.filter((directory) => !ignored.has(directory))];
+	return entries
+		.filter((entry) => entry.isDirectory() && entry.name !== '.git')
+		.map((entry) => join(parent, entry.name));
+}
+
+/**
+ * Every place inside the repo a tree-wide write can land: the root, and every directory under it at
+ * any depth. A write scoped to a nested path, `oxfmt --write app/readers` say, rewrites everything
+ * a peer owns there and walks past anything parked at the root or one level down. Nearly half of
+ * this repo's TypeScript files sit two or more levels below the root, so depth is where the cover
+ * has to reach.
+ *
+ * Pruned on the way down rather than collected and filtered afterwards. `node_modules` alone holds
+ * thousands of directories, so a walk that reads them before asking git costs more than the rest of
+ * this suite put together. Breadth-first for the same reason the pruning exists: it asks
+ * `git check-ignore` once per level of depth instead of once per directory. That spends argv
+ * length to save process spawns, which is the right way round while a level stays tens of
+ * directories wide.
+ */
+async function walkedDirectories(): Promise<string[]> {
+	const walked = [ROOT];
+	let frontier = [ROOT];
+
+	while (frontier.length > 0) {
+		const children = (await Promise.all(frontier.map(childDirectories))).flat();
+
+		// `git check-ignore` with no paths is a usage error rather than an empty answer.
+		if (children.length === 0) break;
+
+		const ignored = await ignoredDirectories(children);
+
+		frontier = children.filter((directory) => !ignored.has(directory));
+		walked.push(...frontier);
+	}
+
+	return walked;
 }
 
 /**
@@ -111,8 +148,11 @@ describe('pnpm format', () => {
 	//
 	// One canary is only evidence about the directory holding it. A script that enumerates source
 	// directories instead of passing `.` rewrites everything a peer owns while never walking past a
-	// canary parked somewhere else, which is how an earlier version of this guard was defeated. So
-	// there is one canary in every directory oxfmt walks, each under a random name.
+	// canary parked somewhere else, which is how an earlier version of this guard was defeated. The
+	// directories a script can name go down as far as the tree does: `oxfmt --write app/readers`
+	// leaves a canary at the root and one in `app/` alike untouched while rewriting everything below
+	// it. So there is one canary in every directory oxfmt walks, at every depth, each under a random
+	// name.
 	//
 	// That leaves one way through, and it closes itself. A write can still dodge every canary by
 	// excluding `.ts` wholesale, but then `pnpm format` stops formatting the 100 TypeScript files
@@ -136,10 +176,13 @@ describe('pnpm format', () => {
 					canaries.push(await plantCanary(directory));
 				}
 
-				// Each canary counts only if the tree walk reaches it. Naming a path on the command
-				// line proves nothing, because oxfmt formats a file it is handed even when
+				// Each canary counts only if oxfmt's own tree walk reaches it. Naming a path on the
+				// command line proves nothing, because oxfmt formats a file it is handed even when
 				// `.gitignore` covers it, so an ignored canary would sit unformatted and pass for
-				// the wrong reason. Ask the walk instead: this is the one a bare write performs.
+				// the wrong reason. `format:check` runs that walk. It is a separate script string
+				// from `format`, so it settles reachability and nothing else: an unreachable canary
+				// satisfies every assertion below for free, and that is the vacuous pass being
+				// ruled out here.
 				const walk = await runScript('format:check');
 
 				for (const canary of canaries) {
@@ -182,7 +225,9 @@ describe('pnpm format:check', () => {
 	// Loose because the tree keeps growing. oxfmt defaults to the working directory on its own, so
 	// neither bare form needs a path argument to reach everything. This stands in for the same
 	// claim about bare `format`, which no test may run: a tree-wide write is the thing AGENTS.md
-	// forbids a dispatched task to do, and a test run is no better placed to do it.
+	// forbids a dispatched task to do, and a test run is no better placed to do it. The guard above
+	// does put a file in every directory, which is a different act: it creates and deletes fixtures
+	// of its own and rewrites nothing a peer owns.
 	it(
 		'still covers the tree when called bare',
 		async () => {
