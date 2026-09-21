@@ -24,6 +24,10 @@ Read before writing or changing a test: the two Vitest seams, the browser tier, 
 
 For every value a diff produces or persists, name what reads it next. Where that consumer evaluates the value outside this codebase, the assertion protecting it belongs in the consumer's units rather than ours. A value can be correct in our representation and wrong the moment a browser compositor or a later schema version evaluates it. See "Where the seam actually is" in `docs/agents/testing.md`.
 
+### Commands
+
+A dispatched task never runs a tree-wide command. Called with no path, `pnpm format` and `pnpm lint:fix` rewrite every file they match, so a worker running either one writes over files its peers still have open. On a wave whose only safety property is that no two tasks touch the same path, that is a torn read waiting to happen. Scope every command to the paths the task owns and leave the tree-wide pass to whoever dispatched the wave, once its gate has cleared. See `docs/agents/commands.md` for what each script does with a path argument.
+
 ### Code review
 
 Before calling a feature done, run the `code-review` skill over the branch since `main` and fix what holds up. Every ticket inherits the rule, so no issue body has to restate it.
