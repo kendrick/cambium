@@ -18,10 +18,15 @@ const FILE_COUNT = /Finished in .+ on (\d+) files/;
 // Vitest's 5s default on a warm local checkout and has no margin left on a cold or loaded one.
 const TIMEOUT = 30_000;
 
-// Spacing alone, so the formatted result stays stable across oxfmt versions and the assertion
-// below keeps meaning "oxfmt rewrote this file" rather than "oxfmt still indents the way it did".
+// Spacing alone, so the formatted result stays stable across oxfmt versions and the assertions
+// below keep meaning "oxfmt rewrote this file" rather than "oxfmt still indents the way it did".
 const MESSY = 'const   x   =   {a:1,  b:2};\nexport { x };\n';
 const TIDY = 'const x = { a: 1, b: 2 };\nexport { x };\n';
+
+// A real path inside the repo, deliberately not one `.gitignore` covers, because oxfmt skips what
+// git ignores. A crashed run that leaves this behind fails `pnpm format:check` on the next call,
+// which is the loud outcome; a gitignored canary would instead sit here proving nothing.
+const CANARY = join(ROOT, 'package-scripts.canary.ts');
 
 async function filesTouched(script: string, target?: string): Promise<number> {
 	const args = target ? [script, target] : [script];
@@ -53,8 +58,12 @@ async function filesTouched(script: string, target?: string): Promise<number> {
 // read package.json and grepped for a trailing `.` would pass just as happily against a runner
 // that dropped the argument on the floor.
 describe('pnpm format', () => {
-	// The target is a temp file outside the repo, because this is the writing form. Should the
-	// scoping regress, oxfmt rewrites the tree before this assertion gets a chance to fail. Every
+	// The count oxfmt prints is the producer talking about itself, and it cannot see a second write
+	// hidden behind a `&&` or a redirect earlier in the script string. What a peer loses an edit in
+	// is the working tree, so the tree is what this asserts: a mis-formatted canary inside the repo
+	// has to survive a run scoped to a temp file somewhere else.
+	//
+	// Should the scoping regress, oxfmt rewrites the tree before the canary assertion fails. Every
 	// test runs against an already-formatted tree and oxfmt is idempotent, so that costs a no-op
 	// pass rather than a lost edit.
 	it(
@@ -65,11 +74,20 @@ describe('pnpm format', () => {
 
 			try {
 				await writeFile(target, MESSY);
+				await writeFile(CANARY, MESSY);
 
 				expect(await filesTouched('format', target)).toBe(1);
 				expect(await readFile(target, 'utf8')).toBe(TIDY);
+				expect(await readFile(CANARY, 'utf8')).toBe(MESSY);
+
+				// The canary is only evidence if oxfmt would have formatted it. Scoping a run at it
+				// proves that here, so a path oxfmt silently skips fails loudly instead of sitting
+				// unformatted and passing the assertion above for the wrong reason.
+				expect(await filesTouched('format', CANARY)).toBe(1);
+				expect(await readFile(CANARY, 'utf8')).toBe(TIDY);
 			} finally {
 				await rm(dir, { recursive: true, force: true });
+				await rm(CANARY, { force: true });
 			}
 		},
 		TIMEOUT,
