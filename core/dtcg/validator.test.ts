@@ -141,8 +141,10 @@ describe('validateDtcg', () => {
 	 * Characterization, not endorsement. One bad value produces nineteen diagnostics because Ajv
 	 * reports every rejected `oneOf` branch, and four of the six distinct pointers below address
 	 * keys that are perfectly legal where they sit. Collapsing that means guessing which branch the
-	 * author intended, and a wrong guess hides a real error elsewhere, so the noise stays until #11
-	 * says what it wants.
+	 * author intended, and a wrong guess hides a real error elsewhere, so the noise stays here and
+	 * `summarizeViolations` in `report.ts` groups it beside instead. That is the call #11 made, and
+	 * it is why this test still pins nineteen rather than one: the summary reads this list, so the
+	 * list has to keep everything the summary might be wrong about.
 	 *
 	 * The exact figures are pinned on purpose. A vague assertion would let the shape drift without
 	 * anyone noticing, and these can only move when someone runs `pnpm dtcg:refresh`, which is a
