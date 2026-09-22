@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,14 +57,24 @@ function resolveUnderOut(pathname) {
 }
 
 /**
- * The only thing that answers whether a path is a file this server may open. Containment therefore
- * holds for every path opened, including the ones `findFile` derives, and not only for the path
- * that arrived on the wire.
+ * The only thing that answers whether a path is a file this server may open. `isUnderOut` alone
+ * used to be treated as that answer, but it compares strings that `path.resolve` produced without
+ * ever touching the filesystem, so a symlink planted inside `out/` (`ln -s / out/root`) passes it
+ * while pointing anywhere. Resolving the candidate with `realpath` and checking containment again
+ * against the link's target is what actually stops that: a candidate that traverses a symlink to
+ * outside `out/` now fails here even though its own path string never left `out/`.
+ *
+ * The `isFile` check has to run before `realpath`, not after: `realpath` rejects on a path that
+ * doesn't exist, and a missing candidate is not a containment failure, so checking existence first
+ * keeps that rejection out of the escape case this function exists to catch.
  */
 async function fileUnderOut(candidate) {
 	if (!isUnderOut(candidate)) return null;
+	if (!(await statOrNull(candidate))?.isFile()) return null;
 
-	return (await statOrNull(candidate))?.isFile() ? candidate : null;
+	const real = await realpath(candidate).catch(() => null);
+
+	return real !== null && isUnderOut(real) ? candidate : null;
 }
 
 /**

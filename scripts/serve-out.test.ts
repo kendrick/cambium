@@ -1,5 +1,5 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { type IncomingHttpHeaders, request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -102,9 +102,11 @@ function get(port: number, path: string, method = 'GET'): Promise<Answer> {
 describe('scripts/serve-out.mjs', () => {
 	let port: number;
 	let child: ChildProcess;
+	let exportRoot: string;
 
 	beforeAll(async () => {
-		const started = await startServer(await buildExport());
+		exportRoot = await buildExport();
+		const started = await startServer(exportRoot);
 
 		port = started.port;
 		child = started.child;
@@ -151,6 +153,57 @@ describe('scripts/serve-out.mjs', () => {
 
 		expect(answer.status).toBe(403);
 		expect(answer.body).toContain('escapes out/');
+	});
+
+	// `resolve(OUT_DIR, './root/etc/hosts')` never leaves `OUT_DIR` as a string, so containment
+	// on the wire path alone waves this through. Only following the link with `realpath` and
+	// re-checking containment against where it actually points catches it. Removes the link in
+	// `finally` so a failed assertion can't leave a live `/ -> out/root` symlink behind.
+	it('refuses a request through a symlink pointing at /', async () => {
+		const link = join(exportRoot, 'out', 'root');
+
+		await symlink('/', link);
+
+		try {
+			const answer = await get(port, '/root/etc/hosts');
+
+			expect(answer.status).toBe(404);
+		} finally {
+			await rm(link);
+		}
+	});
+
+	// The link's own path sits inside out/; its target, `../secret.txt`, is the same file the
+	// `..`-escape case above already proves the server must not serve directly.
+	it('refuses a request through a symlink pointing outside out/', async () => {
+		const link = join(exportRoot, 'out', 'leak.txt');
+
+		await symlink(join('..', 'secret.txt'), link);
+
+		try {
+			const answer = await get(port, '/leak.txt');
+
+			expect(answer.status).toBe(404);
+		} finally {
+			await rm(link);
+		}
+	});
+
+	// `out.html`, the sibling the `/`-routing test above guards, exists one directory above
+	// where this link makes `/up/out.html` appear to sit. `findFile` derives this candidate the
+	// same way it derives a direct one, so it has to clear the same realpath check.
+	it('refuses a request through a symlink pointing at the parent of out/', async () => {
+		const link = join(exportRoot, 'out', 'up');
+
+		await symlink('..', link);
+
+		try {
+			const answer = await get(port, '/up/out.html');
+
+			expect(answer.status).toBe(404);
+		} finally {
+			await rm(link);
+		}
 	});
 
 	it('answers 404 for a route with no file behind it', async () => {
