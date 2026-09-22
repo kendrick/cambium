@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/brand-record';
+import {
+	type BrandRecord,
+	type BrandVersion,
+	type ReferenceImage,
+	SCHEMA_VERSION,
+} from '../../core/brand-record';
 import type { BrandSeed } from '../../core/brand-seed';
 
 import { type RecordStore, StaleRecordWriteError } from './record-store';
@@ -91,10 +96,16 @@ async function read(store: RecordStore, id: string): Promise<BrandRecord> {
 	return record;
 }
 
-/** The commit a caller makes from whatever copy of a record it is holding. */
+/**
+ * The commit a caller makes from whatever copy of a record it is holding. `revision` moves with
+ * it: it counts commits of the whole record, not just ones that grow `versions`, so every commit
+ * this fixture produces has to carry it forward for the record it builds to describe a write a
+ * correct store would actually accept.
+ */
 function appended(record: BrandRecord, overrides: Partial<BrandVersion> = {}): BrandRecord {
 	return {
 		...record,
+		revision: record.revision + 1,
 		versions: [
 			...record.versions,
 			makeVersion({
@@ -103,6 +114,20 @@ function appended(record: BrandRecord, overrides: Partial<BrandVersion> = {}): B
 				...overrides,
 			}),
 		],
+	};
+}
+
+/**
+ * The commit a caller makes that changes only `images`, appending no version — the write #78
+ * exists to accept. `revision` is what makes it a well-formed commit rather than a no-op: unlike
+ * `versions.length`, it moves on every commit to the record, images-only ones included, which is
+ * the whole reason the field exists.
+ */
+function withAddedImage(record: BrandRecord, image: ReferenceImage): BrandRecord {
+	return {
+		...record,
+		revision: record.revision + 1,
+		images: [...record.images, image],
 	};
 }
 
@@ -220,6 +245,38 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			).rejects.toBeInstanceOf(StaleRecordWriteError);
 		});
 
+		// The metadata half of the same defect: two writers hold the same copy and each changes
+		// only `images`, so neither commit touches `versions` and a rule keyed on version count
+		// alone would wave both through, dropping the first. `revision` is what tells them apart:
+		// both start from the same number, one commit moves it forward, and the second is derived
+		// from a copy that number has already left behind.
+		it('rejects a metadata-only write derived from a copy read before another metadata write landed', async () => {
+			const record = makeRecord();
+			await store.put(record);
+
+			const readByOne = await read(store, record.id);
+			const readByAnother = await read(store, record.id);
+
+			const landed = withAddedImage(readByOne, {
+				id: REFERENCE_IMAGE_ID,
+				downscaled: 'data:image/png;base64,AA==',
+				originalHash: 'sha256:a',
+			});
+			await store.put(landed);
+
+			await expect(
+				store.put(
+					withAddedImage(readByAnother, {
+						id: 'img-2',
+						downscaled: 'data:image/png;base64,BB==',
+						originalHash: 'sha256:b',
+					}),
+				),
+			).rejects.toBeInstanceOf(StaleRecordWriteError);
+
+			expect((await read(store, record.id)).images).toEqual(landed.images);
+		});
+
 		// A caller's own copy of a record is not always what storage holds. `put` parses, and
 		// `BrandSeedSchema` canonicalises a hue of 360 to 0, so a caller that kept the object it
 		// passed in still spells that hue 360. Its next write carries that spelling in the earlier
@@ -252,7 +309,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			await store.put(record);
 
 			const landed = makeVersion({ ordinal: 2, createdAt: '2026-01-02T00:00:00.000Z' });
-			await store.put({ ...record, versions: [first, landed] });
+			await store.put({ ...record, revision: record.revision + 1, versions: [first, landed] });
 
 			const divergent: BrandRecord = {
 				...record,
@@ -306,33 +363,38 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			});
 		});
 
-		// A known limit, pinned here so that fixing it fails a test instead of going unnoticed. The
-		// rule compares version counts, and `images` carries no counter of its own, so a write that
-		// adds an image without appending a version reads as stale. #77 puts an image tag and a
-		// brand URL in the same position. #78 owns closing it, with a revision covering the whole
-		// record, which is a schema change this seam does not own.
-		it('refuses a write that changes only a field outside versions, a known limit', async () => {
-			const record = makeRecord({
-				images: [
-					{
-						id: REFERENCE_IMAGE_ID,
-						downscaled: 'data:image/png;base64,AA==',
-						originalHash: 'sha256:a',
-					},
-				],
-			});
-			await store.put(record);
+		// #67 pinned the old rule's limit here: a write that changed only `images` read as stale,
+		// because `versions.length` never moved for it. #78 closes that with `revision`, which
+		// counts every commit to the record rather than only the ones that grow the version
+		// history, so a metadata-only write finally has a path through this seam.
+		//
+		// Checked at every version count including zero, because an empty history is the case a
+		// rule keyed on `versions.length` gets most wrong: there is nothing to compare a change
+		// against, so nothing here would catch a regression that quietly brought the old limit
+		// back for a record that has never been generated yet.
+		it.each([0, 1, 2])(
+			'stores a write that changes only images, appending no version (%i versions already stored)',
+			async (versionCount) => {
+				const versions = Array.from({ length: versionCount }, (_, index) =>
+					makeVersion({
+						ordinal: index + 1,
+						createdAt: `2026-01-0${index + 1}T00:00:00.000Z`,
+					}),
+				);
+				const record = makeRecord({ versions });
+				await store.put(record);
 
-			const withAnotherImage: BrandRecord = {
-				...record,
-				images: [
-					...record.images,
-					{ id: 'img-2', downscaled: 'data:image/png;base64,BB==', originalHash: 'sha256:b' },
-				],
-			};
+				const withImage = withAddedImage(record, {
+					id: REFERENCE_IMAGE_ID,
+					downscaled: 'data:image/png;base64,AA==',
+					originalHash: 'sha256:a',
+				});
 
-			await expect(store.put(withAnotherImage)).rejects.toBeInstanceOf(StaleRecordWriteError);
-		});
+				await expect(store.put(withImage)).resolves.toMatchObject({ images: withImage.images });
+				expect((await read(store, record.id)).versions).toEqual(versions);
+				expect((await read(store, record.id)).images).toEqual(withImage.images);
+			},
+		);
 
 		// #21's first attempt at this rule keyed on record id plus version count and refused a
 		// record deleted and recreated under the same id, forever: a shorter history under a
@@ -453,7 +515,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 				createdAt: '2026-01-02T00:00:00.000Z',
 				interpretation: 'expressive',
 			});
-			await store.put({ ...record, versions: [first, second] });
+			await store.put({ ...record, revision: record.revision + 1, versions: [first, second] });
 
 			expect((await store.get(record.id))?.versions).toEqual([first, second]);
 		});
