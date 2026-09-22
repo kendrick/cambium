@@ -37,9 +37,12 @@ import type { BrandRecord } from '../../core/brand-record';
  * record of what was generated at one moment, so editing one rewrites history a later version may
  * cite.
  *
- * Restoring an archive over a record that still exists rejects like any other write off a copy
- * storage never handed out. The archive carries the revision its own history reached, which is not
- * the one after the revision storage holds. The recovery is `delete` and then `put`.
+ * Restoring an archive over a record that still exists gets no special handling here. `put` judges
+ * an archive as it judges any other write, so it accepts one whose revision is the successor of the
+ * stored revision and whose versions extend the stored history, storing it over what is there.
+ * Nothing asks whether the two records share a past. An archive further ahead than that, or one
+ * carrying a different history, rejects. Restore belongs to #15 and #29, and whether to keep that
+ * behaviour or force `delete` and then `put` instead is theirs to settle.
  *
  * `put` resolves with the record as stored, after parsing. `BrandSeedSchema` canonicalises values
  * that have two spellings — a hue committed as 360 is stored as 0 — so a caller that adopts the
@@ -67,9 +70,14 @@ export type RecordStore = {
  * Whether `incoming` follows `stored`, which is what "derived from the record as it stands" means,
  * and the only thing `put` accepts.
  *
- * The revision has to be the stored one's successor rather than merely ahead of it. A writer that
- * read revision 3 and committed twice without writing back arrives holding 5 while storage holds
- * 4. That copy never saw the commit that landed, and `> stored.revision` accepts it anyway.
+ * The revision has to be the stored one's successor rather than merely ahead of it. The successor
+ * test and a bare `> stored.revision` part company over a copy that runs more than one ahead: a
+ * writer that read revision 1 and committed twice without writing back arrives holding 3 while
+ * storage still holds 1. That copy's history can extend the stored history cleanly, so the history
+ * rule below has nothing to say about it and `>` takes the write. Storage is the only authority on
+ * what the next revision is, and every write it accepts moves the number by one. A copy that jumps
+ * the count files commits storage never took, and `revision` stops counting the writes the record
+ * actually holds. The recovery is the one every stale copy gets: re-read and commit again.
  *
  * Equal revisions are the case worth spelling out, because accepting them looks harmless while the
  * history check is still in place. Two writers read revision 1. One adds an image and commits 2,
@@ -86,6 +94,10 @@ export type RecordStore = {
  * drops `v2a`.
  * `BrandRecordSchema` forces ordinals to start at 1 and increase with no gaps, so a longer history
  * always looks well formed and the ordinals cannot tell these two apart.
+ *
+ * A history shorter than the stored one needs no check of its own. Slicing it to the stored length
+ * yields the whole of that history back, and two JSON arrays of different lengths never serialise
+ * alike, so the comparison below already refuses it.
  *
  * Compared by serialisation, which is sound only because of what `BrandRecordSchema` refuses.
  * Nothing in a parsed record is optional, so no key holds `undefined` for `JSON.stringify` to drop.
@@ -116,7 +128,6 @@ export type RecordStore = {
 export function followsStoredRecord(stored: BrandRecord, incoming: BrandRecord): boolean {
 	return (
 		incoming.revision === stored.revision + 1 &&
-		incoming.versions.length >= stored.versions.length &&
 		JSON.stringify(stored.versions) ===
 			JSON.stringify(incoming.versions.slice(0, stored.versions.length))
 	);
@@ -126,8 +137,9 @@ export function followsStoredRecord(stored: BrandRecord, incoming: BrandRecord):
  * Thrown when a `put` arrives from a copy storage has already moved past. Either the incoming
  * revision is not the one after the stored record's, or the history the write brings is not the
  * stored history continued. The version counts this error carries are context rather than the test
- * the write failed, and they are equal whenever the losing write changed no version. `kind`
- * follows the same
+ * the write failed, and they measure neither that test nor how far behind the losing copy is. Two
+ * writers that each added only an image produce equal counts. A loser that appended no version
+ * behind a winner that appended one produces 2 against 1. `kind` follows the same
  * discriminated-error convention as `StorageQuotaExceededError` and the core's `SeedParseError`,
  * so a caller branches on a field rather than on a message. The recovery is always the same—re-read
  * the record and commit again—and a caller can only choose it if it can tell this apart from a

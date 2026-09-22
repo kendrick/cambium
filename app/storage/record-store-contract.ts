@@ -245,6 +245,38 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			).rejects.toBeInstanceOf(StaleRecordWriteError);
 		});
 
+		// The successor rule, in the one shape that tells `=== stored.revision + 1` apart from
+		// `> stored.revision`: a copy running more than one ahead. This writer read revision 1 and
+		// committed twice without writing back, so it arrives holding 3 against a stored 1 while its
+		// history extends the stored history cleanly. The history rule has nothing to refuse there,
+		// which leaves the revision arithmetic as the only thing that can. A store that checks only
+		// that the revision is ahead accepts the write and files two commits storage never saw.
+		it('rejects a write whose revision runs ahead of the stored one instead of following it', async () => {
+			const first = makeVersion({ ordinal: 1, createdAt: '2026-01-01T00:00:00.000Z' });
+			const record = makeRecord({ versions: [first] });
+			await store.put(record);
+
+			const committedTwiceOffline: BrandRecord = {
+				...record,
+				revision: record.revision + 2,
+				versions: [
+					first,
+					makeVersion({ ordinal: 2, createdAt: '2026-01-02T00:00:00.000Z' }),
+					makeVersion({
+						ordinal: 3,
+						createdAt: '2026-01-03T00:00:00.000Z',
+						interpretation: 'expressive',
+					}),
+				],
+			};
+
+			await expect(store.put(committedTwiceOffline)).rejects.toBeInstanceOf(StaleRecordWriteError);
+
+			const stillStored = await read(store, record.id);
+			expect(stillStored.versions).toEqual([first]);
+			expect(stillStored.revision).toBe(record.revision);
+		});
+
 		// The metadata half of the same defect: two writers hold the same copy and each changes
 		// only `images`, so neither commit touches `versions` and a rule keyed on version count
 		// alone would wave both through, dropping the first. `revision` is what tells them apart:
@@ -303,6 +335,11 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		// arrives holding three versions while storage holds two, so its history is longer and
 		// still derived from a copy that never saw the version that landed. The ordinals are
 		// well formed either way, which is exactly why a count cannot tell the two apart.
+		//
+		// The revision this write carries is the stored one's successor, so the revision rule
+		// passes it and #67's history rule is what has to refuse it. A fixture arriving a revision
+		// behind would reject before the two histories were compared at all, and could not tell a
+		// store that dropped the comparison from one that kept it.
 		it('rejects a longer history that diverges from the stored one', async () => {
 			const first = makeVersion({ ordinal: 1, createdAt: '2026-01-01T00:00:00.000Z' });
 			const record = makeRecord({ versions: [first] });
@@ -313,6 +350,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 
 			const divergent: BrandRecord = {
 				...record,
+				revision: record.revision + 2,
 				versions: [
 					first,
 					makeVersion({
@@ -333,15 +371,21 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			expect((await read(store, record.id)).versions).toEqual([first, landed]);
 		});
 
-		// The shorter-history half. A write that drops versions is as lossy as one that recounts an
-		// ordinal, and a caller that arrives with less than storage holds is behind either way.
+		// The shorter-history half. A write that drops a version is as lossy as one that recounts an
+		// ordinal, and losing a version refuses it whatever else the write gets right.
+		//
+		// The revision is the stored one's successor here for the reason the divergent case above
+		// gives: a caller still holding the old number rejects on arithmetic alone, which leaves
+		// #67's rule unmeasured. The write below is a well-formed next commit that lost a version.
 		it('rejects a write whose history is shorter than the stored one', async () => {
 			const record = makeRecord();
 			await store.put(record);
 			const committed = appended(record);
 			await store.put(committed);
 
-			await expect(store.put(record)).rejects.toBeInstanceOf(StaleRecordWriteError);
+			const shortened: BrandRecord = { ...record, revision: committed.revision + 1 };
+
+			await expect(store.put(shortened)).rejects.toBeInstanceOf(StaleRecordWriteError);
 
 			expect((await read(store, record.id)).versions).toEqual(committed.versions);
 		});

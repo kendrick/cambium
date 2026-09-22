@@ -30,9 +30,11 @@ import { TokenSetSchema } from './token-set';
  * 7 is #78's `revision` on `BrandRecordSchema`, required. The change is one key on the record
  * rather than a change inside every token. Without this bump a version-6 archive fails on that
  * one missing key, which reads like any malformed record; with it the archive fails on the
- * version and says why. Backfilling a revision would parse, but none is offered, because the
- * number claims how many times a record has been committed and no version-6 archive records
- * that. #77 bumps for its own shape change and takes 8.
+ * version and says why. Backfilling a revision would parse, and none is offered because no brand
+ * is stored anywhere yet. No user holds data, so there is nothing to migrate and a shim would be
+ * written for no record at all. The archive is no way around that either. `get` and `list` both
+ * parse through `BrandRecordSchema`, so a record that fails the version check throws on the way out
+ * and can never be exported in the first place. #77 bumps for its own shape change and takes 8.
  */
 export const SCHEMA_VERSION = 7;
 
