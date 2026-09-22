@@ -28,6 +28,22 @@ The shadow defect is worth walking through. It shipped invisible four times, and
 
 The gates already running could not reach that class. The Spec axis of `code-review` compares a diff against its spec, and the spec speaks our language too, so "shadow tinted by the surface" passed with an invisible shadow. The Standards axis reads the source for documented violations and design smells, and never leaves the source to ask what a consumer makes of the output. Test-first only guarantees that the test came first, and says nothing about whose units it measures. An outside reviewer with no stake in our intentions found all five, after three internal passes had missed them. So the check also sits in `AGENTS.md`, which the Standards axis reads as a repo standards source. #76 has the full post-mortem.
 
+## Reaching a branch is not covering it
+
+The coverage minimums below say which behaviors a fixture has to reach, without saying whether reaching one proves anything. A fixture can run a branch while the right answer and a wrong one come out identical.
+
+#79 is the case. A shadow with no stated `shadowCharacter` takes its provenance from the page surface rather than naming a seed field outright, because that surface traces to `neutralTemperature` when the seed stated one and to `keyColors` when it did not. The code named `keyColors` outright, and it stayed wrong through five review rounds. Both arms of the branch ran the whole time: `STATED_SEED` states a shadow character and takes the stated arm, `KEYLESS_SEED` states none and takes the fallback. `KEYLESS_SEED` also leaves `neutralTemperature` null, so its surface traces to `keyColors` as well, and inheriting that field produces the same payload as hard-coding it. `KEYLESS_SEED` reached the broken line and had no way to fail on it.
+
+A coverage tool reports that a line ran. It cannot report whether the test could have failed there. Those are different measurements, and branch coverage reports only the first.
+
+Cover each branch in a configuration where a wrong answer differs from a right one. A fixture that reaches a branch and cannot tell its outcomes apart has not covered it.
+
+Verify that with a mutation: break the branch, then confirm a test fails. Swapping `inheritedFrom(surface.provenance, …)` back to `derived('keyColors', …)` in `core/shadow-scale.ts` and running `pnpm test` leaves 1128 of 1131 tests passing, and all three failures arrived with the fix in #79. One of them is the `it.each` in `core/shadow-scale.test.ts` whose `keyColors` leg passes against the broken code while its `neutralTemperature` leg fails—one parameterized test, two legs, one of which can tell right from wrong. That run takes seconds and settles what those five review rounds did not, because a fixture that cannot fail looks exactly like one that can.
+
+`MIXED_SEED` in `core/provenance.test.ts` is the worked example in the tree: the one seed shape that states a neutral temperature and no shadow character, so the surface it builds traces somewhere the hard-coded answer cannot reach. Its docblock carries the rest of the story.
+
+The criterion bites hardest where fixtures are expensive to change and where the output is a classification rather than a number. #47 and #48 design the fixtures the whole browser tier runs against. Any ticket producing a derived classification—provenance, a contrast verdict, a role assignment—has the shadow's shape: two rules can agree on every input a fixture happens to carry, and only a fixture chosen to separate them says which rule is running.
+
 ## Seam 1: the pure core
 
 Pure TypeScript, no DOM, no network, no storage:
@@ -49,6 +65,8 @@ Coverage here should include, at minimum:
 - each export adapter produces a document that parses and contains the expected semantic keys
 - canonical DTCG validates against the published DTCG JSON Schema
 - a serialize-deserialize round trip is lossless
+
+Reaching each of those is the weaker half of the job. Choose fixtures that also satisfy the criterion above, so that a wrong implementation of any minimum changes what that minimum's consumer reports. Which consumer that is differs from bullet to bullet, and "Where the seam actually is" is how to find it. The token set is the output for some of these and the input to others, and where it is the input a broken implementation leaves it byte-identical while the document it emitted is wrong.
 
 Two patterns are worth borrowing from unbranded-ds, the only prior art the issue names: validate a generated baseline by regenerate-and-diff, and enforce declared contrast pairs at build time.
 
