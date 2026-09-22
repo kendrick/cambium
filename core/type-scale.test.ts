@@ -30,9 +30,18 @@ describe('typeScale', () => {
 	});
 
 	/**
-	 * The acceptance criterion, asserted at full precision rather than within a tolerance. Nothing
-	 * rounds, so the ratio between adjacent steps is the ratio the seed measured and not an
-	 * approximation of it. Rounding here is what would make this assertion flaky.
+	 * Issue #7's acceptance criterion, asserted within a tolerance because the arithmetic needs one.
+	 *
+	 * `**` rounds to the nearest double, so the stored steps are rounded approximations of the exact
+	 * powers at every ratio here. Dividing adjacent steps cancels that rounding at five of the six
+	 * ratios and returns the ratio exactly. At 1.2 the cancellation fails: `3xl`/`2xl` and
+	 * `4xl`/`3xl` come back one ulp either side of 1.2, so `toBe` would fail that leg and no other.
+	 * Most of the gap is already in the two steps before the division runs, and the division adds
+	 * the rest.
+	 *
+	 * Precision 10 sets the tolerance at 5e-11: wide enough for that ulp, and narrow enough that
+	 * rounding every step to ten decimal places already fails the 1.5 leg. `typeScale` rounds
+	 * nothing today, and this assertion is what would notice if that changed.
 	 */
 	it.each([1.067, 1.125, 1.2, 1.25, 1.333, 1.5])(
 		'follows a ratio of %f across every step',
