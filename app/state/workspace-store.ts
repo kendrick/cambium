@@ -9,7 +9,7 @@ import type { RecordStore } from '../storage/record-store';
 export type Interpretation = BrandVersion['interpretation'];
 
 /**
- * Faithful and Expressive have no numbers yet—`core/scale-engine.ts` ships Balanced alone and
+ * Faithful and Expressive have no numbers yet—`core/interpretation.ts` ships Balanced alone and
  * says so, because #37 is where the other two get their meaning. Pointing all three at Balanced
  * keeps the selection real where it matters (a committed version records which preset produced
  * it) without inventing a preset's definition out here, a long way from the engine that has to
