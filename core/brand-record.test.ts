@@ -45,6 +45,7 @@ const version = {
 const record = {
 	id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
 	schemaVersion: SCHEMA_VERSION,
+	revision: 1,
 	images: [{ id: 'img-1', downscaled: 'data:image/webp;base64,AA', originalHash: 'sha256:abc' }],
 	versions: [version],
 };
@@ -264,5 +265,36 @@ describe('BrandRecordSchema version ordinals', () => {
 		const result = BrandRecordSchema.safeParse({ ...record, versions: [first, second] });
 
 		expect(result.success).toBe(false);
+	});
+});
+
+/**
+ * `versions.length` counts the history and nothing else, so a write that adds a reference image
+ * and no version leaves that count where it was. A staleness rule reading that count alone
+ * cannot tell such a write from one sent by a copy that never saw the last commit. That is how
+ * #78 left a saved brand unable to gain an image. `revision` is the counter that moves for those
+ * writes too.
+ */
+describe('BrandRecordSchema revision', () => {
+	it('requires a record to carry one', () => {
+		const { revision: _dropped, ...without } = record;
+
+		expect(BrandRecordSchema.safeParse(without).success).toBe(false);
+	});
+
+	// A record that exists has been committed at least once, so 0 is as wrong as -1, and no write
+	// lands half of one.
+	it.each([0, -1, 1.5])('rejects %s, which is not a count of commits', (revision) => {
+		expect(BrandRecordSchema.safeParse({ ...record, revision }).success).toBe(false);
+	});
+
+	// A record-wide counter and `versions.length` disagree here, which is what makes the fixture
+	// worth running rather than merely reaching the field: a brand saved before its first
+	// generation and then given two more images has three commits and no versions at all. A rule
+	// tying the two together would reject it.
+	it('accepts a revision that has run ahead of the version count', () => {
+		const result = BrandRecordSchema.safeParse({ ...record, revision: 3, versions: [] });
+
+		expect(result.success).toBe(true);
 	});
 });

@@ -26,8 +26,15 @@ import { TokenSetSchema } from './token-set';
  * derivation path, and a stored set holds neither, so backfilling one would be inventing the very
  * provenance the field exists to record. `app/storage/indexed-db-record-store.ts` throws on the
  * mismatch and the export archive stays the migration path.
+ *
+ * 7 is #78's `revision` on `BrandRecordSchema`, required. The change is one key on the record
+ * rather than a change inside every token. Without this bump a version-6 archive fails on that
+ * one missing key, which reads like any malformed record; with it the archive fails on the
+ * version and says why. Backfilling a revision would parse, but none is offered, because the
+ * number claims how many times a record has been committed and no version-6 archive records
+ * that. #77 bumps for its own shape change and takes 8.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /**
  * Only the downscaled image actually sent to the model is stored, plus a hash of the
@@ -87,6 +94,19 @@ export const BrandVersionSchema = z.strictObject({
  * current value. The order is enforced because callers read the last entry as current, and an
  * archive that arrives newest-first would hand them an older result without erroring.
  *
+ * `revision` counts commits of the whole record. `versions.length` cannot do that job: a write
+ * that adds a reference image appends no version, so the count stands still while the record
+ * changes, and storage reads an unchanged count as a write from a stale copy. #78 is where that
+ * bites: a saved brand that can never gain a second reference image. Two writers editing the
+ * same copy read the same revision, so the second to commit arrives holding a number storage has
+ * already moved past.
+ *
+ * `revision` starts at 1, matching `ordinal` above rather than counting from 0, so the third
+ * commit is revision 3. Nothing here ties it to `versions.length`, because a record can gain
+ * commits and no version at all. The schema bounds it to a positive integer and no further.
+ * Whether an incoming revision follows the last committed one is a question only storage can
+ * answer, and `RecordStore.put` holds that check.
+ *
  * Seed provenance is checked against the images the record actually holds. An id pointing at
  * no image is provenance that cannot be followed, which is worse than none, because it still
  * reads as evidence.
@@ -95,6 +115,7 @@ export const BrandRecordSchema = z
 	.strictObject({
 		id: z.uuid(),
 		schemaVersion: z.literal(SCHEMA_VERSION),
+		revision: z.number().int().positive(),
 		images: z.array(ReferenceImageSchema),
 		versions: z.array(BrandVersionSchema),
 	})
