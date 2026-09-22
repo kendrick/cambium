@@ -1,7 +1,5 @@
 import { type Page, expect, test as base } from '@playwright/test';
 
-import { DATABASE_NAME } from '../app/storage/indexed-db-record-store';
-
 /**
  * A path no route and no file uses, fulfilled from inside the browser rather than fetched.
  *
@@ -24,9 +22,10 @@ const BLANK_ORIGIN_GLOB = `**${BLANK_ORIGIN_PATH}`;
  * Deletes every IndexedDB database the origin holds.
  *
  * Enumerating with `indexedDB.databases()` keeps the wipe independent of the app's own naming, so
- * a store added later is cleared without touching this file. `DATABASE_NAME` is still deleted by
- * name, because Firefox does not implement the enumeration call, and a fixture that silently wipes
- * nothing is worse than one that fails.
+ * a store added later is cleared without touching this file. The call is made outright rather than
+ * feature-detected: `playwright.config.ts` declares one project, `chromium`, where it always
+ * exists. A browser without it throws here, which is the answer worth having, because a fixture
+ * that silently wipes nothing is worse than one that fails.
  *
  * A delete blocked by an open connection neither succeeds nor fails on its own, so this turns the
  * blocked event into a rejection. Waiting the block out would stall the scenario until the test
@@ -44,16 +43,13 @@ async function wipeIndexedDb(page: Page): Promise<void> {
 		await page.unroute(BLANK_ORIGIN_GLOB);
 	}
 
-	await page.evaluate(async (knownDatabase) => {
-		const enumerated =
-			typeof indexedDB.databases === 'function'
-				? (await indexedDB.databases())
-						.map((info) => info.name)
-						.filter((name): name is string => typeof name === 'string')
-				: [];
+	await page.evaluate(async () => {
+		const enumerated = (await indexedDB.databases())
+			.map((info) => info.name)
+			.filter((name): name is string => typeof name === 'string');
 
 		await Promise.all(
-			[...new Set([...enumerated, knownDatabase])].map(
+			enumerated.map(
 				(name) =>
 					new Promise<void>((resolve, reject) => {
 						const request = indexedDB.deleteDatabase(name);
@@ -68,7 +64,7 @@ async function wipeIndexedDb(page: Page): Promise<void> {
 					}),
 			),
 		);
-	}, DATABASE_NAME);
+	});
 }
 
 /**

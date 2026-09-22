@@ -14,7 +14,7 @@ export default defineConfig({
 	forbidOnly: Boolean(process.env.CI),
 	// Named rather than left to the default, which differs between CI and a terminal. `list` writes
 	// no report directory, and traces, videos and screenshots stay off. A failing run still writes
-	// its error context under `test-results/`, which `.gitignore` does not cover yet.
+	// its error context under `test-results/`, which `.gitignore` covers.
 	reporter: 'list',
 	use: { baseURL: BASE_URL },
 	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],

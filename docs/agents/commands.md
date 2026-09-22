@@ -59,6 +59,10 @@ pnpm exec playwright install chromium
 
 `format` and `lint:fix` write across the whole tree when called bare, and both take a path, so give them one. `dtcg:build` and `dtcg:refresh` overwrite committed files, `dtcg:refresh` from the network, and neither belongs inside a task that did not ask for it. `evaluate` writes `swatches/seed.html`, which git ignores.
 
+`test:e2e` writes `test-results/` at the repo root. That is Playwright's `outputDir`, and the `list` reporter does not switch it off: `.last-run.json` lands on every run, and an `error-context.md` lands under a per-scenario directory for every scenario that fails. A fully green run writes both, because `e2e/console-gate.spec.ts` is marked `test.fail()` and a scenario that fails on purpose still leaves its error context behind.
+
+`.gitignore` covers that directory and has to keep covering it. oxfmt reads `.gitignore`, `verify` chains `format:check`, and `.last-run.json` is JSON that oxfmt formats. Drop the rule and the next `pnpm format:check` after any browser run reports `test-results/.last-run.json (13ms)` and exits 1, taking `pnpm verify` down with it over a file no diff produced. `error-context.md` is quieter: `.oxfmtrc.json` ignores markdown, so it never reaches `format:check` and shows up only as untracked noise in `git status`.
+
 ## Working forms worth memorising
 
 ```

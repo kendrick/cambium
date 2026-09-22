@@ -42,15 +42,18 @@ test.describe.configure({ mode: 'serial' });
  *
  * A missing database counts as zero rather than an error: `cleanIndexedDb` in `./fixtures.ts`
  * deletes the database outright rather than leaving an empty store behind, so "after the wipe" is
- * exactly this case.
+ * exactly this case. The existence check has to come before `open`, because `open` creates a
+ * database that is not there. Counting without it would leave an empty database behind on an
+ * origin this function is only supposed to read.
+ *
+ * `indexedDB.databases()` is called outright rather than feature-detected, for the reason
+ * `wipeIndexedDb` in `./fixtures.ts` gives: one Chromium project, and a browser without the call
+ * should fail loudly rather than answer from a fallback nobody exercises.
  */
 async function countStoredRecords(page: Page): Promise<number> {
 	return page.evaluate(
 		async ([databaseName, storeName]) => {
-			const known =
-				typeof indexedDB.databases === 'function'
-					? (await indexedDB.databases()).some((info) => info.name === databaseName)
-					: true; // This suite runs Chromium only, where `databases()` always exists.
+			const known = (await indexedDB.databases()).some((info) => info.name === databaseName);
 
 			if (!known) return 0;
 

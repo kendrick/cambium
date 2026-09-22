@@ -37,18 +37,34 @@ async function statOrNull(path) {
 	}
 }
 
+function isUnderOut(candidate) {
+	return candidate === OUT_DIR || candidate.startsWith(OUT_DIR + sep);
+}
+
 /**
  * Maps a request path to its place under `out/`, or to null when the path escapes `out/`. The
  * check runs before any filesystem call because a `..` chain arrives intact. A browser normalises
  * the chain away, nothing else on the wire has to, and node's HTTP server hands over
  * `request.url` as it was sent.
+ *
+ * Clearing the wire path is half the job. `findFile` derives the paths it opens from this answer,
+ * and a derived path can leave `out/` on its own, so `findFile` re-checks each one.
  */
 function resolveUnderOut(pathname) {
 	const candidate = resolve(OUT_DIR, `.${pathname}`);
 
-	if (candidate !== OUT_DIR && !candidate.startsWith(OUT_DIR + sep)) return null;
+	return isUnderOut(candidate) ? candidate : null;
+}
 
-	return candidate;
+/**
+ * The only thing that answers whether a path is a file this server may open. Containment therefore
+ * holds for every path opened, including the ones `findFile` derives, and not only for the path
+ * that arrived on the wire.
+ */
+async function fileUnderOut(candidate) {
+	if (!isUnderOut(candidate)) return null;
+
+	return (await statOrNull(candidate))?.isFile() ? candidate : null;
 }
 
 /**
@@ -56,16 +72,20 @@ function resolveUnderOut(pathname) {
  * while `/_not-found` is `out/_not-found.html` beside a directory of the same name that holds
  * only RSC payloads. Checking the sibling `.html` before the directory index keeps the second
  * case from 404ing on a directory that has no `index.html`.
+ *
+ * Each candidate goes back through `fileUnderOut` because that sibling can sit outside `out/`.
+ * `/` resolves to `out/` itself, which clears containment by definition, and the sibling of `out/`
+ * is `out.html` in the repo root. The sibling is checked first, so nothing else catches it.
  */
 async function findFile(target) {
-	if ((await statOrNull(target))?.isFile()) return target;
+	const direct = await fileUnderOut(target);
+	if (direct) return direct;
 	if (extname(target)) return null;
 
-	const asHtml = `${target}.html`;
-	if ((await statOrNull(asHtml))?.isFile()) return asHtml;
+	const sibling = await fileUnderOut(`${target}.html`);
+	if (sibling) return sibling;
 
-	const asIndex = resolve(target, 'index.html');
-	return (await statOrNull(asIndex))?.isFile() ? asIndex : null;
+	return fileUnderOut(resolve(target, 'index.html'));
 }
 
 function send(response, status, message) {
@@ -122,8 +142,13 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
 	process.exit(1);
 }
 
-createServer((request, response) => {
+const server = createServer((request, response) => {
 	handle(request, response).catch(() => send(response, 500, 'internal error'));
-}).listen(port, '127.0.0.1', () => {
-	console.log(`serving ${OUT_DIR} at http://127.0.0.1:${port}`);
+});
+
+// Logs the port the socket bound. Port 0 means "any free port", so echoing the requested number
+// back would leave the real one only inside the process. `scripts/serve-out.test.ts` asks for 0
+// and reads the answer off this line.
+server.listen(port, '127.0.0.1', () => {
+	console.log(`serving ${OUT_DIR} at http://127.0.0.1:${server.address().port}`);
 });
