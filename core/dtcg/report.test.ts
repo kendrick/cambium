@@ -68,6 +68,19 @@ const badHue = {
 	color: { brand: oklchToken([0.62, 0.19, 360]) },
 };
 
+/** Passes `validateDtcg` as written, so every case below fails only where the test broke it. */
+const validColour = { color: { brand: oklchToken([0.62, 0.19, 259.8]) } };
+
+/**
+ * Resolves each row's pointer against the document, which is how every case here names what the
+ * summary found without restating the summary's own grouping rule.
+ */
+function summarizedValues(tokenDocument: unknown): unknown[] {
+	return summarizeViolations(violationsOf(tokenDocument)).map((summary) =>
+		resolvePointer(tokenDocument, summary.pointer),
+	);
+}
+
 describe('summarizeViolations', () => {
 	/**
 	 * The case #52 deferred and #11 settled. Nineteen diagnostics across six pointers, one of which
@@ -139,6 +152,14 @@ describe('summarizeViolations', () => {
 			'/color/primitive/brand/1/$value/hex',
 			'#aabbccdd',
 		],
+		[
+			'a property the schema forbids inside a colour value',
+			validColour,
+			'/color/brand/$value/foo',
+			'illegal',
+		],
+		['a property the schema forbids on a group', validColour, '/color/zzz', 'illegal'],
+		['a property the schema forbids on a token', validColour, '/color/brand/zzz', 'illegal'],
 	];
 
 	it.each(singleBreaks)('points at %s', (_name, tokenDocument, pointer, planted) => {
@@ -164,11 +185,87 @@ describe('summarizeViolations', () => {
 			'em',
 		);
 
-		const resolved = summarizeViolations(violationsOf(damaged)).map((summary) =>
-			resolvePointer(damaged, summary.pointer),
+		expect(new Set(summarizedValues(damaged))).toEqual(new Set([360, 'em']));
+	});
+
+	/**
+	 * An illegal property sitting beside a deeper invalid field is the case that broke an earlier
+	 * version of this function, and it is the one the whole design has to survive. Ajv reports the
+	 * illegal key against the object that holds it, so once `validate.ts` joins the key on, the
+	 * complaint looks like an ancestor of the hue failure and gets absorbed into it. The document
+	 * has two independent problems and the summary said one.
+	 *
+	 * Silently losing a true violation is the failure #52 refused, so it is worse here than the
+	 * noise #52 was willing to keep. Both values have to be named.
+	 */
+	it('names an illegal property beside a deeper invalid field', () => {
+		const damaged = breakAt(
+			breakAt(validColour, '/color/brand/$value/components/2', 360),
+			'/color/brand/$value/foo',
+			'illegal',
 		);
 
-		expect(new Set(resolved)).toEqual(new Set([360, 'em']));
+		expect(new Set(summarizedValues(damaged))).toEqual(new Set([360, 'illegal']));
+	});
+
+	/**
+	 * The property a summary has to have if a caller is going to work through a document with it:
+	 * fix what a row names, validate again, and whatever is left is still named. A summary that
+	 * absorbs one problem into another passes the first round and strands the caller on the second,
+	 * because the document stays invalid for something no row ever mentioned.
+	 */
+	it('still names the illegal property once the hue it sat beside is fixed', () => {
+		const damaged = breakAt(
+			breakAt(validColour, '/color/brand/$value/components/2', 360),
+			'/color/brand/$value/foo',
+			'illegal',
+		);
+
+		const hueRow = summarizeViolations(violationsOf(damaged)).find(
+			(summary) => resolvePointer(damaged, summary.pointer) === 360,
+		);
+		const repaired = breakAt(damaged, hueRow?.pointer ?? '', 259.8);
+
+		expect(summarizedValues(repaired)).toEqual(['illegal']);
+	});
+
+	/**
+	 * Two illegal properties on one object share every ancestor they have, so nothing but the keys
+	 * themselves tells them apart.
+	 */
+	it('gives each illegal property on one value its own row', () => {
+		const damaged = breakAt(
+			breakAt(validColour, '/color/brand/$value/foo', 'first'),
+			'/color/brand/$value/bar',
+			'second',
+		);
+
+		expect(new Set(summarizedValues(damaged))).toEqual(new Set(['first', 'second']));
+	});
+
+	/**
+	 * An illegal key at the root folds to the empty pointer, which is an ancestor of every other
+	 * diagnostic in the document. Absorbing it there would hide it behind whichever token happens
+	 * to be broken as well.
+	 */
+	it('keeps a stray root property out of a broken token elsewhere in the document', () => {
+		const damaged = breakAt(
+			breakAt(badHue, '/$foo', 'stray'),
+			'/color/brand/$value/components/2',
+			360,
+		);
+
+		expect(new Set(summarizedValues(damaged))).toEqual(new Set([360, 'stray']));
+	});
+
+	/**
+	 * The illegal key is the only thing the value contains, so the object it sits in also fails for
+	 * the properties it is missing. The key still has to be named rather than absorbed into those.
+	 */
+	it('names an illegal property that is all the value contains', () => {
+		const damaged = breakAt(validColour, '/color/brand/$value', { foo: 'illegal' });
+
+		expect(summarizedValues(damaged)).toContain('illegal');
 	});
 
 	/**

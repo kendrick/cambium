@@ -24,7 +24,7 @@ export type DtcgViolationSummary = {
 /**
  * Ajv's wording for the `additionalProperties` keyword, matched exactly rather than loosely
  * because `validate.ts` joins the offending key onto that one diagnostic's pointer and no other.
- * The message is the only surviving trace of the keyword — `DtcgViolation` carries no `keyword`
+ * The message is the only surviving trace of the keyword. `DtcgViolation` carries no `keyword`
  * field, and widening it to carry one would change what `validateDtcg` returns.
  *
  * If Ajv ever rewords the message, the fold below stops firing and `report.test.ts`'s bad-hue case
@@ -85,18 +85,82 @@ function pointerOf(segments: readonly string[]): string {
 }
 
 /**
+ * What the whole list says about `additionalProperties`, read once so `anchorOf` can ask two
+ * questions about one diagnostic that only the other diagnostics can answer.
+ *
+ * `failingSites` holds the pointers that some diagnostic reports on its own account, meaning
+ * anything but a key-joined `additionalProperties`. `rejectionsPerKey` counts how many schema
+ * branches forbade each named key. `wholesaleFloor` is the smallest of those counts.
+ */
+type FoldContext = {
+	failingSites: ReadonlySet<string>;
+	rejectionsPerKey: ReadonlyMap<string, number>;
+	wholesaleFloor: number;
+};
+
+function foldContextFor(violations: readonly DtcgViolation[]): FoldContext {
+	const failingSites = new Set<string>();
+	const rejectionsPerKey = new Map<string, number>();
+
+	for (const violation of violations) {
+		if (violation.message === ADDITIONAL_PROPERTY_MESSAGE) {
+			rejectionsPerKey.set(violation.pointer, (rejectionsPerKey.get(violation.pointer) ?? 0) + 1);
+		} else {
+			failingSites.add(violation.pointer);
+		}
+	}
+
+	return {
+		failingSites,
+		rejectionsPerKey,
+		wholesaleFloor: Math.min(...rejectionsPerKey.values(), Number.POSITIVE_INFINITY),
+	};
+}
+
+/**
  * Where a diagnostic actually failed, which is not always where it is reported.
  *
  * `validate.ts` appends the offending key to an `additionalProperties` pointer so a UI can
  * highlight the field. That makes the pointer more useful and one segment deeper than the failure
  * Ajv found, which is at the parent object. Ranking on the reported depth would let a rejected
  * alias branch complaining about a legal `colorSpace` key outrank the real `exclusiveMaximum` on
- * the hue beneath it. Rank on the anchor, report the pointer.
+ * the hue beneath it. So most of the time, rank on the anchor and report the pointer.
+ *
+ * The fold is wrong for a key that is genuinely illegal, and folding it is how an earlier version
+ * of this module lost a true violation. An OKLCH value carrying both `foo` and a hue of 360 draws
+ * an `additionalProperties` for `foo` and an `exclusiveMaximum` under `components/2`; fold `foo`
+ * to its parent and it becomes an ancestor of the hue, absorption swallows it, and the summary
+ * reports one problem where the document has two. Fixing the hue then leaves the document invalid
+ * for something no row ever named. Two questions keep those keys out of the fold, and both are
+ * answered by the rest of the list rather than by any knowledge of the schema.
+ *
+ * First: did the parent fail on its own account? A stray key at the root folds to the empty
+ * pointer, which is an ancestor of every diagnostic in the document, and no diagnostic reports the
+ * root at all. Folding there invents a failure site and hides the key behind whatever else is
+ * broken.
+ *
+ * Second: was the key rejected more often than the quietest key in the document? Ajv reports
+ * `additionalProperties` once per branch that forbids the key. A branch that permits only `$ref`
+ * forbids every key of an object equally, which sets a floor every key clears. A key that draws
+ * more than that floor was rejected by a branch that accepted its siblings—the branch the author
+ * was plausibly writing—so it is illegal wherever it sits and keeps its own pointer.
+ *
+ * The floor is taken across the document rather than per parent object. Per parent, a lone illegal
+ * key is its own floor and folds away, which loses it again. Reading the floor wider costs a
+ * spurious row if some object is rejected wholesale by two branches instead of one, and #52 already
+ * ruled which way that trade goes: extra rows are recoverable, a dropped violation is not.
  */
-function anchorOf(violation: DtcgViolation): string[] {
+function anchorOf(violation: DtcgViolation, fold: FoldContext): string[] {
 	const segments = segmentsOf(violation.pointer);
 
-	return violation.message === ADDITIONAL_PROPERTY_MESSAGE ? segments.slice(0, -1) : segments;
+	if (violation.message !== ADDITIONAL_PROPERTY_MESSAGE) return segments;
+
+	const parent = pointerOf(segments.slice(0, -1));
+
+	if (!fold.failingSites.has(parent)) return segments;
+	if ((fold.rejectionsPerKey.get(violation.pointer) ?? 0) > fold.wholesaleFloor) return segments;
+
+	return segments.slice(0, -1);
 }
 
 function isAncestorOrSelf(ancestor: readonly string[], descendant: readonly string[]): boolean {
@@ -129,13 +193,19 @@ function isAncestorOrSelf(ancestor: readonly string[], descendant: readonly stri
  * become one row naming the hue.
  *
  * Two mistakes in two places branch instead of chaining, and stay two rows. The anchoring carries
- * more weight here than the ranking does. Merge two real mistakes into one row and the summary has
- * hidden a problem behind a plausible neighbour, which is what #52 declined to risk. A diagnostic
- * reported at a shared ancestor of both rows is counted against one of them rather than
- * duplicated, so `collapsed` across the rows adds up to the number of violations handed in.
+ * more weight here than the ranking does, and `anchorOf` is where the hard part of it lives: a
+ * mistake wrongly anchored onto another mistake's chain stops branching and disappears. Merge two
+ * real mistakes into one row and the summary has hidden a problem behind a plausible neighbour,
+ * which is what #52 declined to risk. A diagnostic reported at a shared ancestor of both rows is
+ * counted against one of them rather than duplicated, so `collapsed` across the rows adds up to
+ * the number of violations handed in.
  */
 export function summarizeViolations(violations: readonly DtcgViolation[]): DtcgViolationSummary[] {
-	const anchored = violations.map((violation) => ({ violation, anchor: anchorOf(violation) }));
+	const fold = foldContextFor(violations);
+	const anchored = violations.map((violation) => ({
+		violation,
+		anchor: anchorOf(violation, fold),
+	}));
 	const anchors = anchored.map(({ anchor }) => anchor);
 
 	const seen = new Set<string>();
