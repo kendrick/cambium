@@ -6,7 +6,7 @@ import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
 import { parseSeed } from '../../core/parse-seed';
 import { CAMBIUM_NAMESPACE, type TokenProvenance } from '../../core/provenance';
 import { rankFonts } from '../../core/rank-fonts';
-import { BALANCED } from '../../core/scale-engine';
+import { BALANCED } from '../../core/interpretation';
 import { buildTokenSet } from '../../core/semantic-layer';
 import type { TokenExtensions } from '../../core/token-set';
 

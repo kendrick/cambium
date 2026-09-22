@@ -18,7 +18,7 @@ import { typeScale } from './type-scale';
 import { parseSeed } from './parse-seed';
 import { CAMBIUM_NAMESPACE, derived, invented, observed } from './provenance';
 import { rankFonts } from './rank-fonts';
-import { BALANCED } from './scale-engine';
+import { BALANCED } from './interpretation';
 import { buildTokenSet } from './semantic-layer';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
 import { TokenSetSchema } from './token-set';
@@ -201,6 +201,7 @@ describe('core purity', () => {
 						provenance: { provenance: 'derived', seedField: 'keyColors', rationale: 'a page' },
 					},
 					null,
+					BALANCED,
 				).source === 'derived',
 		],
 		['the system constants', () => systemConstants().focusRing.source === 'system'],
@@ -231,7 +232,7 @@ describe('core purity', () => {
 					dark: { primitives: generated.schemes.dark, semantic },
 				};
 
-				return deriveNonColor(rampableSeed, schemes).zIndex.source === 'system';
+				return deriveNonColor(rampableSeed, schemes, BALANCED).zIndex.source === 'system';
 			},
 		],
 		[

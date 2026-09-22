@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { BrandSeedSchema } from '../brand-seed';
 import { createOklchScaleEngine } from '../oklch-scale-engine';
 import { CAMBIUM_NAMESPACE } from '../provenance';
-import { BALANCED } from '../scale-engine';
+import { BALANCED } from './../interpretation';
 import { buildTokenSet } from '../semantic-layer';
 import { type TokenSet, TokenSetSchema } from '../token-set';
 import {

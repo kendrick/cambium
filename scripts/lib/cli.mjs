@@ -1,5 +1,5 @@
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine.ts';
-import { BALANCED } from '../../core/scale-engine.ts';
+import { BALANCED } from '../../core/interpretation.ts';
 import { loadSeed, SeedLoadError } from './seed.mjs';
 
 /**

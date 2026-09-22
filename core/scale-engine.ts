@@ -1,4 +1,5 @@
 import type { BrandSeed, OklchTriple } from './brand-seed';
+import type { InterpretationParams } from './interpretation';
 import type { Ramp } from './token-set';
 
 /**
@@ -38,44 +39,6 @@ export const ANCHOR_TOLERANCE = 0.02;
  * is what #6 consumes.
  */
 export type RampSet = Record<RampName, Ramp>;
-
-/**
- * Cambium's own knobs, stated in Cambium's terms rather than any engine's. #10 owns this type and
- * widens it to cover the rest of derivation; it is declared here because #4 is the first
- * derivation module and a constant hardcoded now is a sweep through every function later.
- *
- * A second engine translates these into its native settings rather than replacing them, which is
- * what keeps a preset meaning the same thing across engines.
- */
-export type InterpretationParams = {
-	/** How far the neutral ramp's chroma pulls toward the brand hue. 0 leaves it dead neutral. */
-	neutralTinting: number;
-	/** Multiplier on the chroma curve. Above 1 widens the spread, below 1 mutes it. */
-	chromaSpread: number;
-	/** How far status hues rotate toward the brand hue. 0 keeps danger unmistakably red. */
-	harmonization: number;
-	/** Degrees to rotate the brand hue by when the seed offers no second key color. */
-	accentRotation: number;
-};
-
-/**
- * The one named value #10 asks for. Faithful and Expressive are #37's work and deliberately absent:
- * shipping two more constants now would mean guessing what they mean before anyone can see a ramp.
- *
- * `harmonization` sits at 0 because a danger color that has drifted toward the brand hue stops
- * reading as danger, and that is the whole job of a status color. Issue #1 reserves strong tinting
- * for the Expressive preset.
- *
- * `accentRotation` is a third of the circle. A complement at 180 degrees reads as a second brand
- * rather than as an accent, and anything under about 90 is close enough to the brand hue to look
- * like a mistake.
- */
-export const BALANCED: InterpretationParams = {
-	neutralTinting: 0.25,
-	chromaSpread: 1,
-	harmonization: 0,
-	accentRotation: 120,
-};
 
 /**
  * What step 9 of the brand ramp actually came out as, against what the seed asked for.

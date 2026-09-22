@@ -5,14 +5,13 @@ import { converter } from 'culori/fn';
 import { hueDistance, isInP3, isInSrgb, type Oklch, oklchDistance } from './oklch';
 import {
 	ANCHOR_TOLERANCE,
-	BALANCED,
-	type InterpretationParams,
 	RAMP_NAMES,
 	type RampName,
 	SCHEME_NAMES,
 	type SchemeName,
 	type ScaleEngine,
 } from './scale-engine';
+import { BALANCED, type InterpretationParams } from './interpretation';
 import { STEP_ROLES } from './step-roles';
 import { type Ramp, RampSchema } from './token-set';
 
