@@ -78,6 +78,11 @@ function stamp(document: unknown, path: readonly string[], key: string): void {
 	group[key] = RESERVED_VALUES[key];
 }
 
+/** Respells `motion.duration.fast` in seconds, the other unit the vendored duration value takes. */
+function inSeconds(document: typeof SPEC_LIGHT_DOCUMENT, seconds: number): void {
+	document.motion.duration.fast.$value = { value: seconds, unit: 's' };
+}
+
 /**
  * A conforming `$root` token, which the vendored schema defines as `$ref: token.json` both at the
  * document root and on every group. Written out as a real token so the doctored documents stay
@@ -631,6 +636,149 @@ describe('deserializeDtcg', () => {
 
 		expect(Object.keys(tokenSet.primitives.brand[0])).not.toContain('alpha');
 	});
+
+	/**
+	 * The vendored schema's duration value takes `ms` or `s` (`format.2025.10.json:1246`), and a
+	 * second is a thousand milliseconds exactly. So a document spelling a duration in seconds states
+	 * a duration `DurationValueSchema` holds, and this deserializer has to read it.
+	 *
+	 * Both documents go through `violationLines` first, because a test that never establishes
+	 * conformance proves nothing about a refusal a conforming file should never meet.
+	 *
+	 * The assertion is on the parsed `TokenSet` a caller receives, not on any magnitude in flight.
+	 * The full set is compared against the undoctored read as well: a conversion that fixed the unit
+	 * and dropped the `$extensions` payload beside it would pass a spot check on the duration alone.
+	 */
+	it('reads a duration spelled in seconds as the milliseconds it denotes', () => {
+		const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+		const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+		for (const document of [light, dark]) inSeconds(document, 0.15);
+
+		expect(violationLines(light)).toEqual([]);
+		expect(violationLines(dark)).toEqual([]);
+
+		const tokenSet = deserializeDtcg(light, dark);
+
+		expect(tokenSet.motion.values.duration.fast).toMatchObject({ value: 150, unit: 'ms' });
+		expect(tokenSet).toEqual(deserializeDtcg(SPEC_LIGHT_DOCUMENT, SPEC_DARK_DOCUMENT));
+	});
+
+	/**
+	 * The edges of the conversion, which is a multiplication by 1000 and nothing else.
+	 *
+	 * Half a millisecond is the case that decides the shape: `DurationValueSchema` permits a
+	 * fraction, so rounding to a whole millisecond would discard a duration the document stated
+	 * outright. The uneven case is there because a product that is not an integer must survive as
+	 * one, and zero because it is the boundary `z.number().min(0)` sits on.
+	 */
+	const secondSpellings: { what: string; seconds: number; milliseconds: number }[] = [
+		{ what: 'half a millisecond', seconds: 0.0005, milliseconds: 0.5 },
+		{ what: 'a count of milliseconds that is not whole', seconds: 0.0125, milliseconds: 12.5 },
+		{ what: 'zero', seconds: 0, milliseconds: 0 },
+	];
+
+	for (const { what, seconds, milliseconds } of secondSpellings) {
+		it(`converts ${what} without rounding it`, () => {
+			const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+			const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+			for (const document of [light, dark]) inSeconds(document, seconds);
+
+			expect(violationLines(light)).toEqual([]);
+			expect(violationLines(dark)).toEqual([]);
+
+			const tokenSet = deserializeDtcg(light, dark);
+
+			expect(tokenSet.motion.values.duration.fast).toMatchObject({
+				value: milliseconds,
+				unit: 'ms',
+			});
+		});
+	}
+
+	/**
+	 * The one place the inverse claim is one-directional, asserted in the bytes the next DTCG tool
+	 * reads rather than in the model this repo happens to hold.
+	 *
+	 * A document some other tool wrote in seconds comes back in milliseconds and re-serializes in
+	 * milliseconds, so it does not return byte-identical. That is intended, and the claim at the top
+	 * of `deserialize.ts` is about documents this pipeline wrote. Pinning the carve-out here keeps it
+	 * a recorded decision rather than a sentence in a comment nobody checks.
+	 */
+	it('emits milliseconds for a document that arrived in seconds', () => {
+		const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+		const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+		for (const document of [light, dark]) inSeconds(document, 0.15);
+
+		const emitted = serializeDtcg(deserializeDtcg(light, dark)) as unknown as {
+			light: typeof SPEC_LIGHT_DOCUMENT;
+			dark: typeof SPEC_DARK_DOCUMENT;
+		};
+
+		expect(violationLines(emitted.light)).toEqual([]);
+		expect(violationLines(emitted.dark)).toEqual([]);
+
+		for (const document of [emitted.light, emitted.dark]) {
+			expect(document.motion.duration.fast.$value).toEqual({ value: 150, unit: 'ms' });
+		}
+
+		expect(emitted.light.motion.duration.fast.$value).not.toEqual(
+			light.motion.duration.fast.$value,
+		);
+	});
+
+	/**
+	 * The ceiling multiplying by 1000 introduces. The vendored schema bounds a duration's magnitude
+	 * at nothing, so `{ value: 1e306, unit: 's' }` conforms, and a thousand times that overflows to
+	 * `Infinity`, which no document spelled in milliseconds could have stated on its own.
+	 *
+	 * Left to `TokenSetSchema.parse`, per this module's policy that value shape is Zod's to grade.
+	 * What the case pins is that the overflow reaches a caller as a failure rather than as a
+	 * duration, since `Infinity` is the one output of this conversion that would be meaningless and
+	 * still look like a number.
+	 */
+	it('fails rather than handing back a duration that overflowed to Infinity', () => {
+		const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+		const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+		for (const document of [light, dark]) inSeconds(document, 1e306);
+
+		expect(violationLines(light)).toEqual([]);
+		expect(violationLines(dark)).toEqual([]);
+
+		expect(() => deserializeDtcg(light, dark)).toThrow(/Infinity/);
+	});
+
+	/**
+	 * The ruling the conversion must not undo, pinned so it stays a decision rather than an accident.
+	 * `checkDocumentsAgree` compares raw document subtrees before anything is interpreted, and that
+	 * is deliberate: it reports a difference at the JSON that differs, which it can only do while it
+	 * knows nothing about units. Teaching it that `{ 0.15, s }` and `{ 150, ms }` are one duration
+	 * would give it a second grader to keep in step with the reader below it. Every other family it
+	 * walks has no equivalence to teach in the first place.
+	 *
+	 * So a pair spelling one shared duration two ways is refused, even though both spellings denote
+	 * 150 ms and either document on its own would be read. The refusal names the token, which sends
+	 * a person to the two lines they have to reconcile.
+	 */
+	for (const side of sides.filter((candidate) => !(candidate.light && candidate.dark))) {
+		it(`refuses a duration spelled in seconds on ${side.name}, because the documents disagree`, () => {
+			const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+			const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+			if (side.light) inSeconds(light, 0.15);
+			if (side.dark) inSeconds(dark, 0.15);
+
+			expect(violationLines(light)).toEqual([]);
+			expect(violationLines(dark)).toEqual([]);
+
+			for (const named of ['motion.duration.fast.$value', 'holds it once']) {
+				expect(() => deserializeDtcg(light, dark)).toThrow(named);
+			}
+		});
+	}
 
 	it('is deterministic: the same documents read back to the same bytes', () => {
 		const first = JSON.stringify(deserializeDtcg(SPEC_LIGHT_DOCUMENT, SPEC_DARK_DOCUMENT));

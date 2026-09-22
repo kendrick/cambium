@@ -13,10 +13,16 @@ import {
  *
  * The inverse of `serializeDtcg`, and inverse is a strong claim here: equivalence means deep
  * equality after `TokenSetSchema.parse` on both sides. Every choice the serializer made has to be
- * undone exactly, and four of them are decisions rather than copies. Each is argued where it is
- * made: the mirror in `schemeFrom`, the eight groups that live once and appear twice in
- * `checkDocumentsAgree`, the `hex` fallback in `checkHex`, and the transport namespace in
- * `trackingScale`.
+ * undone exactly, and five choices here are decisions rather than copies. Each is argued where it
+ * is made: the mirror in `schemeFrom`, the eight groups that live once and appear twice in
+ * `checkDocumentsAgree`, the `hex` fallback in `checkHex`, the transport namespace in
+ * `trackingScale`, and the second-to-millisecond conversion in `millisecondsOf`, which is the one
+ * decision that undoes nothing, because the serializer never writes a second.
+ *
+ * That last one bounds the claim, so read it as one-directional for a document some other tool
+ * wrote. A foreign document spelling a duration in `s` comes back in `ms` and re-serializes in
+ * `ms`, and that is intended: the equivalence above is about documents this pipeline wrote, which
+ * are already in milliseconds and do come back byte-identical.
  *
  * Pure, like its inverse: no DOM, no network, no storage, no module state, and both documents come
  * back untouched because every value is rebuilt rather than adopted.
@@ -645,6 +651,41 @@ function typographyOf(doc: Doc) {
 	};
 }
 
+/**
+ * A duration in the one unit the internal model spells.
+ *
+ * DTCG's `duration` value takes `ms` or `s`; `DurationValueSchema` takes `ms` alone. A second is a
+ * thousand milliseconds exactly, so a document written in seconds states a duration the model
+ * holds. Refusing it would turn away a conforming file over its spelling.
+ *
+ * The conversion sits at the duration read and not inside `magnitudeOf`, which also serves
+ * `dimension` and a shadow's geometry. `s` is not a conforming unit in either of those and has to
+ * stay refused there. A unit's meaning follows the position of the token carrying it, not the shape
+ * of the value. Three earlier defects in this module all came from reading the shape when the
+ * question was about the position.
+ *
+ * This hands every other unit on untouched, to fail at the closing `TokenSetSchema.parse` with the
+ * rest of the value-shape mistakes this module leaves to Zod.
+ *
+ * `value * 1000` rather than `value / 0.001`. 1000 is exact as a double, so the multiplication is
+ * one correctly rounded step from what the document said. 0.001 is not exact, so dividing by it
+ * scales by a number already slightly wrong before any rounding happens.
+ *
+ * Nothing rounds to a whole millisecond, since `DurationValueSchema` permits a fraction and
+ * `{ value: 0.0005, unit: 's' }` is half a real millisecond that rounding would erase. Above about
+ * 1.8e305 seconds the product overflows to `Infinity`, which the closing parse refuses along with
+ * everything else it grades.
+ *
+ * One consequence, and it is intended: a foreign document written in seconds comes back in
+ * milliseconds and re-serializes in milliseconds, so it does not round-trip byte-identically. The
+ * top of this file bounds the inverse claim for that reason.
+ */
+function millisecondsOf(magnitude: { value: number; unit: string }) {
+	if (magnitude.unit !== 's') return magnitude;
+
+	return { value: magnitude.value * 1000, unit: 'ms' };
+}
+
 function motionOf(doc: Doc) {
 	const path = [DTCG_GROUP.motion];
 	const durationPath = [...path, DTCG_GROUP.duration];
@@ -655,9 +696,10 @@ function motionOf(doc: Doc) {
 	return {
 		duration: mapGroup(groupAt(doc, durationPath), doc, durationPath, (node, tokenPath) => {
 			const token = tokenAt(node, 'duration', doc, tokenPath);
+			const valuePath = [...tokenPath, '$value'];
 
 			return {
-				...magnitudeOf(valueOf(token, doc, tokenPath), doc, [...tokenPath, '$value']),
+				...millisecondsOf(magnitudeOf(valueOf(token, doc, tokenPath), doc, valuePath)),
 				$extensions: ownExtensions(token, doc, tokenPath),
 			};
 		}),
