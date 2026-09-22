@@ -9,7 +9,14 @@
  * numbers its ramp steps so that step n sits at lightness n/100, and the assertions below name the
  * lightness each semantic token has to land on given the alias `SEMANTIC_MAP` assigns it. Deriving
  * those by resolving the alias in the test would be running the implementation twice and comparing
- * it with itself.
+ * it with itself. The non-colour values are settled the same way: `NON_COLOR_FIXTURE` holds a
+ * radius of 0.625rem, so `--cmb-radius-lg` has to read `0.625rem`.
+ *
+ * The property-name invariant is scoped rather than whole-block. Colours and shadows are
+ * per-scheme and have to appear under both selectors; radius, type and tracking hold still across
+ * the two and are declared once under `:root`. So each selector is compared against its own full
+ * expected set. That is stricter than comparing the two selectors to each other, and it puts the
+ * scalars under `:root` on the record as a decision rather than an omission.
  */
 import { type Declaration, parse } from 'postcss';
 import { describe, expect, it } from 'vitest';
@@ -22,6 +29,14 @@ import { toGlobalsCss } from './globals-css';
 
 /** `oklch(<l> <c> <h>)`: three space-separated numbers, no comma, no alpha slot. */
 const OKLCH_TRIPLE = /^oklch\(([^\s]+) ([^\s]+) ([^\s]+)\)$/;
+
+/**
+ * CSS `box-shadow`'s longhand: four lengths in `<offset-x> <offset-y> <blur> <spread>` order, then
+ * the colour. Capturing the five parts separately is what lets the assertions below name the order
+ * a compositor reads them in. Comparing the whole value against one expected string would pass or
+ * fail on the same bytes and say nothing about which part landed where.
+ */
+const BOX_SHADOW = /^(\S+) (\S+) (\S+) (\S+) (oklch\([^)]*\))$/;
 
 /**
  * An alias the way `SemanticLayerSchema` spells one: a ramp name, a dot, a step number. Anchored on
@@ -76,6 +91,27 @@ function shadcnSemanticLayer(): Record<string, SemanticEntry> {
 
 const SEMANTIC = shadcnSemanticLayer();
 
+/**
+ * The dark scheme's shadow, differing from `SHADOW_FIXTURE` in its colour, its vertical offset and
+ * its blur.
+ *
+ * `checkMirroredLayers` pins the top-level `shadow` to `schemes.light.shadow`, so a set carries two
+ * distinguishable shadows and only one of them is reachable from the top level. Reading the top
+ * level would therefore paint the light scheme's shadow under `.dark` and look entirely healthy.
+ * These three differences are what make that substitution visible.
+ */
+const DARK_SHADOW_FIXTURE = {
+	source: 'derived',
+	values: {
+		md: {
+			...SHADOW_FIXTURE.values.md,
+			color: { l: 0.02, c: 0.01, h: 275.5, alpha: 0.45 },
+			offsetY: { value: 8, unit: 'px' },
+			blur: { value: 12, unit: 'px' },
+		},
+	},
+} as const;
+
 /** Light steps run 0.01 to 0.12; dark steps run 0.51 to 0.62. Chroma separates them a second way. */
 const LIGHT_SCHEME = {
 	primitives: { brand: ramp(260, 0.02, 0), neutral: ramp(250, 0.02, 0), danger: ramp(25, 0.02, 0) },
@@ -90,7 +126,7 @@ const DARK_SCHEME = {
 		danger: ramp(25, 0.03, 50),
 	},
 	semantic: SEMANTIC,
-	shadow: SHADOW_FIXTURE,
+	shadow: DARK_SHADOW_FIXTURE,
 };
 
 /**
@@ -147,11 +183,43 @@ function deepFreeze<T>(value: T): T {
 	return value;
 }
 
-/** The property names criterion 1 asks for, taken off the contract rather than off the output. */
-const EXPECTED_PROPERTIES = Object.keys(SEMANTIC_MAP)
-	.map((token) => `--${token}`)
+function sorted(names: readonly string[]): string[] {
 	// oxlint-disable-next-line unicorn/no-array-sort
-	.sort();
+	return [...names].sort();
+}
+
+/** The property names criterion 1 asks for, taken off the contract rather than off the output. */
+const EXPECTED_COLOR_PROPERTIES = sorted(Object.keys(SEMANTIC_MAP).map((token) => `--${token}`));
+
+/**
+ * The prefixed names, written out as literals rather than derived from the fixture, because they
+ * are the contract `core/css/theme-block.ts` codes against: drop the `cmb-` and what is left is the
+ * Tailwind v4 theme entry that adapter maps the property onto. `--cmb-text-base` pairs with
+ * `--text-base`, `--cmb-font-weight-regular` with `--font-weight-regular`, and so on down the list.
+ * Deriving them here from the same category-to-namespace table the emitter uses would leave a
+ * renamed namespace passing on both sides.
+ */
+const EXPECTED_SHADOW_PROPERTIES = ['--cmb-shadow-md'];
+
+const EXPECTED_SCALAR_PROPERTIES = [
+	'--cmb-radius-lg',
+	'--cmb-text-base',
+	'--cmb-font-weight-regular',
+	'--cmb-leading-normal',
+	'--cmb-tracking-normal',
+];
+
+/** Colours and shadows are per-scheme; the scalars hold still and are declared under `:root` only. */
+const EXPECTED_ROOT_PROPERTIES = sorted([
+	...EXPECTED_COLOR_PROPERTIES,
+	...EXPECTED_SHADOW_PROPERTIES,
+	...EXPECTED_SCALAR_PROPERTIES,
+]);
+
+const EXPECTED_DARK_PROPERTIES = sorted([
+	...EXPECTED_COLOR_PROPERTIES,
+	...EXPECTED_SHADOW_PROPERTIES,
+]);
 
 describe('toGlobalsCss', () => {
 	it('parses as valid CSS holding exactly the light and dark selectors', () => {
@@ -169,27 +237,47 @@ describe('toGlobalsCss', () => {
 		expect(root.nodes.every((node) => node.type === 'rule')).toBe(true);
 	});
 
-	it('declares every semantic token under the light selector', () => {
+	it('declares every semantic token, every shadow and every scalar under the light selector', () => {
 		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
 
-		expect(propertyNames(byScheme.get(':root') ?? [])).toEqual(EXPECTED_PROPERTIES);
+		expect(propertyNames(byScheme.get(':root') ?? [])).toEqual(EXPECTED_ROOT_PROPERTIES);
 	});
 
 	// Asserted against the contract rather than against what the light selector happened to emit. A
 	// token present in light and missing in dark is the defect this pair catches, and comparing the
 	// two selectors to each other would report them as agreeing when both are short the same token.
-	it('declares every semantic token under the dark selector', () => {
+	it('declares every semantic token and every shadow under the dark selector', () => {
 		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
 
-		expect(propertyNames(byScheme.get('.dark') ?? [])).toEqual(EXPECTED_PROPERTIES);
+		expect(propertyNames(byScheme.get('.dark') ?? [])).toEqual(EXPECTED_DARK_PROPERTIES);
 	});
 
-	it('emits every colour as an oklch() call', () => {
+	// The scoped form of the mirror invariant, said out loud so that widening the adapter later
+	// cannot satisfy it by dropping a comparison. A scalar leaking into `.dark` is harmless today
+	// and a divergence waiting to happen the moment somebody makes radius scheme-dependent, which
+	// is the decision this layout forecloses.
+	it('mirrors colours and shadows across both selectors and keeps the scalars to :root', () => {
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const light = new Set(propertyNames(byScheme.get(':root') ?? []));
+		const dark = new Set(propertyNames(byScheme.get('.dark') ?? []));
+
+		for (const property of [...EXPECTED_COLOR_PROPERTIES, ...EXPECTED_SHADOW_PROPERTIES]) {
+			expect(light).toContain(property);
+			expect(dark).toContain(property);
+		}
+
+		for (const property of EXPECTED_SCALAR_PROPERTIES) {
+			expect(light).toContain(property);
+			expect(dark).not.toContain(property);
+		}
+	});
+
+	it('emits every semantic colour as an oklch() call', () => {
 		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
 
 		for (const declarations of byScheme.values()) {
-			for (const declaration of declarations) {
-				expect(OKLCH_TRIPLE.test(declaration.value)).toBe(true);
+			for (const property of EXPECTED_COLOR_PROPERTIES) {
+				expect(OKLCH_TRIPLE.test(valueOf(declarations, property))).toBe(true);
 			}
 		}
 	});
@@ -236,6 +324,55 @@ describe('toGlobalsCss', () => {
 		expect(channels(valueOf(dark, '--destructive'))).toEqual([0.61, 0.03, 25]);
 	});
 
+	it('writes each shadow as a box-shadow value taken from its own scheme', () => {
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const light = BOX_SHADOW.exec(valueOf(byScheme.get(':root') ?? [], '--cmb-shadow-md'));
+		const dark = BOX_SHADOW.exec(valueOf(byScheme.get('.dark') ?? [], '--cmb-shadow-md'));
+
+		// `SHADOW_FIXTURE`: no horizontal offset, 4px down, 6px of blur, pulled in 1px, tinted at
+		// alpha 0.1, which CSS Color 4 spells as a tenth of full opacity: `10%`.
+		expect(light?.slice(1)).toEqual(['0px', '4px', '6px', '-1px', 'oklch(0.15 0.02 259.8 / 10%)']);
+		// `DARK_SHADOW_FIXTURE` differs in the offset, the blur and the colour, so this row reading
+		// as the light one above would mean the adapter took the top-level shadow copy.
+		expect(dark?.slice(1)).toEqual(['0px', '8px', '12px', '-1px', 'oklch(0.02 0.01 275.5 / 45%)']);
+	});
+
+	it('writes each scheme-agnostic scalar at the value and unit the token set holds', () => {
+		const root = declarationsBySelector(toGlobalsCss(PINNED_SET)).get(':root') ?? [];
+
+		// Straight off `NON_COLOR_FIXTURE`. The weight and the line height are unitless, and every
+		// dimension keeps its unit, including the tracking step sitting at zero. A bare `0` would be
+		// a valid length too, and `0em` keeps the em readable in the export.
+		expect(valueOf(root, '--cmb-radius-lg')).toBe('0.625rem');
+		expect(valueOf(root, '--cmb-text-base')).toBe('1rem');
+		expect(valueOf(root, '--cmb-font-weight-regular')).toBe('400');
+		expect(valueOf(root, '--cmb-leading-normal')).toBe('1.5');
+		expect(valueOf(root, '--cmb-tracking-normal')).toBe('0em');
+	});
+
+	it('carries a caller-supplied prefix on the non-colour properties and leaves the colours bare', () => {
+		const names = propertyNames(
+			declarationsBySelector(toGlobalsCss(PINNED_SET, { prefix: 'acme' })).get(':root') ?? [],
+		);
+
+		expect(names).toContain('--acme-shadow-md');
+		expect(names).toContain('--acme-radius-lg');
+		// Bare and unprefixed is what makes the output drop-in for a shadcn project, whose own
+		// components read `--background` by that name.
+		expect(names).toContain('--background');
+		expect(names.filter((name) => name.startsWith('--cmb-'))).toEqual([]);
+	});
+
+	it('refuses a prefix that leaves a non-colour property inside a Tailwind namespace', () => {
+		// `@theme inline { --shadow-md: var(--shadow-md) }` reads itself: the theme entry and the
+		// property it points at are one name, so the shadow resolves to nothing and every
+		// `shadow-md` utility paints nothing, silently.
+		expect(() => toGlobalsCss(PINNED_SET, { prefix: '' })).toThrow(/--shadow-md/);
+		// Not only the empty prefix. A prefix that is itself a namespace root walks the property
+		// straight back inside one.
+		expect(() => toGlobalsCss(PINNED_SET, { prefix: 'text' })).toThrow(/--text-shadow-md/);
+	});
+
 	it('is a pure function of the token set: same set in, same bytes out, input untouched', () => {
 		const frozen = deepFreeze(TokenSetSchema.parse(structuredClone(PINNED_SET)));
 		const before = structuredClone(PINNED_SET);
@@ -262,5 +399,24 @@ describe('toGlobalsCss', () => {
 		// schemes mirrored and the throw would never be reached.
 		expect(Object.keys(withoutRing)).toHaveLength(Object.keys(SEMANTIC).length - 1);
 		expect(() => toGlobalsCss(lopsided)).toThrow(/ring/);
+	});
+
+	it('refuses a set whose two schemes name different shadow steps', () => {
+		const renamedStep = {
+			source: 'derived',
+			values: { lg: DARK_SHADOW_FIXTURE.values.md },
+		};
+		const lopsided = TokenSetSchema.parse({
+			...LIGHT_SCHEME,
+			schemes: { light: LIGHT_SCHEME, dark: { ...DARK_SCHEME, shadow: renamedStep } },
+			...NON_COLOR_FIXTURE,
+		});
+
+		// Same hazard as the semantic mirror one selector over: `--cmb-shadow-md` declared under
+		// `:root` alone leaves a dark page casting a shadow tuned for a white one, with nothing
+		// upstream to notice. `checkMirroredLayers` compares each scheme against the top level and
+		// never puts the two schemes side by side.
+		expect(() => toGlobalsCss(lopsided)).toThrow(/shadow steps/);
+		expect(() => toGlobalsCss(lopsided)).toThrow(/md/);
 	});
 });

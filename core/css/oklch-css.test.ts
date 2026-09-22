@@ -16,6 +16,9 @@ import { toOklchCss } from './oklch-css';
 /** `oklch(<l> <c> <h>)`: three space-separated numbers, no comma, no alpha slot. */
 const OKLCH_TRIPLE = /^oklch\(([^\s]+) ([^\s]+) ([^\s]+)\)$/;
 
+/** The same triple with CSS Color 4's alpha slot behind the slash: `oklch(1 0 0 / 10%)`. */
+const OKLCH_WITH_ALPHA = /^oklch\((\S+) (\S+) (\S+) \/ (\S+)\)$/;
+
 /** Parses `--x: <css>;` inside a rule and hands back the one declaration postcss found there. */
 function parseDeclaration(css: string) {
 	const root = parse(`:root { --x: ${css}; }`);
@@ -86,6 +89,36 @@ describe('toOklchCss', () => {
 		const decl = parseDeclaration(toOklchCss({ l: 0.205, c: 0, h: 0 }));
 
 		expect(decl.value).not.toMatch(/\//);
+	});
+
+	it('prints a supplied alpha as a percentage in the slash slot', () => {
+		// `app/globals.css` writes a translucent colour as `oklch(1 0 0 / 10%)`, and `SHADOW_FIXTURE`
+		// carries `alpha: 0.1`. So the required reading of 0.1 is `10%`, settled off the stylesheet
+		// this adapter has to look like rather than off whatever arithmetic the emitter does.
+		const decl = parseDeclaration(toOklchCss({ l: 0.15, c: 0.02, h: 259.8, alpha: 0.1 }));
+		const match = OKLCH_WITH_ALPHA.exec(decl.value);
+
+		expect(match?.[4]).toBe('10%');
+	});
+
+	it('treats a fully transparent alpha as a value rather than as an absence', () => {
+		// Zero is falsy, so an emitter that tests `if (color.alpha)` prints an opaque triple for a
+		// colour meant to disappear, and the stylesheet renders with no error anywhere.
+		const decl = parseDeclaration(toOklchCss({ l: 0.5, c: 0.1, h: 180, alpha: 0 }));
+		const match = OKLCH_WITH_ALPHA.exec(decl.value);
+
+		expect(match?.[4]).toBe('0%');
+	});
+
+	it('rounds the alpha percentage, not the 0-to-1 fraction, at the caller-supplied precision', () => {
+		// An alpha of 0.123456 is 12.3456% of opacity; two places of a percent keeps 12.35%. Rounding
+		// the fraction first would keep 12.35% only by accident and 0.12 -> 12% at three places.
+		const decl = parseDeclaration(
+			toOklchCss({ l: 0.5, c: 0.1, h: 180, alpha: 0.123456 }, { places: 2 }),
+		);
+		const match = OKLCH_WITH_ALPHA.exec(decl.value);
+
+		expect(match?.[4]).toBe('12.35%');
 	});
 
 	it('is a pure function: same triple in yields the same string, and the input is untouched', () => {
