@@ -169,6 +169,29 @@ describe('validateDtcg', () => {
 		);
 	});
 
+	/**
+	 * Ajv states the keyword, its parameters and the subschema that produced each diagnostic, and
+	 * all three come through untouched. `report.ts` needs them: the same message arriving from two
+	 * different `#/allOf/N/if` branches is the difference between one mistake and an echo of an
+	 * unresolved discriminator, and nothing in `pointer` or `message` can tell them apart.
+	 *
+	 * Carrying the fields is not a claim about them. `validateDtcg` still says nothing about which
+	 * diagnostics matter, and every judgement about that lives in `report.ts`.
+	 */
+	it('carries the keyword, params and schemaPath Ajv reported', () => {
+		const hue = violationsOf(badHue).find((violation) => violation.keyword === 'exclusiveMaximum');
+
+		expect(hue?.pointer).toBe('/color/brand/$value/components/2');
+		expect(hue?.params).toEqual({ comparison: '<', limit: 360 });
+		expect(hue?.schemaPath).toBe('#/oneOf/0/exclusiveMaximum');
+
+		// The key `pointerFor` joined on is still in `params`, where Ajv put it. Reading it there
+		// beats parsing it back out of the pointer, which is what `report.ts` reads it for.
+		const strayKey = violationsOf({ $foo: 1 });
+
+		expect(strayKey[0]?.params).toEqual({ additionalProperty: '$foo' });
+	});
+
 	// The empty string addresses the whole document, and `/` addresses the property named by the
 	// empty string. Returning `/` here would resolve to `document[""]`, a different place and
 	// usually no place at all.

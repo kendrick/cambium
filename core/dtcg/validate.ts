@@ -13,10 +13,20 @@ import validateAgainstSchema, { type DtcgSchemaError } from './format-validator.
  * property whose name is the empty string. Rendering the root as something a person reads is the
  * caller's job, and doing it here would hand every caller a pointer that resolves to the wrong
  * place.
+ *
+ * `keyword`, `params` and `schemaPath` are Ajv's own, forwarded rather than interpreted. They are
+ * here because `pointer` and `message` between them cannot say which subschema produced a
+ * diagnostic, and that is the difference between a real finding and an echo: when a document omits
+ * the property an `if`/`then` chain keys on, every branch applies at once and each reports the
+ * same value against its own range. `schemaPath` separates those; a message string cannot.
+ * `core/dtcg/report.ts` is the consumer, and carrying a field is not a claim about it.
  */
 export type DtcgViolation = {
 	pointer: string;
 	message: string;
+	keyword: string;
+	params: Readonly<Record<string, unknown>>;
+	schemaPath: string;
 };
 
 export type DtcgValidationResult = { valid: true } | { valid: false; violations: DtcgViolation[] };
@@ -94,6 +104,9 @@ export function validateDtcg(tokenDocument: unknown): DtcgValidationResult {
 		violations: errors.map((error) => ({
 			pointer: pointerFor(error),
 			message: error.message ?? `failed the ${error.keyword} constraint`,
+			keyword: error.keyword,
+			params: error.params,
+			schemaPath: error.schemaPath,
 		})),
 	};
 }

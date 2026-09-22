@@ -22,46 +22,53 @@ export type DtcgViolationSummary = {
 };
 
 /**
- * Ajv's wording for the `additionalProperties` keyword, matched exactly rather than loosely
- * because `validate.ts` joins the offending key onto that one diagnostic's pointer and no other.
- * The message is the only surviving trace of the keyword. `DtcgViolation` carries no `keyword`
- * field, and widening it to carry one would change what `validateDtcg` returns.
- *
- * If Ajv ever rewords the message, the fold below stops firing and `report.test.ts`'s bad-hue case
- * splits into two rows. Fix this constant rather than that test.
+ * The property the DTCG alias branch demands. A token is an alias or a value and never both, so a
+ * `required` asking for `$ref` of something written as a value is a complaint from a branch the
+ * author did not take. Every failing document draws one, at every failing node, which makes it the
+ * single most frequent artifact the schema produces and the one thing a summary must never lead
+ * with.
  */
-const ADDITIONAL_PROPERTY_MESSAGE = 'must NOT have additional properties';
+const ALIAS_PROPERTY = '$ref';
 
 /**
- * Diagnostics about the shape of the attempt rather than about a value: a combinator reporting
- * that no branch matched, a conditional reporting which half it took, a branch demanding a
- * property the author never meant to write, a branch rejecting a key that is legal where it sits.
- * Each one says that something failed without saying what the value should have been.
+ * Keywords that report the shape of the attempt rather than anything about a value. A combinator
+ * saying no branch matched, a conditional saying which half it took, a negation: each says that
+ * something failed without saying what the value should have been.
  */
-const BRANCH_SHAPE_MESSAGE =
-	/^must (?:match exactly one schema in oneOf|match some schema in anyOf|match all schemas in allOf|match "(?:then|else)" schema|have required property|NOT have additional properties$)/;
+const BRANCH_SHAPE_KEYWORDS = new Set(['oneOf', 'anyOf', 'allOf', 'if', 'not']);
 
 /**
- * Diagnostics that place a value in the wrong branch without saying anything about the value. A
- * `const` failure belongs here because under `oneOf` it is a discriminator. "must be equal to
- * constant" says the value took a different branch and says nothing about whether the value is
- * wrong.
+ * Keywords that place a value in the wrong branch, or report a key against one branch's idea of
+ * what is allowed. `const` belongs here because under `oneOf` it is a discriminator: failing it
+ * says the value took a different branch, never that the value is wrong. `additionalProperties`
+ * belongs here for the reason `validate.ts` gives: under a failed `oneOf` it is a claim about one
+ * rejected branch, even where `anchorOf` can prove otherwise.
  */
-const BRANCH_TYPE_MESSAGE =
-	/^must be (?:string|number|integer|boolean|object|array|null|equal to constant)$/;
+const BRANCH_LOCAL_KEYWORDS = new Set([
+	'type',
+	'const',
+	'additionalProperties',
+	'additionalItems',
+	'unevaluatedProperties',
+]);
 
 /**
- * How far a message sits from the value it is about. Zero is a complaint against the value itself,
- * such as a bound or a pattern; two is a complaint about the shape of the attempt that never
- * reaches the value at all.
+ * How far a diagnostic sits from the value it is about. Zero is a claim the document itself
+ * settles: a bound, a pattern, an enum, or a property that is genuinely absent. Two is a claim
+ * about branch shape that never reaches a value.
  *
  * The scale runs this way round so that sorting ascending puts the most useful message first, and
  * the name says which end is which because the number alone reads backwards to anyone expecting a
- * score.
+ * score. It reads Ajv's `keyword` rather than matching on message text: a message is a rendering,
+ * and two keywords that need different treatment can render alike.
  */
-function vagueness(message: string): number {
-	if (BRANCH_SHAPE_MESSAGE.test(message)) return 2;
-	if (BRANCH_TYPE_MESSAGE.test(message)) return 1;
+function vagueness(violation: DtcgViolation): number {
+	if (violation.keyword === 'required') {
+		return violation.params.missingProperty === ALIAS_PROPERTY ? 2 : 0;
+	}
+
+	if (BRANCH_SHAPE_KEYWORDS.has(violation.keyword)) return 2;
+	if (BRANCH_LOCAL_KEYWORDS.has(violation.keyword)) return 1;
 
 	return 0;
 }
@@ -85,28 +92,38 @@ function pointerOf(segments: readonly string[]): string {
 }
 
 /**
- * What the whole list says about `additionalProperties`, read once so `anchorOf` can ask two
- * questions about one diagnostic that only the other diagnostics can answer.
+ * What the whole list says, read once so `anchorOf` can ask questions about one diagnostic that
+ * only the other diagnostics can answer.
  *
- * `failingSites` holds the pointers that some diagnostic reports on its own account, meaning
- * anything but a key-joined `additionalProperties`. `rejectionsPerKey` counts how many schema
- * branches forbade each named key. `wholesaleFloor` is the smallest of those counts.
+ * `failingSites` holds the pointers some diagnostic reports on its own account, meaning anything
+ * but a key-joined `additionalProperties`. `rejectionsPerKey` counts how many branches forbade
+ * each named key, and `wholesaleFloor` is the smallest of those counts. `unresolved` holds the
+ * nodes whose `if` diagnostics came from more than one `allOf` branch.
  */
 type FoldContext = {
 	failingSites: ReadonlySet<string>;
 	rejectionsPerKey: ReadonlyMap<string, number>;
 	wholesaleFloor: number;
+	unresolved: readonly (readonly string[])[];
 };
 
 function foldContextFor(violations: readonly DtcgViolation[]): FoldContext {
 	const failingSites = new Set<string>();
 	const rejectionsPerKey = new Map<string, number>();
+	const branchesPerNode = new Map<string, Set<string>>();
 
 	for (const violation of violations) {
-		if (violation.message === ADDITIONAL_PROPERTY_MESSAGE) {
+		if (violation.keyword === 'additionalProperties') {
 			rejectionsPerKey.set(violation.pointer, (rejectionsPerKey.get(violation.pointer) ?? 0) + 1);
 		} else {
 			failingSites.add(violation.pointer);
+		}
+
+		if (violation.keyword === 'if') {
+			const branches = branchesPerNode.get(violation.pointer) ?? new Set<string>();
+
+			branches.add(violation.schemaPath);
+			branchesPerNode.set(violation.pointer, branches);
 		}
 	}
 
@@ -114,53 +131,10 @@ function foldContextFor(violations: readonly DtcgViolation[]): FoldContext {
 		failingSites,
 		rejectionsPerKey,
 		wholesaleFloor: Math.min(...rejectionsPerKey.values(), Number.POSITIVE_INFINITY),
+		unresolved: [...branchesPerNode]
+			.filter(([, branches]) => branches.size > 1)
+			.map(([pointer]) => segmentsOf(pointer)),
 	};
-}
-
-/**
- * Where a diagnostic actually failed, which is not always where it is reported.
- *
- * `validate.ts` appends the offending key to an `additionalProperties` pointer so a UI can
- * highlight the field. That makes the pointer more useful and one segment deeper than the failure
- * Ajv found, which is at the parent object. Ranking on the reported depth would let a rejected
- * alias branch complaining about a legal `colorSpace` key outrank the real `exclusiveMaximum` on
- * the hue beneath it. So most of the time, rank on the anchor and report the pointer.
- *
- * The fold is wrong for a key that is genuinely illegal, and folding it is how an earlier version
- * of this module lost a true violation. An OKLCH value carrying both `foo` and a hue of 360 draws
- * an `additionalProperties` for `foo` and an `exclusiveMaximum` under `components/2`; fold `foo`
- * to its parent and it becomes an ancestor of the hue, absorption swallows it, and the summary
- * reports one problem where the document has two. Fixing the hue then leaves the document invalid
- * for something no row ever named. Two questions keep those keys out of the fold, and both are
- * answered by the rest of the list rather than by any knowledge of the schema.
- *
- * First: did the parent fail on its own account? A stray key at the root folds to the empty
- * pointer, which is an ancestor of every diagnostic in the document, and no diagnostic reports the
- * root at all. Folding there invents a failure site and hides the key behind whatever else is
- * broken.
- *
- * Second: was the key rejected more often than the quietest key in the document? Ajv reports
- * `additionalProperties` once per branch that forbids the key. A branch that permits only `$ref`
- * forbids every key of an object equally, which sets a floor every key clears. A key that draws
- * more than that floor was rejected by a branch that accepted its siblings—the branch the author
- * was plausibly writing—so it is illegal wherever it sits and keeps its own pointer.
- *
- * The floor is taken across the document rather than per parent object. Per parent, a lone illegal
- * key is its own floor and folds away, which loses it again. Reading the floor wider costs a
- * spurious row if some object is rejected wholesale by two branches instead of one, and #52 already
- * ruled which way that trade goes: extra rows are recoverable, a dropped violation is not.
- */
-function anchorOf(violation: DtcgViolation, fold: FoldContext): string[] {
-	const segments = segmentsOf(violation.pointer);
-
-	if (violation.message !== ADDITIONAL_PROPERTY_MESSAGE) return segments;
-
-	const parent = pointerOf(segments.slice(0, -1));
-
-	if (!fold.failingSites.has(parent)) return segments;
-	if ((fold.rejectionsPerKey.get(violation.pointer) ?? 0) > fold.wholesaleFloor) return segments;
-
-	return segments.slice(0, -1);
 }
 
 function isAncestorOrSelf(ancestor: readonly string[], descendant: readonly string[]): boolean {
@@ -168,6 +142,83 @@ function isAncestorOrSelf(ancestor: readonly string[], descendant: readonly stri
 		ancestor.length <= descendant.length &&
 		ancestor.every((segment, index) => segment === descendant[index])
 	);
+}
+
+function isStrictAncestor(ancestor: readonly string[], descendant: readonly string[]): boolean {
+	return ancestor.length < descendant.length && isAncestorOrSelf(ancestor, descendant);
+}
+
+/**
+ * Where a diagnostic belongs, and whether it can be quoted once it gets there.
+ *
+ * Two things move a diagnostic away from where Ajv reported it, and they pull in opposite
+ * directions.
+ *
+ * **A joined key moves up.** `validate.ts` appends the offending key to an `additionalProperties`
+ * pointer so a UI can highlight the field, which makes the pointer more useful and one segment
+ * deeper than the failure. Ranking on the reported depth would let a rejected alias branch
+ * complaining about a legal `colorSpace` key outrank the real `exclusiveMaximum` on the hue
+ * beneath it, so most of the time the anchor is the parent and the pointer stays as reported.
+ *
+ * Two questions keep a genuinely illegal key out of that fold, because folding one loses a true
+ * violation outright. Did the parent fail on its own account? A
+ * stray key at the root folds to the empty pointer, an ancestor of every diagnostic in the
+ * document, which no diagnostic reports; folding there invents a failure site. And was the key
+ * rejected more often than the quietest key in the document? Ajv reports `additionalProperties`
+ * once per branch that forbids the key, and a branch permitting only `$ref` forbids every key of
+ * an object equally, setting a floor every key clears. A key above that floor was rejected by a
+ * branch that accepted its siblings—the branch the author was plausibly writing—so it is illegal
+ * wherever it sits.
+ *
+ * That count is the one rule here still inferred rather than read. `params.additionalProperty`
+ * names the key outright, but the standalone validator flattens every `additionalProperties`
+ * `schemaPath` to `#/additionalProperties`, so the branch that rejected it is not recoverable and
+ * repetition is the only signal left. The floor is taken across the document rather than per
+ * parent, because per parent a lone illegal key is its own floor and folds away. Reading it wider
+ * costs a spurious row if some object is rejected wholesale by two branches instead of one, and
+ * #52 already ruled which way that trade goes.
+ *
+ * **An unresolved branch moves down-stream diagnostics up, and marks them.** The schema keys one
+ * `if`/`then` pair per colour space on `colorSpace`. Omit the key and every pair applies at once,
+ * each complaining about the components against its own space's range, so a legal component draws
+ * `must be <= 1` eight times over. A node whose `if` diagnostics span more than one `#/allOf/N/if`
+ * has no branch selected, and nothing reported beneath it is decidable until it does. Those
+ * diagnostics anchor at the node and come back `echoed`, which counts them without letting them be
+ * quoted: reporting a bound on a value that is fine is worse than saying nothing about it, because
+ * a caller who acts on it edits something that was already correct.
+ *
+ * A key the fold proved illegal is exempt from that, because a key no branch permits is forbidden
+ * whichever branch was meant.
+ */
+function anchorOf(
+	violation: DtcgViolation,
+	fold: FoldContext,
+): { anchor: string[]; echoed: boolean } {
+	const segments = segmentsOf(violation.pointer);
+
+	if (violation.keyword === 'additionalProperties') {
+		const parent = pointerOf(segments.slice(0, -1));
+		const forbiddenByEveryBranch =
+			(fold.rejectionsPerKey.get(violation.pointer) ?? 0) > fold.wholesaleFloor;
+
+		if (!fold.failingSites.has(parent) || forbiddenByEveryBranch) {
+			return { anchor: segments, echoed: false };
+		}
+
+		return { anchor: segments.slice(0, -1), echoed: false };
+	}
+
+	const host = fold.unresolved.reduce<readonly string[] | undefined>(
+		(deepest, node) =>
+			isStrictAncestor(node, segments) && (deepest === undefined || node.length > deepest.length)
+				? node
+				: deepest,
+		undefined,
+	);
+
+	return host === undefined
+		? { anchor: segments, echoed: false }
+		: { anchor: [...host], echoed: true };
 }
 
 /**
@@ -186,11 +237,17 @@ function isAncestorOrSelf(ancestor: readonly string[], descendant: readonly stri
  * its consumer so the serializer's failures have something to read; whether `alternatives` earns
  * its place is the first real caller's to say.
  *
- * The rule is deepest-wins along a chain. Diagnostics are anchored (see `anchorOf`), the distinct
- * anchors that no other anchor extends become the rows, and every diagnostic is counted against
- * the deepest row it is an ancestor of. One bad OKLCH hue anchors entirely on the chain
+ * The rule is deepest-wins along a chain. Diagnostics are anchored (see `anchorOf`), the anchors
+ * that no other anchor extends become the rows, and every diagnostic is counted against the
+ * deepest row it is an ancestor of. One bad OKLCH hue anchors entirely on the chain
  * `/color` → `/color/brand` → `/color/brand/$value` → `.../components/2`, so nineteen diagnostics
- * become one row naming the hue.
+ * become one row naming the hue. A node that failed on its own account is a row as well, deeper
+ * anchors or not, which is how a missing property survives an illegal key sitting beneath it.
+ *
+ * Every rule here is a statement about Ajv's `keyword`, `params` and `schemaPath` rather than an
+ * inference from pointer shape or message text, with one exception that `anchorOf` names and
+ * explains. A message is a rendering, and two keywords that need opposite treatment can render
+ * alike.
  *
  * Two mistakes in two places branch instead of chaining, and stay two rows. The anchoring carries
  * more weight here than the ranking does, and `anchorOf` is where the hard part of it lives: a
@@ -202,10 +259,7 @@ function isAncestorOrSelf(ancestor: readonly string[], descendant: readonly stri
  */
 export function summarizeViolations(violations: readonly DtcgViolation[]): DtcgViolationSummary[] {
 	const fold = foldContextFor(violations);
-	const anchored = violations.map((violation) => ({
-		violation,
-		anchor: anchorOf(violation, fold),
-	}));
+	const anchored = violations.map((violation) => ({ violation, ...anchorOf(violation, fold) }));
 	const anchors = anchored.map(({ anchor }) => anchor);
 
 	const seen = new Set<string>();
@@ -218,25 +272,47 @@ export function summarizeViolations(violations: readonly DtcgViolation[]): DtcgV
 
 			return true;
 		})
-		.filter(
-			(anchor) =>
-				!anchors.some((other) => other.length > anchor.length && isAncestorOrSelf(anchor, other)),
-		)
+		.filter((anchor) => {
+			const deepest = !anchors.some((other) => isStrictAncestor(anchor, other));
+
+			// A node that failed on its own account is a row even when a deeper one exists. Without
+			// this, a value missing `colorSpace` and carrying an illegal key would report only the
+			// key, because the deeper anchor absorbs the shallower one and the missing property
+			// vanishes, which is the loss #52 refused.
+			const ownContent = anchored.some(
+				(member) =>
+					!member.echoed &&
+					member.anchor.length === anchor.length &&
+					isAncestorOrSelf(anchor, member.anchor) &&
+					vagueness(member.violation) === 0,
+			);
+
+			return deepest || ownContent;
+		})
 		.map((anchor) => ({ anchor, members: [] as typeof anchored }));
 
 	for (const item of anchored) {
+		// A diagnostic belongs to its own node when that node is a row, and otherwise to the deepest
+		// row below it. Taking the deepest match unconditionally would push a node's own failure down
+		// into a descendant's row and leave the node's row empty.
+		const exact = rows.find(
+			(row) =>
+				row.anchor.length === item.anchor.length && isAncestorOrSelf(item.anchor, row.anchor),
+		);
+		const home =
+			exact ??
+			rows.reduce<(typeof rows)[number] | undefined>(
+				(deepest, row) =>
+					isStrictAncestor(item.anchor, row.anchor) &&
+					(deepest === undefined || row.anchor.length > deepest.anchor.length)
+						? row
+						: deepest,
+				undefined,
+			);
+
 		// Every anchor either is a row or is a proper ancestor of a deeper anchor, and following that
 		// chain down always ends on a row, so `home` is never undefined. The optional call is what
 		// TypeScript charges for an invariant it cannot see.
-		const home = rows.reduce<(typeof rows)[number] | undefined>(
-			(deepest, row) =>
-				isAncestorOrSelf(item.anchor, row.anchor) &&
-				(deepest === undefined || row.anchor.length > deepest.anchor.length)
-					? row
-					: deepest,
-			undefined,
-		);
-
 		home?.members.push(item);
 	}
 
@@ -244,31 +320,27 @@ export function summarizeViolations(violations: readonly DtcgViolation[]): DtcgV
 		// Decorated with the input index rather than leaning on sort stability, so the output is the
 		// same list on every engine. Determinism is one of #11's acceptance criteria.
 		const leastVagueFirst = members
-			.filter((member) => member.anchor.length === anchor.length)
-			.map((member, index) => ({
-				message: member.violation.message,
-				pointer: member.violation.pointer,
-				index,
-			}))
+			.filter((member) => !member.echoed && member.anchor.length === anchor.length)
+			.map((member, index) => ({ violation: member.violation, index }))
 			// `map` already returned a fresh array, so this sort mutates nothing the caller can see.
 			// `toSorted` would satisfy the rule directly, but it is ES2023 and tsconfig targets ES2022,
 			// the same trade core/family-variants.ts makes.
 			// oxlint-disable-next-line unicorn/no-array-sort
-			.sort((a, b) => vagueness(a.message) - vagueness(b.message) || a.index - b.index);
+			.sort((a, b) => vagueness(a.violation) - vagueness(b.violation) || a.index - b.index);
 
-		// A row is built from an anchor some diagnostic reported, so `leastVagueFirst` always has a
-		// first element. The fallbacks below are what TypeScript charges for an invariant it cannot
-		// see.
+		// A row is either the deepest anchor on its chain or a node with a content diagnostic of its
+		// own, and both put at least one unechoed diagnostic here. The fallbacks below are what
+		// TypeScript charges for an invariant it cannot see.
 		const [best, ...rest] = leastVagueFirst;
-		const alternatives = new Set(rest.map(({ message }) => message));
+		const alternatives = new Set(rest.map(({ violation }) => violation.message));
 
 		// A branch rejected twice says nothing the second time, and `collapsed` already carries the
 		// volume. Deduplicating here keeps `alternatives` a list of distinct readings.
-		alternatives.delete(best?.message ?? '');
+		alternatives.delete(best?.violation.message ?? '');
 
 		return {
-			pointer: best?.pointer ?? pointerOf(anchor),
-			likelyCause: best?.message ?? '',
+			pointer: best?.violation.pointer ?? pointerOf(anchor),
+			likelyCause: best?.violation.message ?? '',
 			alternatives: [...alternatives],
 			collapsed: members.length,
 		};

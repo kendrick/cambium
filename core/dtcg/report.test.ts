@@ -51,6 +51,27 @@ function breakAt(tokenDocument: unknown, pointer: string, value: unknown): unkno
 	return damaged;
 }
 
+/** The mirror of `breakAt`: takes a legal document and deletes the member a pointer addresses. */
+function removeAt(tokenDocument: unknown, pointer: string): unknown {
+	const damaged = structuredClone(tokenDocument);
+	const segments = pointer
+		.slice(1)
+		.split('/')
+		.map((token) => token.replaceAll('~1', '/').replaceAll('~0', '~'));
+	const last = segments.pop();
+
+	if (last === undefined) throw new Error('removeAt needs a pointer with at least one segment');
+
+	const parent = segments.reduce<Record<string, unknown>>(
+		(node, token) => node[token] as Record<string, unknown>,
+		damaged as Record<string, unknown>,
+	);
+
+	delete parent[last];
+
+	return damaged;
+}
+
 function violationsOf(tokenDocument: unknown): DtcgViolation[] {
 	const result = validateDtcg(tokenDocument);
 
@@ -266,6 +287,143 @@ describe('summarizeViolations', () => {
 		const damaged = breakAt(validColour, '/color/brand/$value', { foo: 'illegal' });
 
 		expect(summarizedValues(damaged)).toContain('illegal');
+	});
+
+	/**
+	 * A colour value without `colorSpace` is the worst failure this function has had, because the
+	 * summary stayed quiet about the missing key and confidently reported a bound on a component
+	 * that is perfectly legal. The schema keys one `if`/`then` pair per colour space on
+	 * `colorSpace`, so with the key absent every pair applies at once and each complains about the
+	 * components from its own space's range. `must be <= 1` is one echo per space that was never
+	 * chosen.
+	 *
+	 * Naming the absent key is the only claim the schema supports here, and it is the only one that
+	 * gets a caller anywhere: no bound on `components` is decidable until the space is known.
+	 */
+	it('names the missing colour space rather than a bound on a component that is fine', () => {
+		const damaged = removeAt(validColour, '/color/brand/$value/colorSpace');
+		const [summary, ...rest] = summarizeViolations(violationsOf(damaged));
+
+		expect(rest).toEqual([]);
+		expect(resolvePointer(damaged, summary?.pointer ?? '')).toEqual({
+			components: [0.62, 0.19, 259.8],
+		});
+		expect(summary?.likelyCause).toBe("must have required property 'colorSpace'");
+	});
+
+	/**
+	 * The same document, checked the other way round: nothing the summary offers may be a claim
+	 * about the components, in `likelyCause` or in `alternatives`. A fabricated constraint is worse
+	 * than a hidden one, because a caller who acts on it edits a value that was already correct.
+	 */
+	it('offers no claim about the components while the colour space is missing', () => {
+		const damaged = removeAt(validColour, '/color/brand/$value/colorSpace');
+
+		for (const summary of summarizeViolations(violationsOf(damaged))) {
+			expect(summary.pointer.startsWith('/color/brand/$value/components')).toBe(false);
+			expect([summary.likelyCause, ...summary.alternatives].join(' ')).not.toContain('must be <=');
+		}
+	});
+
+	/**
+	 * Fix what the row names, validate again, and the next real problem is named. Here the hue
+	 * genuinely is out of range, but that is only knowable once the colour space is back, so the
+	 * first pass must not mention it and the second must.
+	 */
+	it('names the hue only once the colour space it is measured against is back', () => {
+		const damaged = removeAt(
+			breakAt(validColour, '/color/brand/$value/components/2', 360),
+			'/color/brand/$value/colorSpace',
+		);
+
+		expect(
+			summarizeViolations(violationsOf(damaged)).map((summary) => summary.likelyCause),
+		).toEqual(["must have required property 'colorSpace'"]);
+
+		const repaired = breakAt(damaged, '/color/brand/$value/colorSpace', 'oklch');
+
+		expect(summarizedValues(repaired)).toEqual([360]);
+	});
+
+	/**
+	 * The property is named from the pointer the test deleted, so nothing here restates what the
+	 * summarizer decided. The families differ in how the schema reaches the missing key: a colour
+	 * value is behind the `if`/`then` chain that made the case above go wrong, a dimension is not,
+	 * and a shadow sits one object deeper again.
+	 */
+	const missingProperties: [name: string, document: unknown, pointer: string][] = [
+		['a colour value with no colour space', validColour, '/color/brand/$value/colorSpace'],
+		[
+			'a dimension with no unit',
+			{ radius: { md: { $type: 'dimension', $value: { value: 0.625, unit: 'rem' } } } },
+			'/radius/md/$value/unit',
+		],
+		[
+			'a shadow with no vertical offset',
+			{
+				shadow: {
+					sm: {
+						$type: 'shadow',
+						$value: {
+							color: { colorSpace: 'oklch', components: [0.1, 0.1, 1] },
+							offsetX: { value: 0, unit: 'px' },
+							offsetY: { value: 1, unit: 'px' },
+							blur: { value: 2, unit: 'px' },
+							spread: { value: 0, unit: 'px' },
+						},
+					},
+				},
+			},
+			'/shadow/sm/$value/offsetY',
+		],
+	];
+
+	it.each(missingProperties)('names what is missing from %s', (_name, tokenDocument, pointer) => {
+		const removed = pointer.slice(pointer.lastIndexOf('/') + 1);
+		const causes = summarizeViolations(violationsOf(removeAt(tokenDocument, pointer))).map(
+			(summary) => summary.likelyCause,
+		);
+
+		expect(causes).toContain(`must have required property '${removed}'`);
+	});
+
+	/**
+	 * A missing property and an illegal one on the same object are two edits for whoever fixes the
+	 * document, and the illegal key sits under a node whose branch is unresolved, which is exactly
+	 * where the echo rule could swallow it.
+	 */
+	it('keeps a missing property and an illegal property in two rows', () => {
+		const damaged = breakAt(
+			removeAt(validColour, '/color/brand/$value/colorSpace'),
+			'/color/brand/$value/foo',
+			'illegal',
+		);
+		const rows = summarizeViolations(violationsOf(damaged));
+
+		expect(rows.map((summary) => summary.likelyCause)).toContain(
+			"must have required property 'colorSpace'",
+		);
+		expect(rows.map((summary) => resolvePointer(damaged, summary.pointer))).toContain('illegal');
+	});
+
+	/**
+	 * `$ref` is the alias branch's required property, and DTCG gives a token an alias or a value and
+	 * never both, so a `$ref` demanded of something written as a value is always a complaint from a
+	 * branch the author did not take. Every failing document in this file draws one, which is what
+	 * makes it worth pinning: it is the single most frequent artifact the schema produces.
+	 */
+	it('never offers the alias branch’s missing $ref as a likely cause', () => {
+		const documents = [
+			badHue,
+			removeAt(validColour, '/color/brand/$value/colorSpace'),
+			breakAt(validColour, '/color/brand/$value/foo', 'illegal'),
+		];
+
+		for (const tokenDocument of documents) {
+			for (const summary of summarizeViolations(violationsOf(tokenDocument))) {
+				expect(summary.likelyCause).not.toContain('$ref');
+			}
+		}
 	});
 
 	/**
