@@ -66,7 +66,7 @@ Coverage here should include, at minimum:
 - canonical DTCG validates against the published DTCG JSON Schema
 - a serialize-deserialize round trip is lossless
 
-Reaching each of those is the weaker half of the job. Choose fixtures that also satisfy the criterion above, so that a wrong implementation of any minimum produces a different token set from a right one.
+Reaching each of those is the weaker half of the job. Choose fixtures that also satisfy the criterion above, so that a wrong implementation of any minimum changes what that minimum's consumer reports. Which consumer that is moves down the list, and "Where the seam actually is" says how to find it: the painted pixel for the contrast pairs, the parsed document for the export adapters, the value that came back for the round trip. The token set is the input to those last three rather than the output, so a broken adapter leaves it byte-identical and a fixture watching the token set there is watching the wrong seam.
 
 Two patterns are worth borrowing from unbranded-ds, the only prior art the issue names: validate a generated baseline by regenerate-and-diff, and enforce declared contrast pairs at build time.
 
