@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { BrandSeedSchema } from './brand-seed';
+import { SPEC_TOKEN_SET } from './dtcg/dtcg.fixture';
+import { deserializeDtcg } from './dtcg/deserialize';
+import { summarizeViolations } from './dtcg/report';
+import { serializeDtcg } from './dtcg/serialize';
 import { validateDtcg } from './dtcg/validate';
 import { deriveNonColor } from './derive-non-color';
 import { createOklchScaleEngine } from './oklch-scale-engine';
@@ -76,6 +80,29 @@ const dtcgDocument = {
 		brand: { $value: { colorSpace: 'oklch', components: [0.62, 0.19, 259.8], alpha: 1 } },
 	},
 };
+
+/**
+ * A hue of 360 is the one value the vendored schema is stricter about than every parser in the
+ * survey (see `validator.test.ts`), and it fans out to nineteen diagnostics across six pointers.
+ * `summarizeViolations` needs that real fallout to fold, not a hand-built violation array, which
+ * is the one shape of input that would let a broken fold pass unnoticed.
+ */
+const brokenHueDocument = {
+	color: {
+		brand: { $type: 'color', $value: { colorSpace: 'oklch', components: [0.62, 0.19, 360] } },
+	},
+};
+
+/** Walks a serialized DTCG document the same way `serialize.test.ts`'s `nodeAt` does. */
+function nodeAt(document: unknown, path: readonly string[]): unknown {
+	return path.reduce<unknown>(
+		(node, segment) =>
+			typeof node === 'object' && node !== null
+				? (node as Record<string, unknown>)[segment]
+				: undefined,
+		document,
+	);
+}
 
 const record = {
 	id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
@@ -205,6 +232,68 @@ describe('core purity', () => {
 				};
 
 				return deriveNonColor(rampableSeed, schemes).zIndex.source === 'system';
+			},
+		],
+		[
+			'serializeDtcg',
+			() => {
+				const { light, dark } = serializeDtcg(SPEC_TOKEN_SET);
+				const background = nodeAt(light, ['color', 'semantic', 'background']) as
+					| { $value: unknown; $extensions: Record<string, { seedField: unknown }> }
+					| undefined;
+				const lightStep1 = nodeAt(light, ['color', 'primitive', 'brand', '1']) as
+					| { $value: { hex: unknown } }
+					| undefined;
+				const darkStep1 = nodeAt(dark, ['color', 'primitive', 'brand', '1']) as
+					| { $value: { hex: unknown } }
+					| undefined;
+
+				// A literal here instead of an alias, or a light ramp bleeding into the dark document,
+				// would still leave every field present, so the check is that the alias resolves to
+				// exactly the string this token set's alias denotes, and that the two schemes carry the
+				// two different colours the fixture pins.
+				return (
+					background?.$value === '{color.primitive.brand.1}' &&
+					background?.$extensions[CAMBIUM_NAMESPACE]?.seedField === 'keyColors' &&
+					lightStep1?.$value.hex === '#f6f9fc' &&
+					darkStep1?.$value.hex === '#060d1a'
+				);
+			},
+		],
+		[
+			'deserializeDtcg',
+			() => {
+				const { light, dark } = serializeDtcg(SPEC_TOKEN_SET);
+				const roundTripped = deserializeDtcg(light, dark);
+
+				// The ramp length and the alias spelling only come out right if the document was
+				// actually walked and the DTCG alias syntax translated back to `ramp.step` form; a
+				// stub that handed back an empty token set would fail every one of these.
+				return (
+					roundTripped.schemes.light.semantic.border.alias === 'brand.6' &&
+					roundTripped.schemes.dark.primitives.brand.length === 12 &&
+					roundTripped.schemes.light.primitives.brand[0]?.$extensions[CAMBIUM_NAMESPACE]
+						.seedField === 'keyColors'
+				);
+			},
+		],
+		[
+			'summarizeViolations',
+			() => {
+				const validated = validateDtcg(brokenHueDocument);
+
+				if (validated.valid) return false;
+
+				const [summary, ...rest] = summarizeViolations(validated.violations);
+
+				// Nineteen raw diagnostics have to fold into exactly one row addressing the hue for
+				// this to be true; a fold that dropped the anchoring logic and returned one row per
+				// diagnostic, or the wrong row, would fail here even though it "parsed" something.
+				return (
+					rest.length === 0 &&
+					summary?.pointer === '/color/brand/$value/components/2' &&
+					summary?.likelyCause === 'must be < 360'
+				);
 			},
 		],
 	])('%s parses a valid value without reaching the network', (_name, parses) => {

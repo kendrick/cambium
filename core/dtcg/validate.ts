@@ -13,10 +13,20 @@ import validateAgainstSchema, { type DtcgSchemaError } from './format-validator.
  * property whose name is the empty string. Rendering the root as something a person reads is the
  * caller's job, and doing it here would hand every caller a pointer that resolves to the wrong
  * place.
+ *
+ * `keyword`, `params` and `schemaPath` are Ajv's own, forwarded rather than interpreted. They are
+ * here because `pointer` and `message` between them cannot say which subschema produced a
+ * diagnostic, and that is the difference between a real finding and an echo: when a document omits
+ * the property an `if`/`then` chain keys on, every branch applies at once and each reports the
+ * same value against its own range. `schemaPath` separates those; a message string cannot.
+ * `core/dtcg/report.ts` is the consumer, and carrying a field is not a claim about it.
  */
 export type DtcgViolation = {
 	pointer: string;
 	message: string;
+	keyword: string;
+	params: Readonly<Record<string, unknown>>;
+	schemaPath: string;
 };
 
 export type DtcgValidationResult = { valid: true } | { valid: false; violations: DtcgViolation[] };
@@ -74,11 +84,13 @@ function pointerFor(error: DtcgSchemaError): string {
  * before: they now address a real value rather than its parent. Treat an `additionalProperties`
  * diagnostic under a failed `oneOf` as a claim about one rejected branch, not about the document.
  *
- * Collapsing that into one problem per mistake needs a consumer to say what it wants, because
- * doing it here means guessing which `oneOf` branch the author intended, and a wrong guess drops
- * a real error somewhere else in the document. Noise is the better failure. #11 is the consumer
- * that gets to make the call, so do not add a filter, a heuristic, or a deepest-pointer-wins rule
- * before then.
+ * Collapsing that into one problem per mistake needed a consumer to say what it wanted, and #11
+ * said it: summarize beside, never prune. Collapsing here would mean guessing which `oneOf` branch
+ * the author intended, and a wrong guess drops a real error somewhere else in the document with
+ * nothing left to check it against. So this stays lossless, and `summarizeViolations` in
+ * `report.ts` groups the diagnostics on top of it, where a wrong guess costs one misleading row
+ * and the raw list is still there to read. Do not move a filter, a heuristic, or a
+ * deepest-pointer-wins rule in here.
  */
 export function validateDtcg(tokenDocument: unknown): DtcgValidationResult {
 	if (validateAgainstSchema(tokenDocument)) return { valid: true };
@@ -92,6 +104,9 @@ export function validateDtcg(tokenDocument: unknown): DtcgValidationResult {
 		violations: errors.map((error) => ({
 			pointer: pointerFor(error),
 			message: error.message ?? `failed the ${error.keyword} constraint`,
+			keyword: error.keyword,
+			params: error.params,
+			schemaPath: error.schemaPath,
 		})),
 	};
 }

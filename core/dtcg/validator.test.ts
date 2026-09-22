@@ -141,8 +141,10 @@ describe('validateDtcg', () => {
 	 * Characterization, not endorsement. One bad value produces nineteen diagnostics because Ajv
 	 * reports every rejected `oneOf` branch, and four of the six distinct pointers below address
 	 * keys that are perfectly legal where they sit. Collapsing that means guessing which branch the
-	 * author intended, and a wrong guess hides a real error elsewhere, so the noise stays until #11
-	 * says what it wants.
+	 * author intended, and a wrong guess hides a real error elsewhere, so the noise stays here and
+	 * `summarizeViolations` in `report.ts` groups it beside instead. That is the call #11 made, and
+	 * it is why this test still pins nineteen rather than one: the summary reads this list, so the
+	 * list has to keep everything the summary might be wrong about.
 	 *
 	 * The exact figures are pinned on purpose. A vague assertion would let the shape drift without
 	 * anyone noticing, and these can only move when someone runs `pnpm dtcg:refresh`, which is a
@@ -165,6 +167,29 @@ describe('validateDtcg', () => {
 				'/color/brand/$value/components/2',
 			]),
 		);
+	});
+
+	/**
+	 * Ajv states the keyword, its parameters and the subschema that produced each diagnostic, and
+	 * all three come through untouched. `report.ts` needs them: the same message arriving from two
+	 * different `#/allOf/N/if` branches is the difference between one mistake and an echo of an
+	 * unresolved discriminator, and nothing in `pointer` or `message` can tell them apart.
+	 *
+	 * Carrying the fields is not a claim about them. `validateDtcg` still says nothing about which
+	 * diagnostics matter, and every judgement about that lives in `report.ts`.
+	 */
+	it('carries the keyword, params and schemaPath Ajv reported', () => {
+		const hue = violationsOf(badHue).find((violation) => violation.keyword === 'exclusiveMaximum');
+
+		expect(hue?.pointer).toBe('/color/brand/$value/components/2');
+		expect(hue?.params).toEqual({ comparison: '<', limit: 360 });
+		expect(hue?.schemaPath).toBe('#/oneOf/0/exclusiveMaximum');
+
+		// The key `pointerFor` joined on is still in `params`, where Ajv put it. Reading it there
+		// beats parsing it back out of the pointer, which is what `report.ts` reads it for.
+		const strayKey = violationsOf({ $foo: 1 });
+
+		expect(strayKey[0]?.params).toEqual({ additionalProperty: '$foo' });
 	});
 
 	// The empty string addresses the whole document, and `/` addresses the property named by the

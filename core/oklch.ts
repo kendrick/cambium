@@ -125,6 +125,47 @@ export function renderedContrast(color: Oklch, background: Oklch): number {
 	return wcagContrast(toDisplayedSrgb(color), toDisplayedSrgb(background));
 }
 
+/**
+ * One `toDisplayedSrgb` channel as two lowercase hex digits.
+ *
+ * That function hands back bytes divided by 255, so this multiply recovers the byte it already
+ * chose. The round mops up the division, which leaves values like 199.99999999999997 behind.
+ */
+function hexDigits(channel: number): string {
+	return Math.round(channel * 255)
+		.toString(16)
+		.padStart(2, '0');
+}
+
+/**
+ * The six-digit sRGB hex for a colour, off the same bytes `renderedContrast` gates on.
+ *
+ * It reuses `toDisplayedSrgb` so that one rounding serves both. culori's `formatHex` would round
+ * the channels a second time, and a second rounding is #72: a step solved a hair over a contrast
+ * floor against one byte pair, then published as a different one. The two roundings do agree
+ * today, and that agreement is what makes a second one risky to keep: it holds until a culori
+ * release or a change in gamut mapping ends it, and nothing in the build would report that.
+ * Reusing the rounding already here also costs no new import against the first-load headroom
+ * `lib/bundle-budget.ts` defends.
+ *
+ * Three channels in, six digits out, and no alpha at any point. DTCG's `hex` is a fallback for
+ * tools that cannot evaluate a colour space, and the spec keeps it opaque so it cannot contradict
+ * the sibling `alpha` field. Shadow colours do carry alpha (`core/token-set.ts:364-366`), so a
+ * consumer that reads their `hex` and ignores `alpha` gets an opaque shadow. DTCG makes that trade
+ * deliberately, and this function follows it.
+ *
+ * A colour outside sRGB has no honest hex, and gets the clamped one instead of an exception. No
+ * ramp step arrives that way, because every one passes `fitToSrgbGamut` then `quantizeToSrgb`
+ * first, so this only answers for a colour that reached here some other route. Clamping is what a
+ * browser does with an out-of-range channel anyway, and the clamp is `toDisplayedSrgb`'s, so even
+ * here the hex cannot disagree with the contrast the gate measured for the same colour.
+ */
+export function toSrgbHex(color: Oklch): string {
+	const rgb = toDisplayedSrgb(color);
+
+	return `#${hexDigits(rgb.r)}${hexDigits(rgb.g)}${hexDigits(rgb.b)}`;
+}
+
 export function isInSrgb(color: Oklch): boolean {
 	const rgb = toRgb({ mode: 'oklch', ...color });
 
