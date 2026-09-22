@@ -27,6 +27,26 @@ import {
  * is checked here; value shape is left to `TokenSetSchema`, whose issue paths already say where a
  * bad provenance payload or an out-of-range channel sits. Restating those rules would leave two
  * graders to keep in sync.
+ *
+ * DTCG is wider than the internal model, so one rule settles every feature the model cannot hold,
+ * and it is a rule about what the returned token set would claim rather than about what this
+ * module happens to understand. A token set must never assert something the document did not say.
+ * Four cases follow from that, and each site that reads one of these points back here:
+ *
+ * 1. A feature whose absence would change how a surviving value renders is refused by name. An
+ *    `inset: true` shadow dropped to the model's drop-shadow slot re-serializes as `inset: false`,
+ *    which is an inner shadow silently turned into an outer one. A ramp step whose `alpha` is not
+ *    1 is the same mistake: the model has no alpha there, so the colour would come back opaque.
+ * 2. A feature that is itself a value the set would otherwise lose is refused by name. `$root` is a
+ *    token by the vendored schema, not metadata, and an unmodelled group holds tokens. Reading past
+ *    either hands back a set that is missing a value the document declared, with nothing to say so.
+ * 3. A feature that annotates a value which survives unchanged is read past, and the loss is
+ *    recorded where it happens. `$description` and `$deprecated` on a token, and a group's
+ *    `$description` or `$extensions`, all describe something whose value still round-trips exactly.
+ * 4. A feature the model can hold is held, even where the document leaves it implicit. A shadow
+ *    colour with no `alpha` is DTCG's default of 1, which `ShadowColorSchema` holds perfectly, so
+ *    refusing it would be this same failure pointing the other way: a conforming document rejected
+ *    over a value that was never in doubt.
  */
 
 /** A group or a token, before anything has established which. */
@@ -170,9 +190,11 @@ function groupAt(doc: Doc, path: readonly string[]): Node {
  * document that a refreshed `format.2025.10.json` accepts, which is the same failure as refusing
  * `$schema` today, one release later.
  *
- * What this costs is honest and small: metadata has nowhere to live on a `TokenSet`, so a root
- * `$description` an editor stamped is read past and does not come back on re-serialization. A
- * document Cambium wrote carries none of these keys, so its own round trip is exact.
+ * What this costs is honest and small, and it is the rule's case 3: metadata has nowhere to live on
+ * a `TokenSet`, so a `$description` or a `$deprecated` an editor stamped is read past and does not
+ * come back on re-serialization. Both annotate a token or a group whose own value still round-trips
+ * exactly, which is what separates them from `$root`. A document Cambium wrote carries none of
+ * these keys, so its own round trip is exact.
  *
  * `$type` is the one reserved name that also does work elsewhere: `groupAt` uses it to tell a token
  * from a group, the same structural test `serialize.test.ts` makes. A group carrying a `$type` for
@@ -184,16 +206,60 @@ function isReservedName(name: string): boolean {
 }
 
 /**
+ * The reserved names that carry a value rather than annotate one, each with the clause that says
+ * why reading past it would lose something. Both are the rule's case 2.
+ *
+ * `$root` is a token, not metadata: the vendored schema gives it `$ref: token.json` at the root and
+ * on every group, beside a `$description` that is merely a string. `$extends` names another group
+ * whose tokens this group then also holds, so a group that extends one is a group whose contents
+ * are not all written where it sits.
+ *
+ * Read as a table rather than checked one name at a time, because the difference between these and
+ * `$description` is the whole of what the last three reviews were about, and a reader deciding
+ * where a new reserved name belongs should be able to see both lists at once.
+ */
+const VALUE_BEARING_RESERVED: Record<string, string> = {
+	$root:
+		'is a DTCG token rather than metadata, and the internal model has no name to file it under, so reading past it would drop the value it holds',
+	$extends:
+		"brings in another group's tokens, which the internal model has no way to hold, so reading past it would drop every token it inherits",
+};
+
+/**
+ * The names under a node that hold a group or a token, with the reserved ones settled on the way
+ * past so that no walk has to think about them again.
+ *
+ * Every walk over a node's entries goes through here, which is the point: the rule about reserved
+ * names is stated once rather than filtered for at each of the three places that iterate. That
+ * matters because the three used to agree only by coincidence, and a `$root` skipped as metadata is
+ * a token dropped in silence.
+ */
+function walkableNames(group: Node, doc: Doc, path: readonly string[]): string[] {
+	const names: string[] = [];
+
+	for (const name of Object.keys(group)) {
+		if (!isReservedName(name)) {
+			names.push(name);
+			continue;
+		}
+
+		// `Object.hasOwn` for the reason `declaredRamp` gives in `core/token-set.ts`: a bare index on
+		// a plain object walks the prototype chain.
+		if (Object.hasOwn(VALUE_BEARING_RESERVED, name)) {
+			throw new Error(`${label(doc, [...path, name])} ${VALUE_BEARING_RESERVED[name]}`);
+		}
+	}
+
+	return names;
+}
+
+/**
  * Rejects a group name this deserializer would otherwise walk past.
  *
  * Only applied where the shape is fixed—the root and the four groups with named children—since
  * everywhere else the entries are iterated and nothing can be missed. A group left unread reads
  * back as a token set that never held it, and no later comparison can tell that apart from a token
  * set that really did not.
- *
- * Reserved names are exempt, and the message below says why they have to be: a `$schema` pointer an
- * editor stamped on the root carries no tokens at all, so refusing it would be both wrong about the
- * document and wrong in its reason.
  */
 function requireOnly(
 	group: Node,
@@ -201,9 +267,7 @@ function requireOnly(
 	doc: Doc,
 	path: readonly string[],
 ): void {
-	const unmodelled = Object.keys(group).filter(
-		(name) => !isReservedName(name) && !expected.includes(name),
-	);
+	const unmodelled = walkableNames(group, doc, path).filter((name) => !expected.includes(name));
 
 	if (unmodelled.length > 0) {
 		throw new Error(
@@ -228,7 +292,7 @@ function valueOf(token: Node, doc: Doc, path: readonly string[]): unknown {
 	return childOf(token, '$value', doc, [...path, '$value']);
 }
 
-/** Every child of a group that is a group or a token, which is every key `isReservedName` clears. */
+/** Every child of a group that holds a group or a token, which is what `walkableNames` returns. */
 function mapGroup<T>(
 	group: Node,
 	doc: Doc,
@@ -236,9 +300,7 @@ function mapGroup<T>(
 	read: (node: unknown, tokenPath: string[]) => T,
 ): Record<string, T> {
 	return Object.fromEntries(
-		Object.entries(group)
-			.filter(([name]) => !isReservedName(name))
-			.map(([name, node]) => [name, read(node, [...path, name])]),
+		walkableNames(group, doc, path).map((name) => [name, read(group[name], [...path, name])]),
 	);
 }
 
@@ -340,7 +402,32 @@ function checkHex(hex: unknown, color: Oklch, doc: Doc, path: readonly string[])
 	}
 }
 
-function colorOf(value: unknown, doc: Doc, path: readonly string[]): Oklch & { alpha?: number } {
+/**
+ * DTCG's `alpha` is optional everywhere and the internal model takes it in one place only, so the
+ * two colour contexts read it differently and the caller says which it is in.
+ *
+ * `carried` is a shadow colour, whose whole job is to be partly transparent and whose schema
+ * requires the field. An absent `alpha` is DTCG's stated default of 1 ("If omitted, defaults to 1",
+ * `format.2025.10.json:618`), which `ShadowColorSchema` holds exactly, so it is filled in rather
+ * than refused: the rule's case 4, and refusing a conforming opaque shadow over a value the spec
+ * already settled would be the whole mistake in reverse.
+ *
+ * `opaque` is a ramp step or the colour behind a semantic alias, where `RampStepSchema` has no
+ * alpha slot at all. Absent and 1 mean the same thing there and are accepted; any other alpha is
+ * the rule's case 1, refused by name, because the model would hand the colour back fully opaque and
+ * a translucent step would have become a solid one with nothing to say so.
+ */
+type AlphaPolicy = 'carried' | 'opaque';
+
+/** DTCG's default when a colour omits `alpha` (`format.2025.10.json:618`). */
+const DTCG_DEFAULT_ALPHA = 1;
+
+function colorOf(
+	value: unknown,
+	doc: Doc,
+	path: readonly string[],
+	alpha: AlphaPolicy,
+): Oklch & { alpha?: number } {
 	const color = asNode(value, doc, path);
 
 	if (color.colorSpace !== 'oklch') {
@@ -363,9 +450,23 @@ function colorOf(value: unknown, doc: Doc, path: readonly string[]): Oklch & { a
 
 	checkHex(color.hex, { l, c, h }, doc, path);
 
-	// Alpha rides through only when it is there. A ramp step has no slot for one and a shadow colour
-	// requires one, and `TokenSetSchema` is the place that says which is which.
-	return typeof color.alpha === 'number' ? { l, c, h, alpha: color.alpha } : { l, c, h };
+	// A pointer reference object is legal here and this deserializer resolves no pointers, so it is
+	// refused by the same check that catches a malformed alpha rather than read as "absent".
+	if (color.alpha !== undefined && typeof color.alpha !== 'number') {
+		throw new Error(`${label(doc, path)} holds an alpha this deserializer cannot read as a number`);
+	}
+
+	if (alpha === 'carried') {
+		return { l, c, h, alpha: color.alpha ?? DTCG_DEFAULT_ALPHA };
+	}
+
+	if (color.alpha !== undefined && color.alpha !== DTCG_DEFAULT_ALPHA) {
+		throw new Error(
+			`${label(doc, path)} is ${color.alpha} alpha, and the internal model holds no alpha outside a shadow, so reading it would return the colour fully opaque`,
+		);
+	}
+
+	return { l, c, h };
 }
 
 /**
@@ -535,7 +636,7 @@ function rampStepOf(node: unknown, step: number, doc: Doc, path: readonly string
 
 	return {
 		step,
-		...colorOf(value, doc, [...path, '$value']),
+		...colorOf(value, doc, [...path, '$value'], 'opaque'),
 		$extensions: ownExtensions(token, doc, path),
 	};
 }
@@ -547,18 +648,16 @@ function rampOf(node: unknown, doc: Doc, path: readonly string[]) {
 		throw new Error(`${label(doc, path)} is a token where a ramp of twelve steps was expected`);
 	}
 
-	const steps = Object.entries(group)
-		.filter(([name]) => !isReservedName(name))
-		.map(([name, stepNode]) => {
-			const stepPath = [...path, name];
-			const step = Number(name);
+	const steps = walkableNames(group, doc, path).map((name) => {
+		const stepPath = [...path, name];
+		const step = Number(name);
 
-			if (!Number.isInteger(step)) {
-				throw new Error(`${label(doc, stepPath)} is not named for a ramp step number`);
-			}
+		if (!Number.isInteger(step)) {
+			throw new Error(`${label(doc, stepPath)} is not named for a ramp step number`);
+		}
 
-			return rampStepOf(stepNode, step, doc, stepPath);
-		});
+		return rampStepOf(group[name], step, doc, stepPath);
+	});
 
 	// `map` already returned a fresh array, so this sort mutates nothing the caller can see.
 	// `toSorted` would say it directly and is ES2023 against an ES2022 target.
@@ -635,21 +734,60 @@ function schemeFrom(doc: Doc) {
 	};
 }
 
+/**
+ * `inset` is optional on a DTCG shadow and defaults to false, and `ShadowSchema` has no slot for
+ * it, so the model can hold a drop shadow and nothing else.
+ *
+ * False and absent both mean a drop shadow, so both are read without comment. True is the rule's
+ * case 1 and is refused by name: the model would take the geometry and the colour, drop the one
+ * field that says where the shadow is drawn, and re-serialize as `inset: false`. An inner shadow
+ * would have become an outer one, and every value in the token set would look right.
+ *
+ * Anything that is neither boolean is a JSON Pointer reference the schema also allows here, and
+ * this deserializer resolves no pointers, so it is refused rather than guessed at.
+ */
+function checkNotInset(value: Node, doc: Doc, valuePath: readonly string[]): void {
+	const inset = value.inset;
+
+	if (inset === undefined || inset === false) return;
+
+	throw new Error(
+		inset === true
+			? `${label(doc, valuePath)} is an inset shadow, and the internal model holds drop shadows only, so reading it would move the shadow outside the shape`
+			: `${label(doc, valuePath)} holds an inset this deserializer cannot read as a boolean`,
+	);
+}
+
 function shadowValues(doc: Doc) {
 	const path = [DTCG_GROUP.shadow];
 
 	return mapGroup(groupAt(doc, path), doc, path, (node, tokenPath) => {
 		const token = tokenAt(node, 'shadow', doc, tokenPath);
 		const valuePath = [...tokenPath, '$value'];
-		const value = asNode(valueOf(token, doc, tokenPath), doc, valuePath);
+		const raw = valueOf(token, doc, tokenPath);
+
+		// DTCG lets a shadow `$value` be an array of shadow objects, layered back to front, where
+		// `ShadowSchema` holds exactly one. Named here rather than left to `asNode`, whose "not a
+		// DTCG group or token" says nothing about the feature that is actually missing.
+		if (Array.isArray(raw)) {
+			throw new Error(
+				`${label(doc, valuePath)} is a layered shadow of ${raw.length}, and the internal model holds one shadow per token`,
+			);
+		}
+
+		const value = asNode(raw, doc, valuePath);
 		const geometry = (name: string) =>
 			magnitudeOf(childOf(value, name, doc, [...valuePath, name]), doc, [...valuePath, name]);
 
+		checkNotInset(value, doc, valuePath);
+
 		return {
-			color: colorOf(childOf(value, 'color', doc, [...valuePath, 'color']), doc, [
-				...valuePath,
-				'color',
-			]),
+			color: colorOf(
+				childOf(value, 'color', doc, [...valuePath, 'color']),
+				doc,
+				[...valuePath, 'color'],
+				'carried',
+			),
 			offsetX: geometry('offsetX'),
 			offsetY: geometry('offsetY'),
 			blur: geometry('blur'),

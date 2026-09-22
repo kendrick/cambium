@@ -79,6 +79,28 @@ function stamp(document: unknown, path: readonly string[], key: string): void {
 }
 
 /**
+ * A conforming `$root` token, which the vendored schema defines as `$ref: token.json` both at the
+ * document root and on every group. Written out as a real token so the doctored documents stay
+ * schema-valid: the point of those cases is that a legal `$root` is refused for what it is, not
+ * that a malformed one fails somewhere.
+ */
+const ROOT_TOKEN = {
+	$type: 'dimension',
+	$value: { value: 9, unit: 'rem' },
+	$extensions: {
+		'com.cambium': { provenance: 'invented', rationale: 'a root token', seedField: null },
+	},
+};
+
+const RAMP_ROOT_TOKEN = {
+	$type: 'color',
+	$value: { colorSpace: 'oklch', components: [0.5, 0, 0] },
+	$extensions: {
+		'com.cambium': { provenance: 'invented', rationale: 'a root token', seedField: null },
+	},
+};
+
+/**
  * Every object reachable from a value, by identity. Used to assert that the token set and the
  * documents share none, which is a property rather than a list of places someone thought to check.
  *
@@ -415,6 +437,173 @@ describe('deserializeDtcg', () => {
 			expect(() => deserializeDtcg(light, dark)).toThrow(names);
 		});
 	}
+
+	/**
+	 * DTCG is wider than the internal model, and `deserialize.ts` settles every feature the model
+	 * cannot hold with one rule: the returned token set must never assert something the document did
+	 * not say. These cases are that rule's four branches, read off real documents.
+	 *
+	 * The refusals assert the feature by name as well as the token, because a message that says only
+	 * "cannot read this" sends a reader to the wrong place. The acceptances assert what was kept, so
+	 * an over-eager refusal would fail here rather than quietly narrowing what Cambium can import.
+	 * Every case checks both documents through `violationLines` first: each of these is a conforming
+	 * DTCG document, and a test that let the schema reject one would prove nothing about the rule.
+	 */
+	const modelRefusals: {
+		what: string;
+		spoil: (document: typeof SPEC_LIGHT_DOCUMENT) => void;
+		names: string[];
+	}[] = [
+		{
+			what: 'an inset shadow rather than turning it into a drop shadow',
+			spoil: (document) => {
+				(document.shadow.md.$value as Record<string, unknown>).inset = true;
+			},
+			names: ['shadow.md.$value', 'inset'],
+		},
+		{
+			what: 'a $root token under a modelled group rather than dropping it',
+			spoil: (document) => {
+				(document.radius as Record<string, unknown>).$root = ROOT_TOKEN;
+			},
+			names: ['radius.$root', 'token'],
+		},
+		{
+			what: 'a $root token at the document root',
+			spoil: (document) => {
+				(document as Record<string, unknown>).$root = ROOT_TOKEN;
+			},
+			names: ['light.$root', 'token'],
+		},
+		{
+			what: 'a $root token on a primitive ramp',
+			spoil: (document) => {
+				(document.color.primitive.brand as Record<string, unknown>).$root = RAMP_ROOT_TOKEN;
+			},
+			names: ['color.primitive.brand.$root', 'token'],
+		},
+		{
+			what: 'a group that $extends another rather than dropping what it inherits',
+			spoil: (document) => {
+				(document.radius as Record<string, unknown>).$extends = '{spacing}';
+			},
+			names: ['radius.$extends', 'inherits'],
+		},
+		{
+			what: 'a ramp step whose alpha the model would drop to opaque',
+			spoil: (document) => {
+				(document.color.primitive.brand['1'].$value as Record<string, unknown>).alpha = 0.5;
+			},
+			names: ['color.primitive.brand.1.$value', 'alpha'],
+		},
+		{
+			what: 'a layered shadow rather than keeping one layer of it',
+			spoil: (document) => {
+				(document.shadow.md as Record<string, unknown>).$value = [
+					structuredClone(document.shadow.md.$value),
+					structuredClone(document.shadow.md.$value),
+				];
+			},
+			names: ['shadow.md.$value', 'layered'],
+		},
+	];
+
+	for (const { what, spoil, names } of modelRefusals) {
+		it(`refuses ${what}`, () => {
+			const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+			const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+			spoil(light);
+			spoil(dark);
+
+			expect(violationLines(light)).toEqual([]);
+			expect(violationLines(dark)).toEqual([]);
+
+			for (const named of names) {
+				expect(() => deserializeDtcg(light, dark)).toThrow(named);
+			}
+		});
+	}
+
+	const modelAcceptances: {
+		what: string;
+		spoil: (document: typeof SPEC_LIGHT_DOCUMENT) => void;
+	}[] = [
+		{
+			what: 'an explicit inset: false, which says what the model already holds',
+			spoil: (document) => {
+				(document.shadow.md.$value as Record<string, unknown>).inset = false;
+			},
+		},
+		{
+			what: 'a ramp step alpha of 1, which means what an absent alpha means',
+			spoil: (document) => {
+				(document.color.primitive.brand['1'].$value as Record<string, unknown>).alpha = 1;
+			},
+		},
+		{
+			what: '$deprecated on a token, which annotates a value that survives intact',
+			spoil: (document) => {
+				(document.radius.md as Record<string, unknown>).$deprecated = true;
+			},
+		},
+		{
+			what: '$description on a token, for the same reason',
+			spoil: (document) => {
+				(document.radius.md as Record<string, unknown>).$description = 'a note';
+			},
+		},
+	];
+
+	for (const { what, spoil } of modelAcceptances) {
+		it(`accepts ${what}`, () => {
+			const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+			const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+			spoil(light);
+			spoil(dark);
+
+			expect(violationLines(light)).toEqual([]);
+			expect(violationLines(dark)).toEqual([]);
+
+			expect(deserializeDtcg(light, dark)).toEqual(
+				deserializeDtcg(SPEC_LIGHT_DOCUMENT, SPEC_DARK_DOCUMENT),
+			);
+		});
+	}
+
+	/**
+	 * DTCG states the default outright: "If omitted, defaults to 1" (`format.2025.10.json:618`).
+	 * `ShadowColorSchema` requires alpha and holds 1 perfectly, so an opaque shadow written the short
+	 * way is a conforming document the model can represent exactly. Refusing it was the rule pointing
+	 * the wrong way, and the value is asserted rather than the absence of a throw.
+	 */
+	it('reads an omitted shadow alpha as the DTCG default of 1', () => {
+		const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+		const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+		for (const document of [light, dark]) {
+			delete (document.shadow.md.$value.color as { alpha?: number }).alpha;
+		}
+
+		expect(violationLines(light)).toEqual([]);
+		expect(violationLines(dark)).toEqual([]);
+
+		const tokenSet = deserializeDtcg(light, dark);
+
+		expect(tokenSet.shadow.values.md.color.alpha).toBe(1);
+		expect(tokenSet.schemes.dark.shadow.values.md.color.alpha).toBe(1);
+	});
+
+	/**
+	 * The asymmetry the default must not break. A ramp step has no alpha field in the model, and
+	 * filling one in there would add a key `RampStepSchema` rejects outright.
+	 */
+	it('gives a ramp step no alpha field at all', () => {
+		const tokenSet = deserializeDtcg(SPEC_LIGHT_DOCUMENT, SPEC_DARK_DOCUMENT);
+
+		expect(Object.keys(tokenSet.primitives.brand[0])).not.toContain('alpha');
+	});
 
 	it('is deterministic: the same documents read back to the same bytes', () => {
 		const first = JSON.stringify(deserializeDtcg(SPEC_LIGHT_DOCUMENT, SPEC_DARK_DOCUMENT));
