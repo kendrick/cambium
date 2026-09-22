@@ -8,7 +8,7 @@ import {
 
 import { type BrandRecord, BrandRecordSchema } from '../../core/brand-record';
 
-import { type RecordStore, StaleRecordWriteError, extendsStoredHistory } from './record-store';
+import { type RecordStore, StaleRecordWriteError, followsStoredRecord } from './record-store';
 import { toStorageWriteError } from './storage-estimate';
 
 interface CambiumDatabase extends DBSchema {
@@ -116,7 +116,7 @@ export async function createIndexedDbRecordStore(): Promise<RecordStore> {
 				// it leans on comes from the IndexedDB specification rather than from the fake.
 				const stored = await records.get(validated.id);
 
-				if (stored !== undefined && !extendsStoredHistory(stored.versions, validated.versions)) {
+				if (stored !== undefined && !followsStoredRecord(stored, validated)) {
 					// Thrown from inside the operation, which leaves the transaction having only read.
 					// `toStorageWriteError` passes a non-quota `Error` through unchanged, so this
 					// reaches the caller as itself.

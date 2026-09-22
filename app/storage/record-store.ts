@@ -1,4 +1,4 @@
-import type { BrandRecord, BrandVersion } from '../../core/brand-record';
+import type { BrandRecord } from '../../core/brand-record';
 
 /**
  * Storage is deliberately not part of the pure core. This phase keeps records in memory, the
@@ -10,10 +10,11 @@ import type { BrandRecord, BrandVersion } from '../../core/brand-record';
  * even if a caller tries to smuggle one in alongside a record — the schema is where that
  * guarantee actually lives, not a check inside this seam.
  *
- * `put` refuses a write from a record that is already behind what is stored: it rejects with
- * `StaleRecordWriteError` unless the incoming history extends the stored one, holding every stored
- * version unchanged and in place plus at least one more. See `extendsStoredHistory`, which is where
- * the rule is written down once for every implementation to share.
+ * `put` refuses a write that did not come from the record as storage currently holds it. A write
+ * has to follow the stored record on both counts: its `revision` is the one after the stored
+ * record's, and its `versions` carry every stored version unchanged and in place. Anything else
+ * rejects with `StaleRecordWriteError`. See `followsStoredRecord`, where the rule is written down
+ * once for every implementation to share.
  *
  * The check lives here because nothing above it can make it. Keying on record id plus version count
  * refuses a record deleted and recreated under the same id, forever; keying on object identity is
@@ -21,20 +22,24 @@ import type { BrandRecord, BrandVersion } from '../../core/brand-record';
  * different object holding the same old history. #21 tried both and review defeated both. The only
  * authority on what is stored is storage.
  *
- * The guarantee covers `versions` and nothing else, because `versions.length` is the only counter a
- * record carries. Every other field rides along with whatever write happens to hold it: `images`
- * today, and an image tag and a brand URL once #77 lands. So a write that changes one of those
- * without appending a version is refused, since equal counts read as stale. A record stored before
- * its first generation is frozen at that moment, and adding a second reference image to a saved
- * brand has no path through this seam at all.
+ * The guarantee covers every field, because `revision` counts commits of the record rather than
+ * entries in its history. A write that adds a reference image and appends no version still moves
+ * the revision, so `put` stores it. That covers `images` today, and an image tag and a brand URL
+ * once #77 lands.
  *
- * That is a real limit rather than the rule working, and #78 owns closing it. The fix is a revision
- * covering the whole record, which is a `core/` schema change this seam does not own. Refusing is the safe half
- * of the trade in the meantime. Accepting equal counts would let two writers each add an image and
- * let the second drop the first's, which is this ticket's own defect wearing a different field.
+ * A caller has to carry `revision` forward on every commit, images-only ones included. A commit
+ * that leaves the revision where it was reads exactly like a second write off the same copy, and
+ * `put` refuses it as one.
  *
- * Restoring an archive over a record that still exists rejects for the same reason. The recovery is
- * `delete` and then `put`.
+ * `versions` keeps a second rule on top of that one, which is #67's. The stored history has to
+ * arrive unchanged and in place: a write may append to that history or leave it alone, and may
+ * never rewrite or drop from it. Callers read the last entry as current, and a version is the
+ * record of what was generated at one moment, so editing one rewrites history a later version may
+ * cite.
+ *
+ * Restoring an archive over a record that still exists rejects like any other write off a copy
+ * storage never handed out. The archive carries the revision its own history reached, which is not
+ * the one after the revision storage holds. The recovery is `delete` and then `put`.
  *
  * `put` resolves with the record as stored, after parsing. `BrandSeedSchema` canonicalises values
  * that have two spellings — a hue committed as 360 is stored as 0 — so a caller that adopts the
@@ -59,15 +64,28 @@ export type RecordStore = {
 };
 
 /**
- * Whether `incoming` extends `stored`, which is what "derived from the record as it stands" means
- * for an append-only history, and the only thing `put` accepts.
+ * Whether `incoming` follows `stored`, which is what "derived from the record as it stands" means,
+ * and the only thing `put` accepts.
  *
- * Comparing counts is necessary and not sufficient. A writer that read `[v1]` and committed twice
- * arrives holding `[v1, v2b, v3b]` while storage holds `[v1, v2a]`: the incoming history is longer
- * and still derived from a copy that never saw `v2a`, so a count-only rule accepts it and drops
- * `v2a`. That is this seam's own defect one version further along. `BrandRecordSchema` forces
- * ordinals to start at 1 and increase with no gaps, so a longer history always looks well formed
- * and the ordinals cannot tell these two apart.
+ * The revision has to be the stored one's successor rather than merely ahead of it. A writer that
+ * read revision 3 and committed twice without writing back arrives holding 5 while storage holds
+ * 4. That copy never saw the commit that landed, and `> stored.revision` accepts it anyway.
+ *
+ * Equal revisions are the case worth spelling out, because accepting them looks harmless while the
+ * history check is still in place. Two writers read revision 1. One adds an image and commits 2,
+ * which leaves the stored history untouched. The other appends a version and commits its own 2.
+ * The stored history is still a prefix of what that second write brings, so the revision is the
+ * only thing standing between it and an image dropped in silence. That is this seam's own defect
+ * wearing the field #78 filed it for.
+ *
+ * The history comparison does a job the revision cannot, which is why #67's rule stays on top of
+ * it. A revision that agrees says nothing about whether the incoming history is well formed, and
+ * comparing counts is necessary and not sufficient. A writer that read `[v1]` and committed twice
+ * arrives holding `[v1, v2b, v3b]` while storage holds `[v1, v2a]`, so the incoming history is
+ * longer and still derived from a copy that never saw `v2a`, and a count-only rule accepts it and
+ * drops `v2a`.
+ * `BrandRecordSchema` forces ordinals to start at 1 and increase with no gaps, so a longer history
+ * always looks well formed and the ordinals cannot tell these two apart.
  *
  * Compared by serialisation, which is sound only because of what `BrandRecordSchema` refuses.
  * Nothing in a parsed record is optional, so no key holds `undefined` for `JSON.stringify` to drop.
@@ -95,24 +113,29 @@ export type RecordStore = {
  * The walk costs one pass over the stored history. `put` already serialises the whole record,
  * reference images included, so this is cheaper than the write it guards.
  */
-export function extendsStoredHistory(stored: BrandVersion[], incoming: BrandVersion[]): boolean {
+export function followsStoredRecord(stored: BrandRecord, incoming: BrandRecord): boolean {
 	return (
-		incoming.length > stored.length &&
-		JSON.stringify(stored) === JSON.stringify(incoming.slice(0, stored.length))
+		incoming.revision === stored.revision + 1 &&
+		incoming.versions.length >= stored.versions.length &&
+		JSON.stringify(stored.versions) ===
+			JSON.stringify(incoming.versions.slice(0, stored.versions.length))
 	);
 }
 
 /**
- * Thrown when a `put` arrives from a record that is already behind what is stored: storage holds at
- * least as many versions as the incoming record does. `kind` follows the same discriminated-error
- * convention as `StorageQuotaExceededError` and the core's `SeedParseError`, so a caller branches
- * on a field rather than on a message. The recovery is always the same — re-read the record and
- * commit again — and a caller can only choose it if it can tell this apart from a malformed record
- * or a full origin.
+ * Thrown when a `put` arrives from a copy storage has already moved past. Either the incoming
+ * revision is not the one after the stored record's, or the history the write brings is not the
+ * stored history continued. The version counts this error carries are context rather than the test
+ * the write failed, and they are equal whenever the losing write changed no version. `kind`
+ * follows the same
+ * discriminated-error convention as `StorageQuotaExceededError` and the core's `SeedParseError`,
+ * so a caller branches on a field rather than on a message. The recovery is always the same—re-read
+ * the record and commit again—and a caller can only choose it if it can tell this apart from a
+ * malformed record or a full origin.
  *
  * The counts are reported because the store is the only thing that can report them honestly.
  * `StaleWorkspaceError` one layer up deliberately carries none, since anything the workspace could
- * offer would be what it wrote rather than what storage holds. Here they are the same number.
+ * offer would be what it wrote rather than what storage holds.
  */
 export class StaleRecordWriteError extends Error {
 	readonly kind = 'stale-record-write';
@@ -127,7 +150,7 @@ export class StaleRecordWriteError extends Error {
 		options?: { cause?: unknown },
 	) {
 		super(
-			`record ${recordId} already holds ${storedVersions} versions, so writing ${incomingVersions} from an older copy would drop one`,
+			`record ${recordId} has been written since this copy was read, so writing it back would drop what landed in between; storage holds ${storedVersions} versions and this copy holds ${incomingVersions}`,
 			options,
 		);
 		this.name = 'StaleRecordWriteError';

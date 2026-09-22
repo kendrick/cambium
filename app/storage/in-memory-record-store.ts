@@ -1,6 +1,6 @@
 import { type BrandRecord, BrandRecordSchema } from '../../core/brand-record';
 
-import { type RecordStore, StaleRecordWriteError, extendsStoredHistory } from './record-store';
+import { type RecordStore, StaleRecordWriteError, followsStoredRecord } from './record-store';
 
 /**
  * Backed by a `Map` keyed on record id. Every record entering or leaving it round-trips through
@@ -30,7 +30,7 @@ export function createInMemoryRecordStore(): RecordStore {
 			const validated = BrandRecordSchema.parse(record);
 			const stored = records.get(validated.id);
 
-			if (stored && !extendsStoredHistory(stored.versions, validated.versions)) {
+			if (stored && !followsStoredRecord(stored, validated)) {
 				throw new StaleRecordWriteError(
 					validated.id,
 					stored.versions.length,
