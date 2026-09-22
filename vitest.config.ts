@@ -9,7 +9,10 @@ import { defineConfig } from 'vitest/config';
 const node = {
 	environment: 'node' as const,
 	globals: true,
-	exclude: ['node_modules/**', 'out/**', '.next/**'],
+	// `e2e/**` holds Playwright specs, named `*.spec.ts` so the `unit` project's `*.test.ts`
+	// include already skips them. This is the second guard: a file mis-named `*.test.ts` under
+	// `e2e/` still cannot leak into `pnpm test`.
+	exclude: ['node_modules/**', 'out/**', '.next/**', 'e2e/**'],
 };
 
 export default defineConfig({
