@@ -430,8 +430,15 @@ export function createWorkspaceStore({
 			};
 
 			// Append, never touch what is already there: a version is the record of what was generated
-			// at a moment, and editing one rewrites history that a later version may cite.
-			const next: BrandRecord = { ...record, versions: [...record.versions, version] };
+			// at a moment, and editing one rewrites history that a later version may cite. `revision`
+			// counts commits of the record, not versions, so it has to advance here too, even on the
+			// images-only path this function doesn't take today: leaving it where it was reads to
+			// `RecordStore.put` as a second write off the same stale copy, and it refuses the write.
+			const next: BrandRecord = {
+				...record,
+				revision: record.revision + 1,
+				versions: [...record.versions, version],
+			};
 
 			// Deliberately uncaught. A full origin arrives here as `StorageQuotaExceededError`, and
 			// #39 can only offer to free room if it can tell that apart from a schema rejection,
