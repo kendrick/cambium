@@ -448,6 +448,19 @@ describe('deserializeDtcg', () => {
 	 * an over-eager refusal would fail here rather than quietly narrowing what Cambium can import.
 	 * Every case checks both documents through `violationLines` first: each of these is a conforming
 	 * DTCG document, and a test that let the schema reject one would prove nothing about the rule.
+	 *
+	 * Each case runs three times, and the one-sided runs are the ones that earn their keep. Stamping
+	 * both documents puts the feature where the reader looks, and the reader takes the eight shared
+	 * families from light alone, so a table of symmetric cases passes whether a refusal is a
+	 * property of the document or only of whichever document supplied the values. That gap hid a
+	 * `$root` on the dark side, and before that it hid a `$description` residual in the comparison.
+	 * A refusal has to hold from either side and an acceptance has to hold from either side, so the
+	 * asymmetric runs are what the rule actually claims.
+	 *
+	 * The names asserted are chosen to hold whichever document is stamped, which is why the
+	 * document-root case asserts `$root` rather than `light.$root`: the same feature can be refused
+	 * by the reader naming its document or by the comparison naming neither, and pinning the
+	 * mechanism instead of the feature would make the test brittle about something it is not for.
 	 */
 	const modelRefusals: {
 		what: string;
@@ -473,7 +486,7 @@ describe('deserializeDtcg', () => {
 			spoil: (document) => {
 				(document as Record<string, unknown>).$root = ROOT_TOKEN;
 			},
-			names: ['light.$root', 'token'],
+			names: ['$root', 'token'],
 		},
 		{
 			what: 'a $root token on a primitive ramp',
@@ -497,6 +510,16 @@ describe('deserializeDtcg', () => {
 			names: ['color.primitive.brand.1.$value', 'alpha'],
 		},
 		{
+			what: 'a transport payload carrying more than the unit it exists to carry',
+			spoil: (document) => {
+				(document.tracking.tight.$extensions as Record<string, unknown>)['com.cambium.dtcg'] = {
+					unit: 'em',
+					note: 'written by some other tool',
+				};
+			},
+			names: ['com.cambium.dtcg', 'note'],
+		},
+		{
 			what: 'a layered shadow rather than keeping one layer of it',
 			spoil: (document) => {
 				(document.shadow.md as Record<string, unknown>).$value = [
@@ -509,20 +532,22 @@ describe('deserializeDtcg', () => {
 	];
 
 	for (const { what, spoil, names } of modelRefusals) {
-		it(`refuses ${what}`, () => {
-			const light = structuredClone(SPEC_LIGHT_DOCUMENT);
-			const dark = structuredClone(SPEC_DARK_DOCUMENT);
+		for (const side of sides) {
+			it(`refuses ${what}, stamped on ${side.name}`, () => {
+				const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+				const dark = structuredClone(SPEC_DARK_DOCUMENT);
 
-			spoil(light);
-			spoil(dark);
+				if (side.light) spoil(light);
+				if (side.dark) spoil(dark);
 
-			expect(violationLines(light)).toEqual([]);
-			expect(violationLines(dark)).toEqual([]);
+				expect(violationLines(light)).toEqual([]);
+				expect(violationLines(dark)).toEqual([]);
 
-			for (const named of names) {
-				expect(() => deserializeDtcg(light, dark)).toThrow(named);
-			}
-		});
+				for (const named of names) {
+					expect(() => deserializeDtcg(light, dark)).toThrow(named);
+				}
+			});
+		}
 	}
 
 	const modelAcceptances: {
@@ -556,20 +581,22 @@ describe('deserializeDtcg', () => {
 	];
 
 	for (const { what, spoil } of modelAcceptances) {
-		it(`accepts ${what}`, () => {
-			const light = structuredClone(SPEC_LIGHT_DOCUMENT);
-			const dark = structuredClone(SPEC_DARK_DOCUMENT);
+		for (const side of sides) {
+			it(`accepts ${what}, stamped on ${side.name}`, () => {
+				const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+				const dark = structuredClone(SPEC_DARK_DOCUMENT);
 
-			spoil(light);
-			spoil(dark);
+				if (side.light) spoil(light);
+				if (side.dark) spoil(dark);
 
-			expect(violationLines(light)).toEqual([]);
-			expect(violationLines(dark)).toEqual([]);
+				expect(violationLines(light)).toEqual([]);
+				expect(violationLines(dark)).toEqual([]);
 
-			expect(deserializeDtcg(light, dark)).toEqual(
-				deserializeDtcg(SPEC_LIGHT_DOCUMENT, SPEC_DARK_DOCUMENT),
-			);
-		});
+				expect(deserializeDtcg(light, dark)).toEqual(
+					deserializeDtcg(SPEC_LIGHT_DOCUMENT, SPEC_DARK_DOCUMENT),
+				);
+			});
+		}
 	}
 
 	/**

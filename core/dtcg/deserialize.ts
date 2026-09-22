@@ -89,6 +89,12 @@ export function deserializeDtcg(lightDocument: unknown, darkDocument: unknown): 
 	const light = docFrom(lightDocument, 'light');
 	const dark = docFrom(darkDocument, 'dark');
 
+	// Asked of each document on its own, before either is read. The reader below takes the eight
+	// shared families from light alone, so anything it refuses would be refused on one side of the
+	// pair only; this is the pass that makes a refusal a property of the document rather than of
+	// which document happened to supply the values.
+	for (const doc of [light, dark]) checkRepresentable(doc.root, doc, []);
+
 	checkDocumentsAgree(light, dark);
 
 	// The top level is the light scheme a second time, which is what `checkMirroredLayers` requires.
@@ -206,51 +212,95 @@ function isReservedName(name: string): boolean {
 }
 
 /**
- * The reserved names that carry a value rather than annotate one, each with the clause that says
- * why reading past it would lose something. Both are the rule's case 2.
+ * What the internal model does with each reserved name, as one table that everything asking about a
+ * reserved name reads.
  *
- * `$root` is a token, not metadata: the vendored schema gives it `$ref: token.json` at the root and
- * on every group, beside a `$description` that is merely a string. `$extends` names another group
- * whose tokens this group then also holds, so a group that extends one is a group whose contents
- * are not all written where it sits.
+ * Three kinds, which are the four-case rule above sorted by what the token set ends up holding:
  *
- * Read as a table rather than checked one name at a time, because the difference between these and
- * `$description` is the whole of what the last three reviews were about, and a reader deciding
- * where a new reserved name belongs should be able to see both lists at once.
+ * - `kept` is a token's own substance. `$type`, `$value` and `$extensions` land in the token set and
+ *   stay there, so two documents disagreeing about one is a real disagreement.
+ * - `annotation` describes something whose value survives untouched, and the token set has nowhere
+ *   to put it. Read past, and two documents disagreeing about one is not a disagreement about
+ *   anything the set holds.
+ * - `unrepresentable` carries a value the set would lose. `$root` is a token by the vendored schema
+ *   (`$ref: token.json` at the root and on every group, beside a `$description` that is merely a
+ *   string), and `$extends` names another group whose tokens this group also holds. Refused by name.
+ *
+ * One table because the reader and the light-versus-dark comparison both have to sort reserved names
+ * and used to do it separately. They agreed by coincidence and then stopped: the comparison skipped
+ * every reserved name at a group node, so a `$root` on the dark side alone was invisible to it and
+ * invisible to the reader, which only walks light. The two questions differ (the reader asks "must
+ * I refuse this?", the comparison asks "does the set keep this?") and both are answered here.
+ *
+ * A `$` name absent from this table is treated as an annotation, which is deliberate. The schema
+ * closes the set with `additionalProperties: false`, so an unlisted `$` name is already invalid and
+ * `validateDtcg` is the thing that says so; and the list is the schema's to grow, so refusing an
+ * unlisted name would reject a document a refreshed `format.2025.10.json` accepts.
  */
-const VALUE_BEARING_RESERVED: Record<string, string> = {
-	$root:
-		'is a DTCG token rather than metadata, and the internal model has no name to file it under, so reading past it would drop the value it holds',
-	$extends:
-		"brings in another group's tokens, which the internal model has no way to hold, so reading past it would drop every token it inherits",
+type ReservedKind = 'kept' | 'annotation' | 'unrepresentable';
+
+const RESERVED_NAMES: Record<string, { kind: ReservedKind; because?: string }> = {
+	$type: { kind: 'kept' },
+	$value: { kind: 'kept' },
+	$extensions: { kind: 'kept' },
+	$schema: { kind: 'annotation' },
+	$description: { kind: 'annotation' },
+	$deprecated: { kind: 'annotation' },
+	$root: {
+		kind: 'unrepresentable',
+		because:
+			'is a DTCG token rather than metadata, and the internal model has no name to file it under, so reading past it would drop the value it holds',
+	},
+	$extends: {
+		kind: 'unrepresentable',
+		because:
+			"brings in another group's tokens, which the internal model has no way to hold, so reading past it would drop every token it inherits",
+	},
 };
 
 /**
- * The names under a node that hold a group or a token, with the reserved ones settled on the way
- * past so that no walk has to think about them again.
- *
- * Every walk over a node's entries goes through here, which is the point: the rule about reserved
- * names is stated once rather than filtered for at each of the three places that iterate. That
- * matters because the three used to agree only by coincidence, and a `$root` skipped as metadata is
- * a token dropped in silence.
+ * `Object.hasOwn` for the reason `declaredRamp` gives in `core/token-set.ts`: a bare index on a
+ * plain object walks the prototype chain.
  */
-function walkableNames(group: Node, doc: Doc, path: readonly string[]): string[] {
-	const names: string[] = [];
+function reservedKind(name: string): ReservedKind {
+	return Object.hasOwn(RESERVED_NAMES, name) ? RESERVED_NAMES[name]!.kind : 'annotation';
+}
 
-	for (const name of Object.keys(group)) {
-		if (!isReservedName(name)) {
-			names.push(name);
+/**
+ * Refuses every unrepresentable reserved name in one document, over its whole group tree.
+ *
+ * A pass of its own, run against both documents before anything is read, because the reader cannot
+ * do this job. For the eight shared families the reader walks light and takes dark's word for it, so
+ * a `$root` under `dark.radius` was seen by nothing: the comparison skipped it as a reserved name
+ * and the reader never looked. Asking the question of each document separately is what makes the
+ * answer independent of which one happens to supply the values.
+ *
+ * The walk stops at tokens, which is the same boundary `firstDifference` keeps and for the same
+ * reason. `$root` and `$extends` live on groups and on the document root; below a token everything
+ * is a value, and a vendor's `$extensions` payload is free to hold a key spelled `$root` that means
+ * nothing of the kind.
+ */
+function checkRepresentable(node: Node, doc: Doc, path: readonly string[]): void {
+	for (const name of Object.keys(node)) {
+		if (isReservedName(name)) {
+			const reserved = RESERVED_NAMES[name];
+
+			if (Object.hasOwn(RESERVED_NAMES, name) && reserved!.kind === 'unrepresentable') {
+				throw new Error(`${label(doc, [...path, name])} ${reserved!.because}`);
+			}
+
 			continue;
 		}
 
-		// `Object.hasOwn` for the reason `declaredRamp` gives in `core/token-set.ts`: a bare index on
-		// a plain object walks the prototype chain.
-		if (Object.hasOwn(VALUE_BEARING_RESERVED, name)) {
-			throw new Error(`${label(doc, [...path, name])} ${VALUE_BEARING_RESERVED[name]}`);
-		}
-	}
+		const child = node[name];
 
-	return names;
+		if (isGroupChild(child)) checkRepresentable(child as Node, doc, [...path, name]);
+	}
+}
+
+/** The names under a node that hold a group or a token, which is every name that is not reserved. */
+function walkableNames(group: Node): string[] {
+	return Object.keys(group).filter((name) => !isReservedName(name));
 }
 
 /**
@@ -267,7 +317,7 @@ function requireOnly(
 	doc: Doc,
 	path: readonly string[],
 ): void {
-	const unmodelled = walkableNames(group, doc, path).filter((name) => !expected.includes(name));
+	const unmodelled = walkableNames(group).filter((name) => !expected.includes(name));
 
 	if (unmodelled.length > 0) {
 		throw new Error(
@@ -300,7 +350,7 @@ function mapGroup<T>(
 	read: (node: unknown, tokenPath: string[]) => T,
 ): Record<string, T> {
 	return Object.fromEntries(
-		walkableNames(group, doc, path).map((name) => [name, read(group[name], [...path, name])]),
+		walkableNames(group).map((name) => [name, read(group[name], [...path, name])]),
 	);
 }
 
@@ -543,6 +593,15 @@ function numberScale(doc: Doc, path: readonly string[], type: 'fontWeight' | 'nu
  * back as em is a wrong number wearing the right shape, which is the failure that survives a round
  * trip looking correct. `serialize.ts` refuses the same value from the other side for the same
  * reason.
+ *
+ * The payload is required to hold `unit` and nothing else, because the whole namespace is stripped
+ * on the way in and any other key would go with it. That check was left out once on the grounds
+ * that `DtcgTransportExtension` declares one field and the serializer writes one, so no document
+ * could hold a second. `serialize.ts:179-182` has since made that reasoning false in the useful
+ * direction: it now refuses a token set that already carries `com.cambium.dtcg`, so this pipeline
+ * cannot be the source of one, and a payload in a document arriving here was written by some other
+ * tool, which is exactly the case where a second field is likely and dropping it is the rule's
+ * case 2.
  */
 function trackingScale(doc: Doc) {
 	const path = [DTCG_GROUP.tracking];
@@ -554,6 +613,14 @@ function trackingScale(doc: Doc) {
 		if (transport?.unit !== 'em') {
 			throw new Error(
 				`${label(doc, tokenPath)} carries no ${CAMBIUM_DTCG_NAMESPACE} em unit, so nothing says what its number measures`,
+			);
+		}
+
+		const beyondUnit = Object.keys(transport).filter((name) => name !== 'unit');
+
+		if (beyondUnit.length > 0) {
+			throw new Error(
+				`${label(doc, tokenPath)} carries ${beyondUnit.join(', ')} in ${CAMBIUM_DTCG_NAMESPACE}, which holds a unit and nothing else, and the namespace is stripped on the way in`,
 			);
 		}
 
@@ -648,7 +715,7 @@ function rampOf(node: unknown, doc: Doc, path: readonly string[]) {
 		throw new Error(`${label(doc, path)} is a token where a ramp of twelve steps was expected`);
 	}
 
-	const steps = walkableNames(group, doc, path).map((name) => {
+	const steps = walkableNames(group).map((name) => {
 		const stepPath = [...path, name];
 		const step = Number(name);
 
@@ -822,7 +889,7 @@ function checkDocumentsAgree(light: Doc, dark: Doc): void {
 			groupAt(light, [group]),
 			groupAt(dark, [group]),
 			[group],
-			true,
+			'group',
 		);
 
 		if (difference !== undefined) {
@@ -866,12 +933,34 @@ function checkDocumentsAgree(light: Doc, dark: Doc): void {
  * the token set keeps in a slot it keeps once, and two documents claiming different provenance for
  * one token is a real disagreement with no honest answer. Everything inside that payload, to any
  * depth and through any array, is compared with it.
+ *
+ * Which reserved names those are is `RESERVED_NAMES`'s answer rather than this function's, and the
+ * position is what turns that table into a decision. A boolean got this half right and half wrong:
+ * skipping every reserved name at a group was correct, and comparing every reserved name at a token
+ * was not, because a `$description` on one document's token is an annotation the set never keeps,
+ * so reporting it as a disagreement names a thing the set does not hold.
  */
+type Position = 'group' | 'token' | 'value';
+
+/**
+ * Whether the token set keeps what sits under this name at this position, which is the only reason
+ * to compare it. A group keeps no reserved name at all; a token keeps `$type`, `$value` and
+ * `$extensions`; below a token every key is data a payload chose and none of it is reserved in any
+ * sense this module gets to judge.
+ */
+function comparedAt(name: string, position: Position): boolean {
+	if (!isReservedName(name)) return true;
+	if (position === 'value') return true;
+	if (position === 'group') return false;
+
+	return reservedKind(name) === 'kept';
+}
+
 function firstDifference(
 	light: unknown,
 	dark: unknown,
 	path: readonly string[],
-	atGroupNode: boolean,
+	position: Position,
 ): string | undefined {
 	if (light === dark) return undefined;
 
@@ -885,16 +974,22 @@ function firstDifference(
 	const right = dark as Node;
 
 	for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
-		if (atGroupNode && isReservedName(key)) continue;
+		if (!comparedAt(key, position)) continue;
 
 		if (!Object.hasOwn(left, key) || !Object.hasOwn(right, key)) return [...path, key].join('.');
 
 		// Both sides have to be groups for the child to count as one. A `$type` on one document and
 		// not the other means one is a token where the other is a group, and that is a disagreement to
-		// report rather than a difference to skip.
-		const childAtGroupNode = atGroupNode && isGroupChild(left[key]) && isGroupChild(right[key]);
+		// report rather than a difference to skip. Below a group the walk never returns to one: a
+		// token's children are values, and so is everything under them.
+		const childPosition: Position =
+			position !== 'group'
+				? 'value'
+				: isGroupChild(left[key]) && isGroupChild(right[key])
+					? 'group'
+					: 'token';
 
-		const difference = firstDifference(left[key], right[key], [...path, key], childAtGroupNode);
+		const difference = firstDifference(left[key], right[key], [...path, key], childPosition);
 
 		if (difference !== undefined) return difference;
 	}
