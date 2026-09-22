@@ -322,6 +322,7 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 			const record: BrandRecord = {
 				id: crypto.randomUUID(),
 				schemaVersion: SCHEMA_VERSION,
+				revision: 1,
 				images: picked.map((image) => image.prepared.image),
 				// No versions yet. Producing the first one needs a key and a model call, which is #23.
 				versions: [],

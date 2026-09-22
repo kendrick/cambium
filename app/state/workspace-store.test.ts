@@ -62,6 +62,7 @@ function makeRecord(versions: BrandVersion[] = [makeVersion()]): BrandRecord {
 	return {
 		id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
 		schemaVersion: SCHEMA_VERSION,
+		revision: 1,
 		images: [{ id: 'img-1', downscaled: 'data:image/png;base64,AA==', originalHash: 'sha256-aa' }],
 		versions,
 	};

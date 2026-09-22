@@ -26,6 +26,7 @@ function makeRecord(overrides: Partial<BrandRecord> = {}): BrandRecord {
 	return {
 		id: crypto.randomUUID(),
 		schemaVersion: SCHEMA_VERSION,
+		revision: 1,
 		images: [],
 		versions: [makeVersion()],
 		...overrides,
