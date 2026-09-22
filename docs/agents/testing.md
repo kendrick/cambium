@@ -42,7 +42,7 @@ Verify that with a mutation: break the branch, then confirm a test fails. Swappi
 
 `MIXED_SEED` in `core/provenance.test.ts` is the worked example in the tree: the one seed shape that states a neutral temperature and no shadow character, so the surface it builds traces somewhere the hard-coded answer cannot reach. Its docblock carries the rest of the story.
 
-The criterion bites hardest where fixtures are expensive to change and where the output is a classification rather than a number. #47 and #48 design the fixtures the whole browser tier runs against. Any ticket producing a derived classification—provenance, a contrast verdict, a role assignment—has the shadow's shape: two rules can agree on every input a fixture happens to carry, and only a fixture chosen to separate them says which rule is running.
+The criterion bites hardest where fixtures are expensive to change and where the output is a classification rather than a number. #105 designs the image fixtures the whole browser tier runs against. Any ticket producing a derived classification—provenance, a contrast verdict, a role assignment—has the shadow's shape: two rules can agree on every input a fixture happens to carry, and only a fixture chosen to separate them says which rule is running.
 
 ## Seam 1: the pure core
 
@@ -80,7 +80,11 @@ Playwright is the only browser runner. Vitest gets no browser tier: it keeps wha
 
 The suite automates runs 1, 2, and 4 of issue #1's five demonstrable runs. Run 1 needs no key and no network, run 2 runs with the model call intercepted at the route rather than against a real key, and run 4 needs a browser. Run 3 stays manual, because a person looking at the rendered theme is the step that proves the output is real rather than merely plausible; #49 adds a contract test asserting the generated unbranded-ds theme document against that project's registration input, so shape drift fails on its own. Run 5 is the existing core suite and does not change.
 
-The suite arrives in two parts. #47 stands up the harness and automates the keyed path as far as v1 reaches; #48 extends it to the keyless demo, the round trip, and contrast repair once those features exist. `pnpm install` brings the Playwright client library and no browser binaries, so #47 owns running `npx playwright install`.
+The harness lands before the routes it has to drive. #104 stands one up on its own: serve `out/`, open the route, drive real events, wipe IndexedDB between scenarios, fail a scenario on a console error. #23 and #24 wait on it. #105 builds the image fixtures #106's scenarios need, malformed, renamed, oversized and truncated, and #106 backfills the five defects #22 shipped. #47 then automates the keyed path as far as v1 reaches, and #48 extends it to the keyless demo, the round trip, and contrast repair once those features exist. `pnpm install` brings the Playwright client library and no browser binaries, so #104 owns running `npx playwright install`.
+
+That order is a decision, and #86 carries the argument for it. #47 owned the harness and the first tests written against it. Its acceptance criteria drive flows that #23, #24, #25 and #29 build, so it waits on all of them, and the harness waited with it. Those #22 defects had already shipped with nothing in this repo able to reach them, and #23 and #24 were queued behind the same gap. The harness itself depends on nothing, which is why it split out into #104 and went first.
+
+The rule for the next tier: where one ticket owns both a harness and the first tests written against it, and those tests drive features nobody has built yet, the harness arrives after the work it was meant to protect. Give the harness a ticket of its own.
 
 ## Deliberately not tested automatically
 
