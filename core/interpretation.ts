@@ -25,7 +25,12 @@
  * colour.
  */
 export type InterpretationParams = {
-	/** How far the neutral ramp's chroma pulls toward the brand hue. 0 leaves it dead neutral. */
+	/**
+	 * How far the neutral ramp's chroma pulls toward the brand hue, where the seed measured no
+	 * neutral temperature. 0 leaves it dead neutral only in that case: a stated `neutralTemperature`
+	 * sets the tint itself and this does not override it, so step 9 comes back at the stated chroma
+	 * and hue with its provenance tracing to that field.
+	 */
 	neutralTinting: number;
 	/** Multiplier on the chroma curve. Above 1 widens the spread, below 1 mutes it. */
 	chromaSpread: number;
