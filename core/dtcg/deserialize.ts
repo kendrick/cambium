@@ -655,8 +655,8 @@ function typographyOf(doc: Doc) {
  * A duration in the one unit the internal model spells.
  *
  * DTCG's `duration` value takes `ms` or `s`; `DurationValueSchema` takes `ms` alone. A second is a
- * thousand milliseconds exactly, so a document written in seconds states a duration the model
- * holds. Refusing it would turn away a conforming file over its spelling.
+ * thousand milliseconds, so every duration a document spells in seconds is one the model can hold.
+ * Refusing it would turn away a conforming file over its spelling.
  *
  * The conversion sits at the duration read and not inside `magnitudeOf`, which also serves
  * `dimension` and a shadow's geometry. `s` is not a conforming unit in either of those and has to
@@ -667,9 +667,17 @@ function typographyOf(doc: Doc) {
  * This hands every other unit on untouched, to fail at the closing `TokenSetSchema.parse` with the
  * rest of the value-shape mistakes this module leaves to Zod.
  *
- * `value * 1000` rather than `value / 0.001`. 1000 is exact as a double, so the multiplication is
- * one correctly rounded step from what the document said. 0.001 is not exact, so dividing by it
- * scales by a number already slightly wrong before any rounding happens.
+ * `value * 1000` rather than `value / 0.001`. 1000 is exact as a double and 0.001 is not, so the
+ * multiplication rounds once from the value it was handed, while the division scales by a number
+ * already wrong before it rounds. The two disagree on ordinary durations: `0.043` seconds
+ * multiplies to `43` and divides to `42.99999999999999`.
+ *
+ * Neither is exact, because the parse rounded first. `1.005` has no double, so the value arriving
+ * here is already 1.0049999999999998934, and a thousand times that is `1004.9999999999999`. That
+ * number reaches the emitted document, where the next DTCG tool reads it, and
+ * `deserialize.test.ts` pins it. The residue stays, on purpose: it is around 1e-13 ms, no animation
+ * consumer resolves it, and the rounding that would tidy it away is the same rounding that would
+ * erase the half millisecond `{ value: 0.0005, unit: 's' }` states.
  *
  * Nothing rounds to a whole millisecond, since `DurationValueSchema` permits a fraction and
  * `{ value: 0.0005, unit: 's' }` is half a real millisecond that rounding would erase. Above about

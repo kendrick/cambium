@@ -639,8 +639,8 @@ describe('deserializeDtcg', () => {
 
 	/**
 	 * The vendored schema's duration value takes `ms` or `s` (`format.2025.10.json:1246`), and a
-	 * second is a thousand milliseconds exactly. So a document spelling a duration in seconds states
-	 * a duration `DurationValueSchema` holds, and this deserializer has to read it.
+	 * second is a thousand milliseconds. So a document spelling a duration in seconds states a
+	 * duration `DurationValueSchema` holds, and this deserializer has to read it.
 	 *
 	 * Both documents go through `violationLines` first, because a test that never establishes
 	 * conformance proves nothing about a refusal a conforming file should never meet.
@@ -727,6 +727,39 @@ describe('deserializeDtcg', () => {
 		expect(emitted.light.motion.duration.fast.$value).not.toEqual(
 			light.motion.duration.fast.$value,
 		);
+	});
+
+	/**
+	 * The conversion is not exact, and this case records where it is not.
+	 *
+	 * `1.005` has no double, so the value reaching the conversion is already 1.0049999999999998934
+	 * and a thousand times that is 1004.9999999999999. The case asserts on the emitted document
+	 * rather than on the model, because that is where the residue ends up: bytes the next DTCG tool
+	 * reads.
+	 *
+	 * Pinned rather than fixed. The gap is around 1e-13 ms, which no animation consumer resolves,
+	 * and every way of tidying it also rounds away the half millisecond the case above protects.
+	 * A later change that prefers a rounder number has to fail this test to land.
+	 */
+	it('carries the rounding residue of an inexact second into the emitted document', () => {
+		const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+		const dark = structuredClone(SPEC_DARK_DOCUMENT);
+
+		for (const document of [light, dark]) inSeconds(document, 1.005);
+
+		expect(violationLines(light)).toEqual([]);
+		expect(violationLines(dark)).toEqual([]);
+
+		const emitted = serializeDtcg(deserializeDtcg(light, dark)) as unknown as {
+			light: typeof SPEC_LIGHT_DOCUMENT;
+			dark: typeof SPEC_DARK_DOCUMENT;
+		};
+
+		expect(violationLines(emitted.light)).toEqual([]);
+		expect(emitted.light.motion.duration.fast.$value).toEqual({
+			value: 1004.9999999999999,
+			unit: 'ms',
+		});
 	});
 
 	/**
