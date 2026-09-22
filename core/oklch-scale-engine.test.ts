@@ -9,7 +9,8 @@ import {
 	MIN_ACCENT_SEPARATION,
 	OKLCH_SCALE_ENGINE_ID,
 } from './oklch-scale-engine';
-import { BALANCED, RAMP_NAMES, type RampName, SCHEME_NAMES } from './scale-engine';
+import { RAMP_NAMES, type RampName, SCHEME_NAMES } from './scale-engine';
+import { BALANCED } from './interpretation';
 import { STEP_ROLES } from './step-roles';
 import { paintedContrast, testScaleEngineContract } from './scale-engine-contract';
 

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { compositeOver, isInSrgb, type Oklch } from './oklch';
+import { BALANCED } from './interpretation';
 import { CAMBIUM_NAMESPACE, type SeedField } from './provenance';
 import {
 	MIN_RENDERED_DARKENING,
@@ -37,7 +38,7 @@ const tinted = { spread: 'diffuse', tintFromSurface: true } as const;
 
 describe('shadowScale', () => {
 	it('emits five elevation steps carrying a colour and four dimensions', () => {
-		const { source, values } = shadowScale(PAGE_LIGHT, tinted);
+		const { source, values } = shadowScale(PAGE_LIGHT, tinted, BALANCED);
 
 		expect(Object.keys(values)).toEqual([...STEPS]);
 		expect(source).toBe('derived');
@@ -54,7 +55,7 @@ describe('shadowScale', () => {
 	});
 
 	it('climbs in offset, blur and opacity as the elevation rises', () => {
-		const { values } = shadowScale(PAGE_LIGHT, tinted);
+		const { values } = shadowScale(PAGE_LIGHT, tinted, BALANCED);
 		const rising = (read: (step: (typeof STEPS)[number]) => number) =>
 			STEPS.map(read).every((n, i, all) => i === 0 || n > all[i - 1]!);
 
@@ -66,8 +67,10 @@ describe('shadowScale', () => {
 	// The acceptance criterion: a shadow tinted by the surface reads as part of the system, where
 	// black at an opacity reads as a default nobody chose.
 	it('takes its hue from the surface it sits on', () => {
-		const warm = shadowScale(pageSurface({ l: 0.98, c: 0.01, h: 40 }), tinted).values.md!.color;
-		const cool = shadowScale(pageSurface({ l: 0.98, c: 0.01, h: 240 }), tinted).values.md!.color;
+		const warm = shadowScale(pageSurface({ l: 0.98, c: 0.01, h: 40 }), tinted, BALANCED).values.md!
+			.color;
+		const cool = shadowScale(pageSurface({ l: 0.98, c: 0.01, h: 240 }), tinted, BALANCED).values.md!
+			.color;
 
 		expect(warm.h).toBeCloseTo(40, 6);
 		expect(cool.h).toBeCloseTo(240, 6);
@@ -83,8 +86,11 @@ describe('shadowScale', () => {
 	 * than the constant keeps this a statement about what reaches a stylesheet.
 	 */
 	it('tints a near-achromatic page with a chroma that can actually be seen', () => {
-		const { color } = shadowScale(pageSurface({ l: 0.994, c: 0.000223, h: 259.8 }), tinted).values
-			.md!;
+		const { color } = shadowScale(
+			pageSurface({ l: 0.994, c: 0.000223, h: 259.8 }),
+			tinted,
+			BALANCED,
+		).values.md!;
 
 		expect(color.c).toBeGreaterThan(0.01);
 		expect(color.h).toBeCloseTo(259.8, 6);
@@ -98,8 +104,10 @@ describe('shadowScale', () => {
 	 */
 	it('gives up the tint rather than the darkness on a dark page', () => {
 		const shortfall = [27, 86, 162.5, 200, 259.8, 265, 300].map((h) => {
-			const dark = shadowScale(pageSurface({ ...PAGE_DARK.color, h }), tinted).values.md!.color;
-			const light = shadowScale(pageSurface({ ...PAGE_LIGHT.color, h }), tinted).values.md!.color;
+			const dark = shadowScale(pageSurface({ ...PAGE_DARK.color, h }), tinted, BALANCED).values.md!
+				.color;
+			const light = shadowScale(pageSurface({ ...PAGE_LIGHT.color, h }), tinted, BALANCED).values
+				.md!.color;
 
 			return { h, dark: dark.c, light: light.c };
 		});
@@ -128,7 +136,7 @@ describe('shadowScale', () => {
 		['a light page', PAGE_LIGHT],
 		['a dark page', PAGE_DARK],
 	])('renders every step visibly darker than %s', (_name, page) => {
-		const { values } = shadowScale(page, tinted);
+		const { values } = shadowScale(page, tinted, BALANCED);
 		const rendered = STEPS.map((step) => {
 			const { color } = values[step]!;
 
@@ -140,12 +148,39 @@ describe('shadowScale', () => {
 	});
 
 	/**
+	 * #10's falsifiable half. The depth of the tint is an interpretation parameter now, and the test
+	 * that proves it reaches this module has to be one a wrong implementation fails: a module still
+	 * reading its own constant paints the same pixel whatever the parameter says.
+	 *
+	 * Asserted on the composited pixel rather than the declared chroma, because a tint survives the
+	 * gamut fit and the alpha blend or it never reaches anyone. The four rounds this module already
+	 * lost were every one of them spent on declared numbers that moved while the pixels did not.
+	 *
+	 * On a light page, because sRGB holds almost no chroma near black. `PAGE_DARK` paints nearly the
+	 * same near-black at every value of this parameter, so the assertion there could not fail.
+	 */
+	it('paints more chroma as `surfaceTinting` rises', () => {
+		const painted = (surfaceTinting: number) => {
+			const { color } = shadowScale(PAGE_LIGHT, tinted, {
+				...BALANCED,
+				surfaceTinting,
+			}).values.md!;
+
+			return compositeOver(PAGE_LIGHT.color, color, color.alpha).c;
+		};
+
+		expect(painted(0)).toBeLessThan(painted(BALANCED.surfaceTinting));
+		expect(painted(BALANCED.surfaceTinting)).toBeLessThan(painted(0.06));
+	});
+
+	/**
 	 * Hue is meaningless at zero chroma and `core/oklch.ts` canonicalises it to 0 there, so tinting
 	 * from a genuinely achromatic page would paint every shadow red. An interpretation preset that
 	 * leaves the neutral ramp untinted is what reaches this.
 	 */
 	it('leaves a shadow on an achromatic page untinted rather than painting it hue zero', () => {
-		const { color } = shadowScale(pageSurface({ l: 0.99, c: 0, h: 0 }), tinted).values.md!;
+		const { color } = shadowScale(pageSurface({ l: 0.99, c: 0, h: 0 }), tinted, BALANCED).values
+			.md!;
 
 		expect(color.c).toBe(0);
 		expect(color.h).toBe(0);
@@ -157,8 +192,11 @@ describe('shadowScale', () => {
 	 * departure from the criterion above.
 	 */
 	it('drops hue and chroma when the seed refuses the tint', () => {
-		const { color } = shadowScale(PAGE_LIGHT, { spread: 'diffuse', tintFromSurface: false }).values
-			.md!;
+		const { color } = shadowScale(
+			PAGE_LIGHT,
+			{ spread: 'diffuse', tintFromSurface: false },
+			BALANCED,
+		).values.md!;
 
 		expect(color.c).toBe(0);
 		expect(color.h).toBe(0);
@@ -172,16 +210,16 @@ describe('shadowScale', () => {
 	 * headline would pass while the large one regressed.
 	 */
 	it('gives a dark page a different shadow from a light one', () => {
-		const light = shadowScale(PAGE_LIGHT, tinted).values.md!;
-		const dark = shadowScale(PAGE_DARK, tinted).values.md!;
+		const light = shadowScale(PAGE_LIGHT, tinted, BALANCED).values.md!;
+		const dark = shadowScale(PAGE_DARK, tinted, BALANCED).values.md!;
 
 		expect(dark.color).not.toEqual(light.color);
 		expect(dark.color.alpha / light.color.alpha).toBeGreaterThan(3);
 	});
 
 	it.each(STEPS)('raises opacity and blur at %s on a dark surface', (step) => {
-		const light = shadowScale(PAGE_LIGHT, tinted).values[step]!;
-		const dark = shadowScale(PAGE_DARK, tinted).values[step]!;
+		const light = shadowScale(PAGE_LIGHT, tinted, BALANCED).values[step]!;
+		const dark = shadowScale(PAGE_DARK, tinted, BALANCED).values[step]!;
 
 		expect(dark.color.alpha).toBeGreaterThan(light.color.alpha);
 		expect(dark.blur.value).toBeGreaterThan(light.blur.value);
@@ -190,15 +228,16 @@ describe('shadowScale', () => {
 	// `spread` on the character is the seed's word for how far the shadow diffuses, which is the
 	// blur. It is not the CSS spread radius the same-named dimension carries.
 	it('blurs a diffuse shadow further than a tight one at the same elevation', () => {
-		const tight = shadowScale(PAGE_LIGHT, { spread: 'tight', tintFromSurface: true }).values.lg!;
-		const diffuse = shadowScale(PAGE_LIGHT, tinted).values.lg!;
+		const tight = shadowScale(PAGE_LIGHT, { spread: 'tight', tintFromSurface: true }, BALANCED)
+			.values.lg!;
+		const diffuse = shadowScale(PAGE_LIGHT, tinted, BALANCED).values.lg!;
 
 		expect(tight.blur.value).toBeLessThan(diffuse.blur.value);
 		expect(tight.offsetY.value).toBeCloseTo(diffuse.offsetY.value, 10);
 	});
 
 	it('tints by default when the seed measured no shadow character', () => {
-		expect(shadowScale(PAGE_LIGHT, null).values.md!.color.c).toBeGreaterThan(0);
+		expect(shadowScale(PAGE_LIGHT, null, BALANCED).values.md!.color.c).toBeGreaterThan(0);
 	});
 
 	/**
@@ -209,7 +248,7 @@ describe('shadowScale', () => {
 	 * `derived`.
 	 */
 	it('carries one derived payload on the shadow, and none on its four dimensions', () => {
-		const shadow = shadowScale(PAGE_LIGHT, tinted).values.md!;
+		const shadow = shadowScale(PAGE_LIGHT, tinted, BALANCED).values.md!;
 		const payload = shadow.$extensions[CAMBIUM_NAMESPACE];
 
 		expect(payload.provenance).toBe('derived');
@@ -236,7 +275,7 @@ describe('shadowScale', () => {
 	])(
 		'inherits the surface provenance when no character is stated, tracing to %s',
 		(field, expected) => {
-			const payload = shadowScale(pageSurface(PAGE_LIGHT.color, field), null).values.md!
+			const payload = shadowScale(pageSurface(PAGE_LIGHT.color, field), null, BALANCED).values.md!
 				.$extensions[CAMBIUM_NAMESPACE];
 
 			expect(payload.provenance).toBe('derived');
@@ -257,7 +296,7 @@ describe('shadowScale', () => {
 			color: PAGE_LIGHT.color,
 			provenance: { provenance: 'invented', seedField: null, rationale: 'nothing reached this' },
 		};
-		const payload = shadowScale(orphan, null).values.md!.$extensions[CAMBIUM_NAMESPACE];
+		const payload = shadowScale(orphan, null, BALANCED).values.md!.$extensions[CAMBIUM_NAMESPACE];
 
 		expect(payload.provenance).toBe('invented');
 		expect(payload.seedField).toBeNull();
@@ -274,7 +313,7 @@ describe('shadowScale', () => {
 	 */
 	it('clears the floor at every step on the darkest page it claims to support', () => {
 		const darkest = pageSurface({ l: MIN_VISIBLE_SURFACE_LIGHTNESS, c: 0.001, h: 200 });
-		const { values } = shadowScale(darkest, tinted);
+		const { values } = shadowScale(darkest, tinted, BALANCED);
 
 		const faint = STEPS.filter(
 			(step) =>
@@ -293,7 +332,7 @@ describe('shadowScale', () => {
 	 */
 	it('cannot darken a page that is already black, at any opacity', () => {
 		const black = pageSurface({ l: 0, c: 0, h: 0 });
-		const { values } = shadowScale(black, tinted);
+		const { values } = shadowScale(black, tinted, BALANCED);
 
 		for (const step of STEPS) {
 			const { color } = values[step]!;
@@ -309,7 +348,7 @@ describe('shadowScale', () => {
 	 * to notice.
 	 */
 	it('keeps the darkest page from stacking opacity into a black box', () => {
-		const { values } = shadowScale(pageSurface({ l: 0, c: 0, h: 0 }), tinted);
+		const { values } = shadowScale(pageSurface({ l: 0, c: 0, h: 0 }), tinted, BALANCED);
 
 		expect(values.xl!.color.alpha).toBeLessThan(0.9);
 		expect(STEPS.every((step) => values[step]!.color.alpha > 0)).toBe(true);
@@ -322,14 +361,16 @@ describe('shadowScale', () => {
 	 */
 	it.each([PAGE_LIGHT, PAGE_DARK])('emits a colour a display can actually show', (page) => {
 		const offGamut = [27, 86, 162.5, 200, 259.8, 300, 340]
-			.map((h) => shadowScale(pageSurface({ ...page.color, h }), tinted).values.md!.color)
+			.map((h) => shadowScale(pageSurface({ ...page.color, h }), tinted, BALANCED).values.md!.color)
 			.filter((color) => !isInSrgb(color));
 
 		expect(offGamut).toEqual([]);
 	});
 
 	it('produces the same scale from the same surface', () => {
-		expect(shadowScale(PAGE_LIGHT, tinted)).toEqual(shadowScale({ ...PAGE_LIGHT }, tinted));
+		expect(shadowScale(PAGE_LIGHT, tinted, BALANCED)).toEqual(
+			shadowScale({ ...PAGE_LIGHT }, tinted, BALANCED),
+		);
 	});
 
 	/**
@@ -349,6 +390,12 @@ describe('shadowScale', () => {
 	 * `./provenance` joined the list once #9 required a payload on the shadow token: it hands back
 	 * a plain `$extensions` object built from `SeedField` and never touches a ramp or a scheme, so
 	 * admitting it does not reopen the door this test exists to keep shut.
+	 *
+	 * `./interpretation` joined it for #10, and is the reason that module exists apart from the
+	 * scale engine. The tint depth is an interpretation parameter, and the engine that first
+	 * declared it also exports ramps and schemes, so importing it here is exactly the undoing this
+	 * test watches for. `core/interpretation.ts` imports nothing at all, which is the property that
+	 * earns it a place rather than any promise about what it means.
 	 */
 	it('imports only what cannot reach a colour', () => {
 		const source = readFileSync(new URL('./shadow-scale.ts', import.meta.url), 'utf8');
@@ -360,7 +407,7 @@ describe('shadowScale', () => {
 
 		expect(specifiers).not.toHaveLength(0);
 		expect(new Set(specifiers)).toEqual(
-			new Set(['./brand-seed', './oklch', './provenance', './token-set']),
+			new Set(['./brand-seed', './interpretation', './oklch', './provenance', './token-set']),
 		);
 	});
 });

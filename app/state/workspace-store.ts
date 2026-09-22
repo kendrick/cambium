@@ -2,12 +2,8 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 
 import type { BrandRecord, BrandVersion } from '../../core/brand-record';
 import type { BrandSeed } from '../../core/brand-seed';
-import {
-	BALANCED,
-	type InterpretationParams,
-	type ScaleEngine,
-	type ScaleEngineResult,
-} from '../../core/scale-engine';
+import { type ScaleEngine, type ScaleEngineResult } from '../../core/scale-engine';
+import { BALANCED, type InterpretationParams } from '../../core/interpretation';
 import type { RecordStore } from '../storage/record-store';
 
 export type Interpretation = BrandVersion['interpretation'];

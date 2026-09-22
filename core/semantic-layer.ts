@@ -2,6 +2,7 @@ import type { BrandSeed } from './brand-seed';
 import { deriveNonColor } from './derive-non-color';
 import { contrastFromOklch } from './oklch';
 import { CAMBIUM_NAMESPACE, inheritedFrom } from './provenance';
+import { BALANCED, type InterpretationParams } from './interpretation';
 import type { RampSet, SchemeName } from './scale-engine';
 import { type ContrastingPair, type SemanticAlias, SEMANTIC_MAP } from './semantic-map';
 import { STEP_ROLES } from './step-roles';
@@ -37,10 +38,14 @@ import {
  * the schema requires them, so what this returned before is no longer a `TokenSet`. The colour
  * halves are built first, because `deriveNonColor` resolves `background` out of each of them.
  */
-export function buildTokenSet(schemes: Record<SchemeName, RampSet>, seed: BrandSeed): TokenSet {
+export function buildTokenSet(
+	schemes: Record<SchemeName, RampSet>,
+	seed: BrandSeed,
+	params: InterpretationParams = BALANCED,
+): TokenSet {
 	const light: ColorScheme = { primitives: schemes.light, semantic: semanticFor(schemes.light) };
 	const dark: ColorScheme = { primitives: schemes.dark, semantic: semanticFor(schemes.dark) };
-	const { shadow, ...categories } = deriveNonColor(seed, { light, dark });
+	const { shadow, ...categories } = deriveNonColor(seed, { light, dark }, params);
 
 	return {
 		primitives: light.primitives,

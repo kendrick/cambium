@@ -4,7 +4,7 @@ import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { type BrandSeed, BrandSeedSchema } from './brand-seed';
 import { createOklchScaleEngine } from './oklch-scale-engine';
 import { CAMBIUM_NAMESPACE, derived, invented, observed } from './provenance';
-import { BALANCED } from './scale-engine';
+import { BALANCED } from './interpretation';
 import { buildTokenSet } from './semantic-layer';
 import { type TokenExtensions, type TokenSet, TokenSetSchema } from './token-set';
 

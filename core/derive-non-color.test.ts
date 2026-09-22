@@ -6,7 +6,8 @@ import { compositeOver, isInSrgb } from './oklch';
 import { createOklchScaleEngine } from './oklch-scale-engine';
 import { CAMBIUM_NAMESPACE, invented } from './provenance';
 import { resolveScheme } from './resolve-scheme';
-import { BALANCED, type SchemeName } from './scale-engine';
+import { type SchemeName } from './scale-engine';
+import { BALANCED } from './interpretation';
 import { MIN_RENDERED_DARKENING, MIN_VISIBLE_SURFACE_LIGHTNESS } from './shadow-scale';
 import type { ColorScheme, SemanticEntry, TokenExtensions } from './token-set';
 
@@ -89,7 +90,7 @@ const DERIVED = ['radius', 'typography', 'tracking'] as const;
 const SYSTEM = ['spacing', 'opacity', 'motion', 'focusRing', 'zIndex'] as const;
 
 function derive(seed: BrandSeed) {
-	return deriveNonColor(seed, colorSchemesFor(seed));
+	return deriveNonColor(seed, colorSchemesFor(seed), BALANCED);
 }
 
 describe('deriveNonColor', () => {
@@ -178,7 +179,7 @@ describe('deriveNonColor', () => {
 		(scheme) => {
 			const schemes = colorSchemesFor(crisp);
 			const background = resolveScheme(schemes[scheme]).background!;
-			const { color } = deriveNonColor(crisp, schemes).shadow[scheme].values.md!;
+			const { color } = deriveNonColor(crisp, schemes, BALANCED).shadow[scheme].values.md!;
 
 			expect(color.h).toBeCloseTo(background.h, 6);
 			expect(color.c).toBeGreaterThan(0);
@@ -209,7 +210,7 @@ describe('deriveNonColor', () => {
 		(scheme) => {
 			const schemes = colorSchemesFor(crisp);
 			const background = resolveScheme(schemes[scheme]).background!;
-			const { values } = deriveNonColor(crisp, schemes).shadow[scheme];
+			const { values } = deriveNonColor(crisp, schemes, BALANCED).shadow[scheme];
 
 			// Composited the way a browser does, per channel in sRGB. Mixing the two OKLCH lightnesses
 			// instead reads about 1.8x high on a dark page, which is the measurement error that let
@@ -296,6 +297,6 @@ describe('deriveNonColor', () => {
 			dark: schemes.dark,
 		};
 
-		expect(() => deriveNonColor(crisp, withoutBackground)).toThrow(/background/);
+		expect(() => deriveNonColor(crisp, withoutBackground, BALANCED)).toThrow(/background/);
 	});
 });

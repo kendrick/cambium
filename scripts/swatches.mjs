@@ -2,7 +2,8 @@ import { createRequire } from 'node:module';
 import { mkdir, writeFile } from 'node:fs/promises';
 import tailwindColors from 'tailwindcss/colors.js';
 import { createOklchScaleEngine } from '../core/oklch-scale-engine.ts';
-import { BALANCED, RAMP_NAMES } from '../core/scale-engine.ts';
+import { BALANCED } from '../core/interpretation.ts';
+import { RAMP_NAMES } from '../core/scale-engine.ts';
 import { asCulori, measureRamp, renderSwatchPage } from './lib/swatches.mjs';
 
 // @radix-ui/colors ships CJS with types that only declare `export * from './light'` etc., so any

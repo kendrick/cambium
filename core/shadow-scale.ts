@@ -1,6 +1,7 @@
 import type { BrandSeed } from './brand-seed';
 import { fitToSrgbGamut, type Oklch } from './oklch';
 import { derived, inheritedFrom, type TokenProvenance } from './provenance';
+import type { InterpretationParams } from './interpretation';
 import type { Shadow, ShadowScale } from './token-set';
 
 const STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
@@ -70,27 +71,6 @@ export const MIN_VISIBLE_SURFACE_LIGHTNESS = 0.16;
  */
 const SHADOW_LIGHTNESS = 0.15;
 
-/**
- * The chroma a tinted shadow carries where the gamut has room for it, stated rather than read off
- * the surface.
- *
- * Reading it off the surface is the obvious implementation and it produces black. `background`
- * aliases `neutral.1`, and a page background is near-achromatic by design: it measures around
- * 0.0002 in light and 0.0007 in dark, rising with the seed's own chroma and staying far under
- * 0.002. Passing that number through would satisfy "derives from the surface" on paper while
- * shipping exactly the black-at-an-opacity #7 set out to avoid.
- *
- * So the surface supplies the hue, which it carries faithfully, and the depth of the tint is a
- * constant. Subtle on purpose: a shadow that announces its colour stops reading as a shadow.
- *
- * It is a ceiling rather than a promise. sRGB holds almost no chroma near black, so a shadow on a
- * dark page reaches between 0.0048 at hue 200 and 0.0194 at hue 265, and comes out near-black
- * whichever hue it lands on. That is the honest answer
- * rather than a shortfall: lifting its lightness until 0.02 fits would leave the shadow barely
- * darker than the page it falls on, which is not a shadow. #7 records the trade.
- */
-const SHADOW_CHROMA = 0.02;
-
 /** How far blur climbs as the surface darkens. Opacity has its own ramp above. */
 const DARK_BLUR_GAIN = 0.5;
 
@@ -121,6 +101,7 @@ export type ShadowSurface = { color: Oklch; provenance: TokenProvenance };
 export function shadowScale(
 	surface: ShadowSurface,
 	character: BrandSeed['shadowCharacter'],
+	params: InterpretationParams,
 ): ShadowScale {
 	const diffusion = diffusionFor(character?.spread);
 	const darkness = 1 - surface.color.l;
@@ -163,7 +144,7 @@ export function shadowScale(
 	// left for the display to clamp past. A token file stating a chroma nothing can render is the
 	// same invisible tint as one stating no chroma, minus the chance of anyone noticing.
 	const color = tinted
-		? fitToSrgbGamut({ l, c: SHADOW_CHROMA, h: surface.color.h })
+		? fitToSrgbGamut({ l, c: params.surfaceTinting, h: surface.color.h })
 		: { l, c: 0, h: 0 };
 
 	const values = Object.fromEntries(

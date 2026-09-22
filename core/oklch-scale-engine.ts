@@ -13,7 +13,6 @@ import { derived, invented, observed, type SeedField } from './provenance';
 import {
 	ANCHOR_TOLERANCE,
 	type BrandAnchor,
-	type InterpretationParams,
 	RAMP_NAMES,
 	type RampName,
 	type RampSet,
@@ -23,6 +22,7 @@ import {
 	type ScaleEngineError,
 	type ScaleEngineResult,
 } from './scale-engine';
+import { type InterpretationParams } from './interpretation';
 import { BRAND_STEP, STEP_ROLES, type StepRole } from './step-roles';
 import type { Ramp, RampStep, TokenExtensions } from './token-set';
 

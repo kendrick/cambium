@@ -1,6 +1,7 @@
 import type { BrandSeed } from './brand-seed';
 import { CAMBIUM_NAMESPACE, invented } from './provenance';
 import { radiusScale } from './radius-scale';
+import type { InterpretationParams } from './interpretation';
 import type { SchemeName } from './scale-engine';
 import { resolveScheme } from './resolve-scheme';
 import { type ShadowSurface, shadowScale } from './shadow-scale';
@@ -43,14 +44,15 @@ export type NonColorTokens = SystemConstants & {
 export function deriveNonColor(
 	seed: BrandSeed,
 	schemes: Record<SchemeName, ColorScheme>,
+	params: InterpretationParams,
 ): NonColorTokens {
 	return {
 		radius: radiusScale(seed.radiusCharacter),
 		typography: typeScale(seed.typeScaleRatio),
 		tracking: trackingScale(seed.trackingFeel),
 		shadow: {
-			light: shadowScale(surfaceOf(schemes.light, 'light'), seed.shadowCharacter),
-			dark: shadowScale(surfaceOf(schemes.dark, 'dark'), seed.shadowCharacter),
+			light: shadowScale(surfaceOf(schemes.light, 'light'), seed.shadowCharacter, params),
+			dark: shadowScale(surfaceOf(schemes.dark, 'dark'), seed.shadowCharacter, params),
 		},
 		...tagSystemConstants(systemConstants()),
 	};
