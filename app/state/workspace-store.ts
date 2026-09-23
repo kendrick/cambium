@@ -99,7 +99,9 @@ export class CommitAbandonedError extends Error {
  * Storage is what catches the rest. Every `RecordStore.get` returns a fresh object graph, so a stale
  * copy loaded through a separate `get` is a different object holding the same old history and
  * nothing here recognises it. It still carries the revision it was read at, so `put` refuses it,
- * and refuses a stale commit from a second tab on the same grounds.
+ * and refuses a stale commit from a second tab on the same grounds. Both hold while the record is
+ * still stored. After a `delete`, `put` takes a stale commit as an insert, as the module docblock
+ * in `app/storage/record-store.ts` describes.
  *
  * Typed for the same reason as `RecordStampedAheadError`: the caller has a specific recovery, which
  * is to reload the record and commit again, and it can only choose it if it can tell this apart
@@ -479,10 +481,10 @@ export function createWorkspaceStore({
 
 		/**
 		 * Commits run one at a time within this store. An ordinal is counted off the record as it
-		 * stands and `put` writes the record whole, so two overlapping commits would both claim the
-		 * same ordinal and the second write would drop the first version on the floor. A double-click
-		 * is enough to reach that, and the loss is silent. Queueing makes the second commit read what
-		 * the first one wrote.
+		 * stands, so two overlapping commits would both build on the same base and claim the same
+		 * ordinal. `put` would take the first and refuse the second with `StaleRecordWriteError`, so a
+		 * double-click would fail a commit the user asked for. Queueing makes the second commit read
+		 * what the first one wrote.
 		 *
 		 * It serialises this store and nothing else. Two tabs hold two stores and two queues, and a
 		 * stale copy re-read inside one tab sits outside this queue's knowledge too. Neither loses a

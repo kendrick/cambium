@@ -34,8 +34,9 @@ import { type BrandRecord, FIRST_REVISION } from '../../core/brand-record';
  * A caller carries `revision` through a commit unchanged, images-only ones included, because it
  * says which revision the copy was read at and committing does not change that. The record `put`
  * resolves with carries the revision storage stamped, so a caller that adopts it is holding the base
- * for its next write; one that keeps its own object instead is holding a base storage has left, and
- * its next write is refused.
+ * for its next write. One that keeps its own object after a commit is holding a base storage has
+ * left, and its next write is refused. An insert is the exception: its object already carries
+ * `FIRST_REVISION`, the number storage stamps, so a write built on it is accepted as a commit.
  *
  * `versions` keeps a second rule on top of that one, which is #67's. The stored history has to
  * arrive unchanged and in place: a write may append to that history or leave it alone, and may
@@ -56,11 +57,15 @@ import { type BrandRecord, FIRST_REVISION } from '../../core/brand-record';
  * red-team measured sixteen, and `record-store-contract.ts` pins the one an ordinary sequence of
  * writes reaches.
  *
- * Closing it takes identity carried on the record, which `core/brand-record.ts` owns rather than
- * this seam. #78 opened it: demanding a longer history used to refuse those writes whatever
- * incarnation they came from, and accepting metadata-only writes took that side effect away. No
- * product code calls `delete` today, and every record is created under a fresh uuid, so no id is
- * ever recreated and nothing a user can do reaches it.
+ * #78 opened the gap: demanding a longer history used to refuse those writes whatever incarnation
+ * they came from, and accepting metadata-only writes took that side effect away. No product code
+ * calls `delete` today, and every record is created under a fresh uuid, so no id is ever recreated
+ * and nothing a user can do reaches it. The known fixes are set out below, with #20's decision.
+ *
+ * A stale copy does not need anyone to recreate the id first. Once the id is deleted, a write from
+ * a copy read before the delete finds nothing stored, so `nextCommit` takes it as an insert, stamps
+ * `FIRST_REVISION`, and stores it. The deleted record comes back under its old id with no error
+ * raised. The contract suite pins that too.
  *
  * Restoring an archive over a record that still exists gets no special handling here. `put` judges
  * an archive as it judges any other write, so it accepts one carrying the revision storage holds
@@ -75,16 +80,27 @@ import { type BrandRecord, FIRST_REVISION } from '../../core/brand-record';
  * importing is delete and recreate, which is the sequence the gap above needs.
  *
  * #20 restores a record as a copy under a fresh uuid rather than in place under the id it was
- * exported with, and it decided that against this gap. Restoring in place recreates an id, and
- * closing what that opens needs incarnation identity on `BrandRecord`, which is a schema change
- * #36's Boundary rules out for the phase: "Nothing in this phase changes an interface, a schema, or
- * a call site established in v1."
+ * exported with, and it decided that against this gap. Restoring in place recreates an id. Two
+ * fixes are known for a recreated id, and neither is built:
+ *
+ * - Incarnation identity on `BrandRecord`. That is a schema change, and #36's Boundary rules it out
+ *   for the phase: "Nothing in this phase changes an interface, a schema, or a call site
+ *   established in v1."
+ * - A per-id revision floor kept by storage. `delete` would record the highest revision the id
+ *   reached, and a recreate would start one past it, so no copy of the deleted record could carry
+ *   a revision the live one holds. It needs no `BrandRecord` field, but it keeps state for every id
+ *   ever deleted, and IndexedDB needs a `DATABASE_VERSION` bump to hold it.
+ *
+ * Neither fix alone stops a stale copy from bringing back a deleted id. That write finds nothing
+ * stored, so a floor would stamp it like any other recreate, and there is no live incarnation for
+ * it to disagree with.
  *
  * Nothing recreates an id, then. `delete` has no caller outside the test suites, every record is
  * created under a fresh uuid, and an import mints another one. That is why the gap is dormant, and
- * dormant is not closed: `delete` is still on this interface and `wasBuiltOnStored` still accepts a
- * write against a record recreated under a deleted id. Whatever recreates one first turns the gap
- * on and owes the schema change with it.
+ * dormant is not closed: `delete` is still on this interface, `wasBuiltOnStored` still accepts a
+ * write against a record recreated under a deleted id, and `nextCommit` still stores a stale write
+ * against a deleted one. Whatever ships a caller of `delete` first turns the gap on and owes a fix
+ * with it.
  *
  * `put` resolves with the record as stored, after parsing. `BrandSeedSchema` canonicalises values
  * that have two spellings — a hue committed as 360 is stored as 0 — so a caller that adopts the
@@ -130,10 +146,19 @@ export type RecordStore = {
  * An insert reaches the same limit with no increment at all. A new record carries `FIRST_REVISION`,
  * and `put` has nothing else to tell an insert from a commit by. Send a new record under an id storage
  * holds at `FIRST_REVISION`, with a history the stored one continues, and `put` reads it as a copy
- * read at that revision and commits it over the stored record. Telling the two apart needs a second input
- * to `put`, which #67's non-goals rule out. It is dormant because the one product path that inserts,
- * `save` in `components/landing/upload-form.tsx`, mints the id with `crypto.randomUUID()` inside the
- * call and keeps nothing, so no insert reuses an id. The contract suite pins it as a known limit.
+ * read at that revision and commits it over the stored record. That includes the same insert sent a
+ * second time after its response was lost. `put` accepts it as a commit, and the revision moves to
+ * `FIRST_REVISION + 1` though no field changed. A third send is refused, because storage has then
+ * left `FIRST_REVISION`.
+ *
+ * Telling an insert from a commit needs something `put` does not get today. A second input to `put`
+ * is one way, and #67's non-goals rule out both forms of it: "Widening the `put` signature" and "A
+ * separate `putIfUnchanged` method". A field on the record that marks an insert or names an
+ * incarnation is another way, and it is a schema change, which #36's Boundary rules out for the
+ * phase. The limit is dormant because the one product path that inserts, `save` in
+ * `components/landing/upload-form.tsx`, mints a fresh id with `crypto.randomUUID()` on every call,
+ * so no insert reuses an id. The contract suite pins both the changed insert and the identical
+ * resend as known limits.
  *
  * The history comparison does a job the revision cannot, which is why #67's rule stays on top of
  * it. A revision that agrees says nothing about whether the incoming history is well formed, and
@@ -165,16 +190,18 @@ export type RecordStore = {
  * Distinguishing them would refuse a write that changes nothing, and go on refusing it.
  *
  * Key order is the one assumption that can fail, and it fails safely. Both sides come out of the
- * same parse, and a stored record reaches this through a structured clone that preserves order, so
- * the two agree. If that stopped holding, the write would be refused where the caller can see it
- * rather than a version going missing in silence.
+ * same parse, and the stored side keeps that order in both stores: the in-memory store hands back
+ * the object `nextCommit` built from its parse, and IndexedDB reads it back through a structured
+ * clone, which preserves order. If that stopped holding, the write would be refused where the
+ * caller can see it rather than a version going missing in silence.
  *
  * A structural walk would say the same thing, and `app/state/` has one in `sameJson`. It stays
  * there: storage reaching up a layer to borrow a helper is the wrong direction, and against the
  * refusals above the walk has nothing left to catch.
  *
- * The walk costs one pass over the stored history. `put` already serialises the whole record,
- * reference images included, so this is cheaper than the write it guards.
+ * The comparison serialises the stored history and the same length of the incoming one. That is
+ * linear in the history, like the `BrandRecordSchema` parse every implementation already runs over
+ * the whole record, reference images included, at the top of `put`.
  */
 export function wasBuiltOnStored(stored: BrandRecord, incoming: BrandRecord): boolean {
 	return (
@@ -230,9 +257,10 @@ export type StaleRecordWriteStanding = {
  *
  * The recovery is the same either way, which is why there is one error and not two: re-read the
  * record and commit again from what comes back. That holds for a copy another writer overtook, for a
- * write whose own response was lost and was sent a second time, and for a copy of an id that was
+ * commit whose own response was lost and was sent a second time, and for a copy of an id that was
  * deleted and recreated. Only the first of those has a second writer in it, so no wording here says
- * one landed.
+ * one landed. A resent insert is not on that list. `put` accepts its first resend as a commit, and
+ * `wasBuiltOnStored` says why.
  *
  * The version counts are context rather than the test the write failed, and they measure neither
  * that test nor how far behind the losing copy is. Two writers that each added only an image
@@ -289,7 +317,7 @@ function staleWriteMessage(recordId: string, stored: number, builtOn: number): s
 	// it came to differ, and re-reading is the answer to all of it, so a wording that sorted the
 	// mismatch further would be drawing a distinction the rule no longer makes.
 	//
-	// Neither sentence says another write landed. A base can miss because one did, because this write
+	// Neither sentence says another write landed. A base can miss because one did, because this commit
 	// already landed and its response was lost, or because the id was deleted and recreated under it,
 	// and only the first of those had a second writer in it.
 	if (builtOn !== stored) {

@@ -284,13 +284,18 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 	/**
 	 * Writes one record, once.
 	 *
-	 * The id is minted inside this function and nothing keeps it afterwards, so every save is a record
-	 * storage has not seen, and a retry after a failure is a new record rather than a second attempt
-	 * at the old one. That is the only thing keeping this route safe. Hoisting that
-	 * `crypto.randomUUID()` out to component state would turn a retry into a second insert under an id
-	 * storage already holds, and `RecordStore.put` cannot tell that from a commit built on the first
-	 * save: it takes the write and stores it over whatever the first save left. `wasBuiltOnStored`
-	 * says why.
+	 * Each call mints a fresh id, so every save is a record storage has not seen. A failed save never
+	 * reuses its id, and a retry after a failure is a new record rather than a second attempt at the
+	 * old one. On success the id goes to `onSaved`, which puts it in the route's URL, and no later save reads it.
+	 * That is the only thing keeping this route clear of the insert limit `wasBuiltOnStored`
+	 * describes.
+	 *
+	 * Hoisting that `crypto.randomUUID()` out to component state would make a retry reuse the id. If
+	 * the first write never landed, the retry is a plain first insert and nothing goes wrong. If it
+	 * landed and storage still holds the id at `FIRST_REVISION`, `RecordStore.put` cannot tell the
+	 * retry from a commit built on the first save, so it stores the retry over what the first save
+	 * left. Once the record has moved past `FIRST_REVISION`, the same retry is refused with
+	 * `StaleRecordWriteError`.
 	 *
 	 * The other two ways in are closed above and below: `saving` stops a double submit reaching this
 	 * twice, and `onSaved` sits outside the catch so a write that landed can never be reported as one

@@ -394,6 +394,34 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			]);
 		});
 
+		/**
+		 * A known limit, pinned so it cannot move unnoticed: the same limit as the test above, with
+		 * nothing changed between the two sends.
+		 *
+		 * A caller that lost the response to an insert can send the identical record again. Storage
+		 * takes the resend as a commit built on `FIRST_REVISION` and moves the record to the next
+		 * revision, though no field changed. Only a
+		 * third send is refused, once storage has left `FIRST_REVISION`. A resent commit behaves
+		 * differently, and 'does not tell a retried commit that another write landed in between'
+		 * covers it.
+		 *
+		 * Delete this test with the one above if `put` gains a way to tell an insert from a commit.
+		 */
+		it('takes an identical resend of an insert as a commit, which is a known limit', async () => {
+			const record = makeRecord();
+
+			await store.put(record);
+
+			await expect(store.put(record)).resolves.toMatchObject({
+				revision: FIRST_REVISION + 1,
+				images: record.images,
+				versions: record.versions,
+			});
+			expect((await read(store, record.id)).revision).toBe(FIRST_REVISION + 1);
+
+			await expect(store.put(record)).rejects.toBeInstanceOf(StaleRecordWriteError);
+		});
+
 		// One reader is enough, which is what the two-tab framing misses. `get` hands back a fresh
 		// object graph every read, so a re-read copy is a different object holding the same old
 		// history: every check above this seam that keys on object identity misses it, and every
@@ -605,12 +633,14 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			});
 		});
 
-		// A write that landed and lost its response is the input most likely to be told a falsehood.
+		// A commit that landed and lost its response is the input most likely to be told a falsehood.
 		// The caller sends the identical payload again; storage refuses it, because the base it was
 		// built on is no longer current, and the refusal has to say that rather than blame a second
 		// writer. Refusing rather than accepting it as a duplicate is the choice here: re-reading
 		// shows the caller its own commit already in place, so nothing is lost by making it look.
-		it('does not tell a retried write that another write landed in between', async () => {
+		// This covers commits only. A resent insert is accepted the first time, which the known-limit
+		// test for it pins.
+		it('does not tell a retried commit that another write landed in between', async () => {
 			const record = makeRecord();
 			await store.put(record);
 			const held = await read(store, record.id);
@@ -806,7 +836,8 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		 * restores as a copy under a fresh uuid rather than in place, so it does not recreate one
 		 * either. That is why this is dormant, and dormant is not closed: `delete` is still on the
 		 * interface, and the two tests above still pass, so whatever recreates an id first turns it
-		 * on.
+		 * on. A stale write after a `delete` recreates the id by itself, so a caller of `delete` is
+		 * enough; 'brings a deleted record back from a copy read before the delete' pins that route.
 		 *
 		 * When the fix lands, delete both tests. Their inverse is the assertion to write instead.
 		 */
@@ -928,6 +959,52 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 
 			expect((await read(store, recreated.id)).images.map((image) => image.id)).toEqual([
 				'img-the-live-record-added',
+			]);
+		});
+
+		/**
+		 * A known hole, pinned so it cannot move unnoticed. This asserts what the seam does today, not
+		 * what it should do.
+		 *
+		 * The delete-and-recreate hole above needs somebody to recreate the id. This one needs only a
+		 * `delete`. A copy read before the delete writes afterwards, finds nothing stored, and is taken
+		 * as an insert at `FIRST_REVISION`. The deleted record comes back under its old id with no
+		 * error. It is dormant for the same reason, since `delete` has no caller outside the test
+		 * suites.
+		 *
+		 * Neither known fix for a recreated id closes this route alone, because the write has no live
+		 * record to disagree with. Delete this test when `put` refuses it, and assert the refusal.
+		 */
+		it('brings a deleted record back from a copy read before the delete, which is a known hole', async () => {
+			const original = makeRecord();
+			await store.put(original);
+			await store.put(
+				withAddedImage(original, {
+					id: 'img-the-record-had',
+					downscaled: 'data:image/png;base64,BB==',
+					originalHash: 'sha256:had',
+				}),
+			);
+			// Read past `FIRST_REVISION`, so the assertion below shows the copy's revision discarded
+			// rather than matched.
+			const copyReadBeforeTheDelete = await read(store, original.id);
+			expect(copyReadBeforeTheDelete.revision).toBe(FIRST_REVISION + 1);
+
+			await store.delete(original.id);
+
+			const fromTheDeletedRecord = withAddedImage(copyReadBeforeTheDelete, {
+				id: 'img-from-a-deleted-record',
+				downscaled: 'data:image/png;base64,AA==',
+				originalHash: 'sha256:ghost',
+			});
+
+			await expect(store.put(fromTheDeletedRecord)).resolves.toMatchObject({
+				revision: FIRST_REVISION,
+				images: fromTheDeletedRecord.images,
+			});
+			expect((await read(store, original.id)).images.map((image) => image.id)).toEqual([
+				'img-the-record-had',
+				'img-from-a-deleted-record',
 			]);
 		});
 
