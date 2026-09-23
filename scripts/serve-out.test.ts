@@ -1,5 +1,5 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { type IncomingHttpHeaders, request as httpRequest } from 'node:http';
 import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -28,7 +28,11 @@ const TIMEOUT = 30_000;
  * the same name holding only RSC payloads, which is the whole reason the sibling lookup exists.
  *
  * `doomed.txt` exists to be deleted once the server is up, which is how a live server ends up
- * holding a route it cannot open.
+ * holding a route it cannot open. `vanishing.txt` is the same trick aimed at HEAD.
+ *
+ * `swapped.txt` and `renamed.txt` are indexed at startup and then overwritten while the server
+ * runs: one by a symlink out of the export, one by `smuggled.txt` moved in from beside it. Both
+ * ask whether a route serves the file the walk indexed or whatever now answers to its name.
  */
 async function buildExport(): Promise<string> {
 	const root = await mkdtemp(join(tmpdir(), 'cambium-serve-out-'));
@@ -43,9 +47,13 @@ async function buildExport(): Promise<string> {
 	await writeFile(join(root, 'out', 'styles.css'), 'body{color:red}\n');
 	await writeFile(join(root, 'out', 'nojekyll'), 'no extension\n');
 	await writeFile(join(root, 'out', 'doomed.txt'), 'here at startup\n');
+	await writeFile(join(root, 'out', 'vanishing.txt'), 'here at startup\n');
+	await writeFile(join(root, 'out', 'swapped.txt'), 'the file the walk indexed\n');
+	await writeFile(join(root, 'out', 'renamed.txt'), 'the file the walk indexed\n');
 
 	await writeFile(join(root, 'out.html'), '<h1>outside the sandbox</h1>\n');
 	await writeFile(join(root, 'secret.txt'), 'outside the sandbox\n');
+	await writeFile(join(root, 'smuggled.txt'), 'smuggled from outside\n');
 
 	return root;
 }
@@ -303,6 +311,70 @@ describe('scripts/serve-out.mjs', () => {
 		expect(after.body).toBe('body{color:red}\n');
 	});
 
+	// The manifest holds a path, and each request opens that path again, so a route whose file is
+	// replaced while the server runs is a window the startup walk does not close by itself. The
+	// "written after startup" case above plants a route the walk never indexed, which the lookup
+	// refuses for a different reason and which says nothing about this one.
+	//
+	// `open` follows a symlink at the last component, so a link dropped in over an indexed file
+	// reads whatever it points at unless the open refuses to follow it.
+	it('refuses a symlink swapped in over a route the walk indexed', async () => {
+		const indexed = join(exportRoot, 'out', 'swapped.txt');
+		const before = await get(port, '/swapped.txt');
+
+		expect(before.status).toBe(200);
+		expect(before.body).toBe('the file the walk indexed\n');
+
+		await rm(indexed);
+		await symlink(join('..', 'secret.txt'), indexed);
+
+		try {
+			const answer = await get(port, '/swapped.txt');
+
+			expect(answer.body).not.toContain('outside the sandbox');
+			expect(answer.status).toBe(500);
+		} finally {
+			await rm(indexed);
+			await writeFile(indexed, 'the file the walk indexed\n');
+		}
+	});
+
+	// The same swap with no symlink in it. A server that only refused to follow links would pass
+	// the case above and serve this one, because an ordinary file lands here and an ordinary open
+	// reads it. Only its identity on disk separates it from the file the walk indexed, and a path
+	// does not carry that.
+	it('refuses a file moved in from outside over a route the walk indexed', async () => {
+		const indexed = join(exportRoot, 'out', 'renamed.txt');
+		const before = await get(port, '/renamed.txt');
+
+		expect(before.status).toBe(200);
+		expect(before.body).toBe('the file the walk indexed\n');
+
+		await rename(join(exportRoot, 'smuggled.txt'), indexed);
+
+		const answer = await get(port, '/renamed.txt');
+
+		expect(answer.body).not.toContain('smuggled from outside');
+		expect(answer.status).toBe(500);
+	});
+
+	// Answered out of the manifest alone, HEAD reports a file the process can no longer open as
+	// present. HEAD stands in for the GET, so whatever status the GET carries, HEAD carries too.
+	it('answers HEAD for a vanished route what GET answers', async () => {
+		const vanishing = join(exportRoot, 'out', 'vanishing.txt');
+		const before = await get(port, '/vanishing.txt', 'HEAD');
+
+		expect(before.status).toBe(200);
+
+		await rm(vanishing);
+
+		const head = await get(port, '/vanishing.txt', 'HEAD');
+		const body = await get(port, '/vanishing.txt');
+
+		expect(head.status).toBe(500);
+		expect(head.status).toBe(body.status);
+	});
+
 	// Playwright starts this server itself, so a missing export has to fail here, before a browser
 	// opens. Left to the request handler it would surface as a page that failed to load, which
 	// sends the reader after the app instead of the build.
@@ -317,6 +389,39 @@ describe('scripts/serve-out.mjs', () => {
 			await expect(
 				execFileAsync('node', [join(root, 'scripts', 'serve-out.mjs'), '0']),
 			).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('out/ is missing') });
+		},
+		TIMEOUT,
+	);
+
+	// A directory the walk cannot read must not read as an empty one. An empty one puts a healthy
+	// startup line over a subtree that 404s, which is the failure this server exists to prevent.
+	//
+	// The `timeout` is there for the failure: a server that binds rather than exiting holds its
+	// stdout open, and `execFile` would wait out the whole case. Skipped as root, since root reads
+	// a mode-000 directory anyway.
+	it.skipIf(process.getuid?.() === 0)(
+		'exits non-zero naming a directory the walk cannot read',
+		async () => {
+			const root = await buildExport();
+			const locked = join(root, 'out', 'locked');
+
+			await mkdir(locked);
+			await writeFile(join(locked, 'page.html'), '<h1>unreachable</h1>\n');
+			await chmod(locked, 0o000);
+
+			try {
+				const failure = await execFileAsync('node', [join(root, 'scripts', 'serve-out.mjs'), '0'], {
+					timeout: 10_000,
+				}).then(
+					() => null,
+					(error: { code?: number; stderr: string }) => error,
+				);
+
+				expect(failure?.code).toBe(1);
+				expect(failure?.stderr).toContain('locked');
+			} finally {
+				await chmod(locked, 0o755);
+			}
 		},
 		TIMEOUT,
 	);
