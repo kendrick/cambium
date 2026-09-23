@@ -209,15 +209,62 @@ const EXPECTED_SCALAR_PROPERTIES = [
 	'--cmb-tracking-normal',
 ];
 
+/**
+ * The twelve numbers a Tailwind or shadcn consumer already types, as in `bg-brand-500` and
+ * `text-brand-700`. Written out here instead of read back from `STEP_NUMBERS`, because that table
+ * is one of the things under test: importing it would let a wrong name pass on both sides at once.
+ *
+ * 25 sits below 50 because Tailwind's own palette has eleven stops and a Cambium ramp has twelve.
+ * `core/css/step-numbers.ts` argues that choice; the list here only states what a consumer gets.
+ */
+const CONVENTIONAL_NUMBERS = [
+	'25',
+	'50',
+	'100',
+	'200',
+	'300',
+	'400',
+	'500',
+	'600',
+	'700',
+	'800',
+	'900',
+	'950',
+];
+
+/**
+ * The ramps `PINNED_SET` carries, which is deliberately not all seven of `RAMP_NAMES`. The adapter
+ * reads the keys the token set actually holds, so a fixture short four ramps is the case that
+ * catches a hardcoded list.
+ */
+const FIXTURE_RAMPS = ['brand', 'neutral', 'danger'];
+
+/**
+ * Every ramp step, plus the one unnumbered alias. Strip the `cmb-` and what is left is the Tailwind
+ * colour entry the theme block maps the property onto: `--cmb-color-brand-500` pairs with
+ * `--color-brand-500`, the property behind `bg-brand-500`.
+ *
+ * `--cmb-color-brand` has no number because the brand colour is step 9, whose conventional name is
+ * 700. A consumer reaching for `bg-brand-500` would get step 7 and a colour that is not the brand.
+ */
+const EXPECTED_RAMP_PROPERTIES = [
+	...FIXTURE_RAMPS.flatMap((name) =>
+		CONVENTIONAL_NUMBERS.map((number) => `--cmb-color-${name}-${number}`),
+	),
+	'--cmb-color-brand',
+];
+
 /** Colours and shadows are per-scheme; the scalars hold still and are declared under `:root` only. */
 const EXPECTED_ROOT_PROPERTIES = sorted([
 	...EXPECTED_COLOR_PROPERTIES,
+	...EXPECTED_RAMP_PROPERTIES,
 	...EXPECTED_SHADOW_PROPERTIES,
 	...EXPECTED_SCALAR_PROPERTIES,
 ]);
 
 const EXPECTED_DARK_PROPERTIES = sorted([
 	...EXPECTED_COLOR_PROPERTIES,
+	...EXPECTED_RAMP_PROPERTIES,
 	...EXPECTED_SHADOW_PROPERTIES,
 ]);
 
@@ -237,7 +284,7 @@ describe('toGlobalsCss', () => {
 		expect(root.nodes.every((node) => node.type === 'rule')).toBe(true);
 	});
 
-	it('declares every semantic token, every shadow and every scalar under the light selector', () => {
+	it('declares every semantic token, every ramp step, every shadow and every scalar under :root', () => {
 		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
 
 		expect(propertyNames(byScheme.get(':root') ?? [])).toEqual(EXPECTED_ROOT_PROPERTIES);
@@ -246,7 +293,7 @@ describe('toGlobalsCss', () => {
 	// Asserted against the contract rather than against what the light selector happened to emit. A
 	// token present in light and missing in dark is the defect this pair catches, and comparing the
 	// two selectors to each other would report them as agreeing when both are short the same token.
-	it('declares every semantic token and every shadow under the dark selector', () => {
+	it('declares every semantic token, every ramp step and every shadow under the dark selector', () => {
 		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
 
 		expect(propertyNames(byScheme.get('.dark') ?? [])).toEqual(EXPECTED_DARK_PROPERTIES);
@@ -256,12 +303,16 @@ describe('toGlobalsCss', () => {
 	// cannot satisfy it by dropping a comparison. A scalar leaking into `.dark` is harmless today
 	// and a divergence waiting to happen the moment somebody makes radius scheme-dependent, which
 	// is the decision this layout forecloses.
-	it('mirrors colours and shadows across both selectors and keeps the scalars to :root', () => {
+	it('mirrors colours, ramps and shadows across both selectors and keeps the scalars to :root', () => {
 		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
 		const light = new Set(propertyNames(byScheme.get(':root') ?? []));
 		const dark = new Set(propertyNames(byScheme.get('.dark') ?? []));
 
-		for (const property of [...EXPECTED_COLOR_PROPERTIES, ...EXPECTED_SHADOW_PROPERTIES]) {
+		for (const property of [
+			...EXPECTED_COLOR_PROPERTIES,
+			...EXPECTED_RAMP_PROPERTIES,
+			...EXPECTED_SHADOW_PROPERTIES,
+		]) {
 			expect(light).toContain(property);
 			expect(dark).toContain(property);
 		}
@@ -324,6 +375,63 @@ describe('toGlobalsCss', () => {
 		expect(channels(valueOf(dark, '--destructive'))).toEqual([0.61, 0.03, 25]);
 	});
 
+	it('numbers each ramp step the way a consumer expects rather than by its internal index', () => {
+		const light = declarationsBySelector(toGlobalsCss(PINNED_SET)).get(':root') ?? [];
+
+		// `PINNED_SET` pins step n at lightness n/100, so the lightness a declaration carries names the
+		// step it came from. 25 and 950 are the two ends of the ramp, 500 is the number most consumers
+		// type, and 700 is the brand.
+		expect(channels(valueOf(light, '--cmb-color-brand-25'))).toEqual([0.01, 0.02, 260]);
+		expect(channels(valueOf(light, '--cmb-color-brand-500'))).toEqual([0.07, 0.02, 260]);
+		expect(channels(valueOf(light, '--cmb-color-brand-700'))).toEqual([0.09, 0.02, 260]);
+		expect(channels(valueOf(light, '--cmb-color-brand-950'))).toEqual([0.12, 0.02, 260]);
+
+		// Every ramp is numbered off the same table, so `danger-500` is step 7 of danger, the step
+		// `brand-500` is of brand.
+		expect(channels(valueOf(light, '--cmb-color-danger-500'))).toEqual([0.07, 0.02, 25]);
+		expect(channels(valueOf(light, '--cmb-color-neutral-950'))).toEqual([0.12, 0.02, 250]);
+	});
+
+	it('takes each ramp step from its own scheme, so bg-brand-500 moves under .dark', () => {
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+
+		// The reason the ramps are declared under both selectors instead of once in the theme block:
+		// `primitives` sits inside `ColorSchemeSchema`, so the two schemes hold different ramps, and a
+		// theme entry holding a literal would freeze the light one onto the dark page.
+		expect(channels(valueOf(byScheme.get(':root') ?? [], '--cmb-color-brand-500'))).toEqual([
+			0.07, 0.02, 260,
+		]);
+		expect(channels(valueOf(byScheme.get('.dark') ?? [], '--cmb-color-brand-500'))).toEqual([
+			0.57, 0.03, 260,
+		]);
+	});
+
+	it('gives the brand colour an unnumbered name, and gives no other ramp one', () => {
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const light = byScheme.get(':root') ?? [];
+		const dark = byScheme.get('.dark') ?? [];
+
+		// `BRAND_STEP` is 9 and step 9's conventional number is 700, so the brand colour answers to
+		// `brand-700` while `bg-brand-500` lands on step 7. `--cmb-color-brand` is the name that holds
+		// still if the numbering ever moves.
+		expect(channels(valueOf(light, '--cmb-color-brand'))).toEqual([0.09, 0.02, 260]);
+		expect(valueOf(light, '--cmb-color-brand')).toBe(valueOf(light, '--cmb-color-brand-700'));
+		expect(valueOf(dark, '--cmb-color-brand')).toBe(valueOf(dark, '--cmb-color-brand-700'));
+
+		// `SEMANTIC_MAP.primary` is `brand.9` as well, so the two names are two spellings of one
+		// colour: `bg-primary` under shadcn's contract, `bg-brand` under the ramp's.
+		expect(valueOf(light, '--cmb-color-brand')).toBe(valueOf(light, '--primary'));
+		expect(valueOf(dark, '--cmb-color-brand')).toBe(valueOf(dark, '--primary'));
+
+		// Nothing but brand. An unnumbered `--cmb-color-accent` would become `--color-accent`, a name
+		// the semantic layer already claims for `SEMANTIC_MAP.accent`, which aliases `neutral.4`. The
+		// other ramps are left out so the exception stays one name a reader can hold.
+		const names = propertyNames(light);
+		expect(names.filter((name) => /^--cmb-color-[a-z]+$/.test(name))).toEqual([
+			'--cmb-color-brand',
+		]);
+	});
+
 	it('writes each shadow as a box-shadow value taken from its own scheme', () => {
 		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
 		const light = BOX_SHADOW.exec(valueOf(byScheme.get(':root') ?? [], '--cmb-shadow-md'));
@@ -350,13 +458,18 @@ describe('toGlobalsCss', () => {
 		expect(valueOf(root, '--cmb-tracking-normal')).toBe('0em');
 	});
 
-	it('carries a caller-supplied prefix on the non-colour properties and leaves the colours bare', () => {
+	it('carries a caller-supplied prefix everywhere but on the semantic colours', () => {
 		const names = propertyNames(
 			declarationsBySelector(toGlobalsCss(PINNED_SET, { prefix: 'acme' })).get(':root') ?? [],
 		);
 
 		expect(names).toContain('--acme-shadow-md');
 		expect(names).toContain('--acme-radius-lg');
+		// A ramp step is a colour and still takes the prefix, because its theme entry is
+		// `--color-brand-500`, which sits inside Tailwind's colour namespace. A semantic name like
+		// `--background` never does.
+		expect(names).toContain('--acme-color-brand-500');
+		expect(names).toContain('--acme-color-brand');
 		// Bare and unprefixed is what makes the output drop-in for a shadcn project, whose own
 		// components read `--background` by that name.
 		expect(names).toContain('--background');
@@ -418,5 +531,29 @@ describe('toGlobalsCss', () => {
 		// never puts the two schemes side by side.
 		expect(() => toGlobalsCss(lopsided)).toThrow(/shadow steps/);
 		expect(() => toGlobalsCss(lopsided)).toThrow(/md/);
+	});
+
+	it('refuses a set whose two schemes declare different ramps', () => {
+		const withWarning = {
+			...LIGHT_SCHEME,
+			primitives: { ...LIGHT_SCHEME.primitives, warning: ramp(90, 0.02, 0) },
+		};
+		const lopsided = TokenSetSchema.parse({
+			...withWarning,
+			schemes: { light: withWarning, dark: DARK_SCHEME },
+			...NON_COLOR_FIXTURE,
+		});
+
+		// The fixture only bites if the extra ramp survived the parse on one side and not the other.
+		expect(Object.keys(lopsided.schemes.light.primitives)).toContain('warning');
+		expect(Object.keys(lopsided.schemes.dark.primitives)).not.toContain('warning');
+
+		// Emitting the union would leave `--cmb-color-warning-500` under `:root` alone, so every
+		// `bg-warning-500` on a dark page would paint the light ramp's colour and look deliberate.
+		// Nothing upstream compares the two schemes' ramps: `checkAliasesResolve` looks inside one
+		// scheme and `checkMirroredLayers` compares the top level against light, so neither puts the
+		// two side by side.
+		expect(() => toGlobalsCss(lopsided)).toThrow(/ramp steps/);
+		expect(() => toGlobalsCss(lopsided)).toThrow(/warning-500/);
 	});
 });

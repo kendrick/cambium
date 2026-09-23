@@ -1,13 +1,17 @@
 import type { Oklch } from '../oklch';
 import { resolveScheme } from '../resolve-scheme';
-import type {
-	DimensionValue,
-	Shadow,
-	ShadowScale,
-	SignedDimensionValue,
-	TokenSet,
+import { BRAND_STEP } from '../step-roles';
+import {
+	type DimensionValue,
+	declaredRamp,
+	type Ramp,
+	type Shadow,
+	type ShadowScale,
+	type SignedDimensionValue,
+	type TokenSet,
 } from '../token-set';
 import { toOklchCss } from './oklch-css';
+import { stepNumberName } from './step-numbers';
 
 /**
  * Dark is a class rather than a `prefers-color-scheme` query. `app/globals.css` declares
@@ -18,6 +22,9 @@ const LIGHT_SELECTOR = ':root';
 const DARK_SELECTOR = '.dark';
 
 const DEFAULT_PREFIX = 'cmb';
+
+/** The one ramp that also gets an unnumbered name. See {@link rampDeclarations}. */
+const BRAND_RAMP = 'brand';
 
 /**
  * Decimals a scalar rounds to. Matches `toOklchCss`'s default, so the geometry and the colour
@@ -62,8 +69,8 @@ const TAILWIND_NAMESPACES = [
 /** Options controlling how {@link toGlobalsCss} names the properties it writes. */
 export type GlobalsCssOptions = {
 	/**
-	 * Namespace carried by every non-colour property, without the leading `--` and without the
-	 * trailing hyphen. Defaults to `cmb`.
+	 * Namespace carried by every property except the semantic colours, without the leading `--` and
+	 * without the trailing hyphen. Defaults to `cmb`.
 	 */
 	prefix?: string;
 };
@@ -73,8 +80,8 @@ type CssDeclaration = { property: string; value: string };
 
 /**
  * Writes a token set out as the custom-property blocks a shadcn project drops into its
- * `globals.css`: the two colour schemes, their shadows, and the scalars that hold still across
- * both.
+ * `globals.css`: the two colour schemes, their ramps and shadows, and the scalars that hold still
+ * across both.
  *
  * Every declaration carries a value, because CSS has nowhere to put an alias. `ramp.step` is how
  * the semantic layer is authored and how it stays honest when a ramp moves, so `resolveScheme`
@@ -93,12 +100,15 @@ type CssDeclaration = { property: string; value: string };
  * Bare is safe for a colour because Tailwind's colour namespace is `--color-*`, so a theme entry
  * `--color-background: var(--background)` names two different properties.
  *
- * Every non-colour scalar carries `prefix` instead, because the same trick does not survive the
- * move. Bare, `--shadow-md` is already Tailwind's shadow namespace, so the theme entry
+ * Everything else carries `prefix`, because the same trick does not survive the move. Bare,
+ * `--shadow-md` is already Tailwind's shadow namespace, so the theme entry
  * `--shadow-md: var(--shadow-md)` reads itself and resolves to nothing: a stylesheet that parses
- * and paints no shadow. Strip the prefix from what this emits and what is left is the Tailwind v4
- * theme entry the property maps onto.
+ * and paints no shadow. A ramp step is a colour and still lands in that group, because its theme
+ * entry is `--color-brand-500`, which sits inside the colour namespace where a semantic name never
+ * does. Strip the prefix from what this emits and what is left is the Tailwind v4 theme entry the
+ * property maps onto.
  *
+ * - `--cmb-color-brand-500` → `--color-brand-500` (a ramp step; see {@link rampDeclarations})
  * - `--cmb-shadow-md` → `--shadow-md`
  * - `--cmb-radius-lg` → `--radius-lg`
  * - `--cmb-text-base` → `--text-base` (a typography size)
@@ -111,9 +121,9 @@ type CssDeclaration = { property: string; value: string };
  *
  * A prefix that walks a property back inside a namespace is refused by name rather than skipped,
  * the same call `resolveScheme` and `stepNumberName` make: the alternative is an export that is
- * short a token and says so nowhere. An empty prefix is therefore legal only for a set with no
- * non-colour scalars, and `TokenSetSchema` requires radius, typography and tracking, so in practice
- * it always throws.
+ * short a token and says so nowhere. An empty prefix therefore always throws: `PrimitiveLayerSchema`
+ * requires at least one ramp and `TokenSetSchema` requires radius, typography and tracking, so
+ * every set reaching this carries something that would land bare inside a namespace.
  *
  * The shadows come from `schemes.light.shadow` and `schemes.dark.shadow`, never from the top-level
  * `tokenSet.shadow`. `checkMirroredLayers` pins that top-level copy to the light scheme's, so
@@ -146,21 +156,31 @@ export function toGlobalsCss(tokenSet: TokenSet, options: GlobalsCssOptions = {}
 		Object.keys(tokenSet.schemes.light.shadow.values),
 		Object.keys(tokenSet.schemes.dark.shadow.values),
 	);
+	requireMirroredNames(
+		'ramp steps',
+		rampStepNames(tokenSet.schemes.light.primitives),
+		rampStepNames(tokenSet.schemes.dark.primitives),
+	);
 
 	// Both blocks run in the light scheme's order, so a reader comparing them is looking at values
 	// instead of at a reordering. The two token sets are equal by the check above, so taking the
 	// order from one of them loses nothing.
 	const tokens = Object.keys(light);
 
+	// The ramps trail the shadow rather than joining the semantic colours above it. Eighty-five of
+	// them land at once for a seven-ramp set, and a reader editing a pasted stylesheet is looking for
+	// the semantic names they recognise.
 	const rootBody = [
 		...colorDeclarations(tokens, light),
 		...shadowDeclarations(tokenSet.schemes.light.shadow, prefix),
+		...rampDeclarations(tokenSet.schemes.light.primitives, prefix),
 		...scalarDeclarations(tokenSet, prefix),
 	];
 
 	const darkBody = [
 		...colorDeclarations(tokens, dark),
 		...shadowDeclarations(tokenSet.schemes.dark.shadow, prefix),
+		...rampDeclarations(tokenSet.schemes.dark.primitives, prefix),
 	];
 
 	return `${rule(LIGHT_SELECTOR, rootBody)}\n${rule(DARK_SELECTOR, darkBody)}`;
@@ -184,6 +204,76 @@ function shadowDeclarations(scale: ShadowScale, prefix: string): CssDeclaration[
 		property: prefixedProperty(`shadow-${step}`, prefix),
 		value: boxShadow(shadow),
 	}));
+}
+
+/**
+ * Every ramp step under its conventional number, plus the unnumbered brand alias.
+ *
+ * Cambium's ramps run 1 through 12 and the ecosystem this exports into runs 25 through 950, so a
+ * step emitted under its own index would hand a consumer `bg-brand-9` where every Tailwind habit
+ * says `bg-brand-500`. `stepNumberName` is the table that mapping lives in, and it argues there why
+ * it is a lookup rather than a formatter.
+ *
+ * The ramp names come off the token set instead of `RAMP_NAMES`, the way the semantic layer is
+ * already read. `PrimitiveLayerSchema` accepts any non-empty record, so a set carrying some other
+ * spread of ramps still has to export every ramp it holds.
+ *
+ * Declared per scheme, because `primitives` sits inside `ColorSchemeSchema` and light and dark hold
+ * different ramps. Same reasoning that put the shadows under both selectors: an `@theme` entry
+ * holding a literal is frozen at one value, so a scheme-dependent colour cannot be one.
+ *
+ * `--<prefix>-color-brand` carries no number, and only brand gets it. `BRAND_STEP` is 9 and step
+ * 9's conventional name is 700, so the brand colour answers to `brand-700`, while `bg-brand-500`
+ * lands on step 7. That is the name most consumers would reach for first, so the unnumbered alias
+ * gives the brand colour one that holds still if the numbering ever moves.
+ *
+ * `SEMANTIC_MAP` already aliases `primary` to `brand.9`, so `bg-primary` is the brand colour under
+ * shadcn's own contract. `--<prefix>-color-brand` is the ramp-side spelling of the same colour, for
+ * a consumer thinking in ramps rather than in roles.
+ *
+ * The other six ramps get no such alias. `accent` is the one that would collide: it is a key of
+ * `SEMANTIC_MAP` too, so `--color-accent` is taken, and the semantic `accent` aliases `neutral.4`.
+ * The two names would carry different colours and the semantic one has to win. Handing the
+ * remaining five an alias each would leave six ramps out of seven following a rule, which is the
+ * shape a consumer trips over, so brand stays the one exception.
+ */
+function rampDeclarations(primitives: Record<string, Ramp>, prefix: string): CssDeclaration[] {
+	const steps = Object.entries(primitives).flatMap(([name, ramp]) =>
+		ramp.map((step) => ({
+			property: prefixedProperty(`color-${rampStepName(name, step.step)}`, prefix),
+			value: toOklchCss(step),
+		})),
+	);
+
+	const brand = declaredRamp(primitives, BRAND_RAMP)?.find((step) => step.step === BRAND_STEP);
+
+	if (!brand) return steps;
+
+	return [
+		...steps,
+		{ property: prefixedProperty(`color-${BRAND_RAMP}`, prefix), value: toOklchCss(brand) },
+	];
+}
+
+/**
+ * One ramp step's entry name, `brand-500`, which prefixes into the property the theme block reads
+ * and un-prefixes back into Tailwind's own `--color-brand-500`.
+ */
+function rampStepName(ramp: string, step: number): string {
+	return `${ramp}-${stepNumberName(step)}`;
+}
+
+/**
+ * Every entry name one scheme's ramps produce, for the mirror check.
+ *
+ * Compared as step names rather than as ramp names, because the properties are what has to line up
+ * across the two selectors. `RampSchema` fixes every ramp at steps 1 through 12 today, so the two
+ * comparisons agree; naming the steps keeps that a coincidence instead of a dependency.
+ */
+function rampStepNames(primitives: Record<string, Ramp>): string[] {
+	return Object.entries(primitives).flatMap(([name, ramp]) =>
+		ramp.map((step) => rampStepName(name, step.step)),
+	);
 }
 
 /**
@@ -256,7 +346,7 @@ function prefixedProperty(name: string, prefix: string): string {
 
 	if (namespace) {
 		throw new Error(
-			`--${property} falls inside Tailwind's "${namespace}" namespace, so the theme entry reading it would reference itself; prefix "${prefix}" cannot carry the non-colour token "${name}"`,
+			`--${property} falls inside Tailwind's "${namespace}" namespace, so the theme entry reading it would reference itself; prefix "${prefix}" cannot carry the token "${name}"`,
 		);
 	}
 
