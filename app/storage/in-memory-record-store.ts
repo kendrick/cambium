@@ -31,13 +31,12 @@ export function createInMemoryRecordStore(): RecordStore {
 			const stored = records.get(validated.id);
 
 			if (stored && !followsStoredRecord(stored, validated)) {
-				throw new StaleRecordWriteError(
-					validated.id,
-					stored.versions.length,
-					validated.versions.length,
-					stored.revision,
-					validated.revision,
-				);
+				throw new StaleRecordWriteError(validated.id, {
+					storedVersions: stored.versions.length,
+					incomingVersions: validated.versions.length,
+					storedRevision: stored.revision,
+					incomingRevision: validated.revision,
+				});
 			}
 
 			records.set(validated.id, validated);

@@ -120,13 +120,12 @@ export async function createIndexedDbRecordStore(): Promise<RecordStore> {
 					// Thrown from inside the operation, which leaves the transaction having only read.
 					// `toStorageWriteError` passes a non-quota `Error` through unchanged, so this
 					// reaches the caller as itself.
-					throw new StaleRecordWriteError(
-						validated.id,
-						stored.versions.length,
-						validated.versions.length,
-						stored.revision,
-						validated.revision,
-					);
+					throw new StaleRecordWriteError(validated.id, {
+						storedVersions: stored.versions.length,
+						incomingVersions: validated.versions.length,
+						storedRevision: stored.revision,
+						incomingRevision: validated.revision,
+					});
 				}
 
 				await records.put(validated);

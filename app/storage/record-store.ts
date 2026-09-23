@@ -37,19 +37,26 @@ import type { BrandRecord } from '../../core/brand-record';
  * record of what was generated at one moment, so editing one rewrites history a later version may
  * cite.
  *
- * Which incarnation a write came from is the one thing these rules cannot check. An id deleted and
- * recreated carries a new record whose revision starts wherever its creator set it, which is 1 in
- * practice, so a copy of the deleted incarnation satisfies both rules above against the record that
- * replaced it. Its write lands on a brand that never saw it. The two requests are identical—an
- * image-only commit from the dead copy is byte for byte what the live record's own holder would
- * send to add its first image—so nothing here can part them, and closing it takes identity carried
- * on the record, which `core/brand-record.ts` owns rather than this seam. #78 opened it: demanding
- * a longer history used to refuse those writes whatever incarnation they came from, and accepting
- * metadata-only writes took that side effect away. No product code calls `delete` today, and every
- * record is created under a fresh uuid, so nothing a user can do reaches it.
- * Restore is the first flow that would, which puts it with #15 and #29 below.
- * `record-store-contract.ts` pins the current behaviour in the test named
- * "accepts a write from an incarnation that was deleted and recreated, which is a known hole".
+ * These rules read what a write carries, never which incarnation produced it, and that gap opens on
+ * one shape of recreate rather than on recreates generally. A stale copy of a deleted record slips
+ * through only where the recreate restarts at the revision that copy holds and carries a history
+ * that is a byte-equal prefix of the copy's. On that shape the dead copy's image-only commit is
+ * byte for byte the commit the live record's own holder would send, so nothing reading only the two
+ * records can part them.
+ *
+ * Every other recreate is refused, and refused without refusing the live record too: one different
+ * `createdAt`, a history that is not a prefix, an extra version, or any other starting revision,
+ * and the stale write rejects while the live record's own next write still lands. That bound is
+ * what keeps this narrow, and `record-store-contract.ts` pins both sides of it, in
+ * "accepts a write from an incarnation that was deleted and recreated, which is a known hole" and
+ * in the refusal test directly below it.
+ *
+ * Closing the remaining shape takes identity carried on the record, which `core/brand-record.ts`
+ * owns rather than this seam. #78 opened it: demanding a longer history used to refuse those writes
+ * whatever incarnation they came from, and accepting metadata-only writes took that side effect
+ * away. No product code calls `delete` today, and every record is created under a fresh uuid, so
+ * nothing a user can do reaches it. Restore is the first flow that would, which puts it with #15
+ * and #29 below.
  *
  * Restoring an archive over a record that still exists gets no special handling here. `put` judges
  * an archive as it judges any other write, so it accepts one whose revision is the successor of the
@@ -173,7 +180,21 @@ export function followsStoredRecord(stored: BrandRecord, incoming: BrandRecord):
  * this apart from a malformed record or a full origin. `StaleWorkspaceError` one layer up
  * deliberately carries no counts, since anything the workspace could offer would be what it wrote
  * rather than what storage holds.
+ *
+ * The four numbers arrive named rather than positional. All four are numbers, and on a record whose
+ * every commit appended a version the count and the revision on each side are the same number, so a
+ * transposed pair reads correctly at the call site and reports values a reader cannot tell from the
+ * right ones. Naming them makes that transposition unspellable; `reports the version counts and the
+ * revisions as quantities that can differ` in the contract suite covers the mis-assignment that
+ * naming alone still allows.
  */
+export type StaleRecordWriteStanding = {
+	storedVersions: number;
+	incomingVersions: number;
+	storedRevision: number;
+	incomingRevision: number;
+};
+
 export class StaleRecordWriteError extends Error {
 	readonly kind = 'stale-record-write';
 	readonly recordId: string;
@@ -182,21 +203,14 @@ export class StaleRecordWriteError extends Error {
 	readonly storedRevision: number;
 	readonly incomingRevision: number;
 
-	constructor(
-		recordId: string,
-		storedVersions: number,
-		incomingVersions: number,
-		storedRevision: number,
-		incomingRevision: number,
-		options?: { cause?: unknown },
-	) {
-		super(staleWriteMessage(recordId, storedRevision, incomingRevision), options);
+	constructor(recordId: string, standing: StaleRecordWriteStanding, options?: { cause?: unknown }) {
+		super(staleWriteMessage(recordId, standing.storedRevision, standing.incomingRevision), options);
 		this.name = 'StaleRecordWriteError';
 		this.recordId = recordId;
-		this.storedVersions = storedVersions;
-		this.incomingVersions = incomingVersions;
-		this.storedRevision = storedRevision;
-		this.incomingRevision = incomingRevision;
+		this.storedVersions = standing.storedVersions;
+		this.incomingVersions = standing.incomingVersions;
+		this.storedRevision = standing.storedRevision;
+		this.incomingRevision = standing.incomingRevision;
 	}
 }
 

@@ -450,6 +450,51 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			});
 		});
 
+		// Every other scenario here gives a record as many revisions as versions, so the two pairs
+		// the error carries hold the same two numbers and a construction site that swapped them
+		// would report the same four values. This one parts them: two image-only commits move the
+		// revision twice while the history stays at one version, so the refusal carries counts and
+		// revisions that cannot stand in for each other.
+		it('reports the version counts and the revisions as quantities that can differ', async () => {
+			const record = makeRecord();
+			await store.put(record);
+			const staleCopy = await read(store, record.id);
+
+			const withOne = withAddedImage(record, {
+				id: 'img-1',
+				downscaled: 'data:image/png;base64,AA==',
+				originalHash: 'sha256:a',
+			});
+			await store.put(withOne);
+			const withTwo = withAddedImage(withOne, {
+				id: 'img-2',
+				downscaled: 'data:image/png;base64,BB==',
+				originalHash: 'sha256:b',
+			});
+			await store.put(withTwo);
+
+			const fromTheStaleCopy = withAddedImage(staleCopy, {
+				id: 'img-3',
+				downscaled: 'data:image/png;base64,CC==',
+				originalHash: 'sha256:c',
+			});
+			const thrown = await store.put(fromTheStaleCopy).then(
+				() => null,
+				(error: unknown) => error,
+			);
+
+			// One version throughout, revision 3 against 2. Swap either pair into the other's place
+			// and three of these four numbers change.
+			expect(thrown).toMatchObject({
+				kind: 'stale-record-write',
+				recordId: record.id,
+				storedVersions: 1,
+				incomingVersions: 1,
+				storedRevision: 3,
+				incomingRevision: 2,
+			});
+		});
+
 		// The message is the other half of the same problem, and the half a person reads. For a copy
 		// that ran ahead, nothing landed in between, so a message saying something did names an
 		// event that never happened and prescribes a recovery that throws the copy's own commits
@@ -534,13 +579,17 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		 * A known hole, pinned here so it cannot move without someone noticing. This test asserts
 		 * what the seam does today, not what it should do.
 		 *
-		 * A caller holding a copy of one incarnation can land an image-only write on the different
-		 * record that later took the same id. Both incarnations start at revision 1, so the stale
-		 * write's revision follows the stored one, and where the two histories agree #67's rule has
-		 * nothing to refuse either. The request the dead incarnation's holder sends is byte for byte
-		 * the request the live incarnation's own holder would send to add its first image, so no
-		 * rule inside this seam can accept one and refuse the other. Closing it takes identity that
-		 * survives on the record, which `core/brand-record.ts` owns rather than `followsStoredRecord`.
+		 * The hole is one shape of recreate, not recreates in general. A stale copy of a deleted
+		 * record slips through only where the recreate restarts at the revision that copy holds and
+		 * carries a history that is a byte-equal prefix of the copy's. The fixture below is that
+		 * shape, an exact replica. Then the dead copy's image-only commit is byte for byte the
+		 * commit the live record's own holder would send, and no rule reading only the two records
+		 * can part them. Closing it takes identity that survives on the record, which
+		 * `core/brand-record.ts` owns rather than `followsStoredRecord`.
+		 *
+		 * Anything else is refused, which is what keeps this narrow. The test directly below drives
+		 * one divergence and pins both halves of it: the stale write rejects and the live record's
+		 * own next write still lands.
 		 *
 		 * #78 opened it. Before #78 an image-only write was refused whatever incarnation it came
 		 * from, because `put` demanded a strictly longer history, and accepting metadata-only writes
@@ -558,7 +607,8 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			await store.put(original);
 			const copyOfTheOriginal = await read(store, original.id);
 
-			// A different brand takes the id the first one had.
+			// Recreated as an exact replica: the same history, and the same starting revision the
+			// copy above holds. That is the one shape this seam cannot refuse.
 			await store.delete(original.id);
 			const recreated = makeRecord({ id: original.id, versions: original.versions });
 			await store.put(recreated);
@@ -576,6 +626,47 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			// storage actually holds, which is the record the second brand's owner reads.
 			expect((await read(store, original.id)).images.map((image) => image.id)).toEqual([
 				'img-from-a-deleted-incarnation',
+			]);
+		});
+
+		// The bound on the hole above, and the reason it stays a curiosity rather than a live risk.
+		// One divergence is enough: this recreate carries the same single version at a different
+		// instant, so it is no longer a prefix of what the dead copy holds, and the stale write is
+		// refused. Both halves are asserted, because refusing every write would satisfy the first on
+		// its own and would be a different defect: the live record's own next image still lands.
+		it('refuses a write from a deleted incarnation once the recreated record diverges at all', async () => {
+			const original = makeRecord();
+			await store.put(original);
+			const copyOfTheOriginal = await read(store, original.id);
+
+			await store.delete(original.id);
+			const recreated = makeRecord({
+				id: original.id,
+				versions: [makeVersion({ ordinal: 1, createdAt: '2026-03-03T00:00:00.000Z' })],
+			});
+			await store.put(recreated);
+
+			const fromTheDeadIncarnation = withAddedImage(copyOfTheOriginal, {
+				id: 'img-from-a-deleted-incarnation',
+				downscaled: 'data:image/png;base64,AA==',
+				originalHash: 'sha256:ghost',
+			});
+
+			await expect(store.put(fromTheDeadIncarnation)).rejects.toBeInstanceOf(StaleRecordWriteError);
+
+			const live = await read(store, recreated.id);
+			await expect(
+				store.put(
+					withAddedImage(live, {
+						id: 'img-the-live-record-added',
+						downscaled: 'data:image/png;base64,BB==',
+						originalHash: 'sha256:live',
+					}),
+				),
+			).resolves.toMatchObject({ revision: live.revision + 1 });
+
+			expect((await read(store, recreated.id)).images.map((image) => image.id)).toEqual([
+				'img-the-live-record-added',
 			]);
 		});
 
