@@ -64,6 +64,7 @@ function makeRecordWithImage(): BrandRecord {
 	return {
 		id: crypto.randomUUID(),
 		schemaVersion: SCHEMA_VERSION,
+		revision: 1,
 		images: [{ id: 'img-1', downscaled, originalHash: 'sha256:abc' }],
 		versions: [
 			{

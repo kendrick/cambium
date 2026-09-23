@@ -62,6 +62,7 @@ function makeRecord(versions: BrandVersion[] = [makeVersion()]): BrandRecord {
 	return {
 		id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
 		schemaVersion: SCHEMA_VERSION,
+		revision: 1,
 		images: [{ id: 'img-1', downscaled: 'data:image/png;base64,AA==', originalHash: 'sha256-aa' }],
 		versions,
 	};
@@ -309,11 +310,11 @@ describe('the workspace store', () => {
 		expect(store.getState().activeOrdinal).toBe(2);
 	});
 
-	it('serialises overlapping commits so the second cannot overwrite the first', async () => {
+	it('serialises overlapping commits so the second builds on the first', async () => {
 		const { store, recordStore } = openWorkspace();
 
-		// No await between them: `put` writes the record whole, so a second commit that counted its
-		// ordinal off the pre-commit record would drop the first version on the way past.
+		// No await between them. A second commit that counted its ordinal off the pre-commit record
+		// would carry a base storage has left, and `put` would refuse it with `StaleRecordWriteError`.
 		const [first, second] = await Promise.all([
 			store.getState().commit(),
 			store.getState().commit(),
@@ -716,8 +717,9 @@ describe('the workspace store', () => {
 		const first = store.getState().commit();
 
 		// Reopening the same object is supported and leaves the workspace a version behind the write
-		// still in flight. Appending from there recounts an ordinal that already exists, and `put`
-		// replaces the whole record, so the finished commit would vanish.
+		// still in flight. Appending from there recounts an ordinal that already exists from a
+		// revision storage has left. `put` would refuse that with `StaleRecordWriteError`; the
+		// workspace refuses it first, with `StaleWorkspaceError`, and the finished commit stays.
 		await writeInFlight;
 		store.getState().open(stale);
 

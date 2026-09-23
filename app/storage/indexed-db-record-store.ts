@@ -8,7 +8,7 @@ import {
 
 import { type BrandRecord, BrandRecordSchema } from '../../core/brand-record';
 
-import { type RecordStore, StaleRecordWriteError, extendsStoredHistory } from './record-store';
+import { type RecordStore, nextCommit } from './record-store';
 import { toStorageWriteError } from './storage-estimate';
 
 interface CambiumDatabase extends DBSchema {
@@ -103,6 +103,7 @@ export async function createIndexedDbRecordStore(): Promise<RecordStore> {
 
 		async put(record) {
 			const validated = BrandRecordSchema.parse(record);
+			let committed: BrandRecord | undefined;
 
 			await write(async (records) => {
 				// The compare and the write share one transaction on purpose. IndexedDB orders
@@ -116,24 +117,19 @@ export async function createIndexedDbRecordStore(): Promise<RecordStore> {
 				// it leans on comes from the IndexedDB specification rather than from the fake.
 				const stored = await records.get(validated.id);
 
-				if (stored !== undefined && !extendsStoredHistory(stored.versions, validated.versions)) {
-					// Thrown from inside the operation, which leaves the transaction having only read.
-					// `toStorageWriteError` passes a non-quota `Error` through unchanged, so this
-					// reaches the caller as itself.
-					throw new StaleRecordWriteError(
-						validated.id,
-						stored.versions.length,
-						validated.versions.length,
-					);
-				}
+				// Throws from inside the operation where the write was not built on what is stored,
+				// which leaves the transaction having only read. `toStorageWriteError` passes a
+				// non-quota `Error` through unchanged, so this reaches the caller as itself. Nothing
+				// between this line and the put awaits anything outside the transaction.
+				committed = nextCommit(stored, validated);
 
-				await records.put(validated);
+				await records.put(committed);
 			});
 
 			// Safe to hand back the object that was written, unlike the in-memory implementation:
 			// IndexedDB structured-clones on the way in, so nothing the caller does to this reaches
-			// the database.
-			return validated;
+			// the database. `write` resolves only after the operation ran, so this is assigned.
+			return committed as BrandRecord;
 		},
 
 		async delete(id) {
