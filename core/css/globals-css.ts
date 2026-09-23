@@ -111,8 +111,8 @@ export type VocabularyCategory = keyof typeof GENERATED_VOCABULARY;
 
 /**
  * Refuses a token set carrying any name outside {@link GENERATED_VOCABULARY}, naming each one and
- * its category. Both adapters call it on the parsed set before building anything, so neither can emit
- * a name the other would refuse.
+ * its category. `emitGlobalsCss`, `emitThemeBlock` and `emitDarkThemeLayer` each call it on the
+ * parsed set before building anything, so no half can emit a name another would refuse.
  *
  * Both schemes are read, because a name only one of them carries would otherwise reach the mirror
  * check and be reported as a mismatch instead of as the foreign name it is.
@@ -186,8 +186,11 @@ const TAILWIND_NAMESPACES = [
 declare const PARSED: unique symbol;
 
 /**
- * A token set `TokenSetSchema` has accepted. Only {@link parseTokenSet} hands one out, so an
- * `emit*` function taking one can't be handed a set nobody parsed without a cast saying so.
+ * A token set `TokenSetSchema` has accepted. Only {@link parseTokenSet} hands one out, frozen, so an
+ * `emit*` function taking one gets a set nobody can have changed since the parse. The brand is a
+ * compile-time check: a cast gets past it, and the `emit*` functions trust it rather than parse
+ * again, because they exist so `toStylesheet` parses once. Anything outside `core/css/` should call
+ * the `to*` adapters, which parse every time.
  */
 export type ParsedTokenSet = TokenSet & { readonly [PARSED]: true };
 
@@ -201,12 +204,21 @@ export type ParsedTokenSet = TokenSet & { readonly [PARSED]: true };
  * parses, and `resolveScheme` checks aliases and no scalar bound, so nothing upstream stands in for
  * this.
  *
- * Every adapter reads the copy this returns, never its argument. The schema folds a hue of 360 to 0,
- * and reading the parsed copy is what makes the CSS print the 0 the DTCG export prints. The argument
- * is never written: Zod builds a new object.
+ * The four `to*` adapters read the copy this returns, never their argument. The schema folds a hue
+ * of 360 to 0, and reading the parsed copy is what makes the CSS print the 0 the DTCG export prints.
+ * The argument is never written: Zod builds a new object, and that object is frozen before it's
+ * returned, so a value the parse accepted can't be swapped for one it would refuse.
  */
 export function parseTokenSet(tokenSet: TokenSet): ParsedTokenSet {
-	return TokenSetSchema.parse(tokenSet) as ParsedTokenSet;
+	return freezeDeep(TokenSetSchema.parse(tokenSet)) as ParsedTokenSet;
+}
+
+function freezeDeep<T>(value: T): T {
+	if (value !== null && typeof value === 'object') {
+		for (const held of Object.values(value)) freezeDeep(held);
+		Object.freeze(value);
+	}
+	return value;
 }
 
 /** Options controlling how {@link cssNaming} names the properties an adapter writes. */

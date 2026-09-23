@@ -321,8 +321,8 @@ export function sorted(names: readonly string[]): string[] {
 
 /**
  * `PINNED_SET` with one number pushed past a bound `TokenSetSchema` enforces, which the `TokenSet`
- * type can't carry. The compiler accepts every one of these, so only a parse stands between each and
- * the stylesheet.
+ * type can't carry. The compiler accepts every one of these, so only the parse inside each `to*`
+ * adapter stands between each and the stylesheet.
  *
  * A negative radius or blur prints as a length that parses and then goes invalid in the property
  * reading it through `var()`, so `rounded-lg` or `shadow-md` quietly paints nothing. A line height of
