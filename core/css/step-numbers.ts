@@ -9,10 +9,9 @@
  *
  * Declared as a literal table rather than computed from the step number, because the mapping is
  * not an arithmetic progression: steps 1 through 6 read 25, 50, 100, 200, 300, 400, so a
- * `step * 100`-style formatter would be wrong for exactly the steps nearest the common case. A
- * later wave's `core/css/theme-block.ts` reads this table to name each ramp's colour namespace
- * entries, so the table — not a formatter buried inside that adapter — is the contract it codes
- * against.
+ * `step * 100`-style formatter would be wrong for exactly the steps nearest the common case. Both
+ * CSS adapters read this table to name each ramp's colour namespace entries, so the table — not a
+ * formatter buried inside either of them — is the contract they code against.
  */
 export type StepNumberEntry = {
 	/** Cambium's own ramp step, 1 through 12 (`core/step-roles.ts`). */

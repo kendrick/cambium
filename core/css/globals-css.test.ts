@@ -17,15 +17,35 @@
  * the two and are declared once under `:root`. So each selector is compared against its own full
  * expected set. That is stricter than comparing the two selectors to each other, and it puts the
  * scalars under `:root` on the record as a decision rather than an omission.
+ *
+ * The token set and the postcss helpers come from `core/css/css.fixture.ts`, shared with the other
+ * two CSS suites. What this file cannot reach from here is the pair: whether the properties it
+ * checks are the ones the theme block points at, and whether Tailwind resolves them. That is
+ * `core/css/stylesheet.test.ts`, which compiles the output rather than parsing it.
  */
-import { type Declaration, parse } from 'postcss';
+import { parse } from 'postcss';
 import { describe, expect, it } from 'vitest';
 
-import { derived } from '../provenance';
 import { SEMANTIC_MAP } from '../semantic-map';
-import { type Ramp, type SemanticEntry, type TokenSet, TokenSetSchema } from '../token-set';
+import { TokenSetSchema } from '../token-set';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from '../token-set.fixture';
-import { toGlobalsCss } from './globals-css';
+import {
+	CONVENTIONAL_NUMBERS,
+	DARK_SCHEME,
+	DARK_SHADOW_FIXTURE,
+	declarationsBySelector,
+	deepFreeze,
+	FIXTURE_RAMPS,
+	LIGHT_SCHEME,
+	PINNED_SET,
+	propertyNames,
+	ramp,
+	setWithSemanticToken,
+	SEMANTIC,
+	sorted,
+	valueOf,
+} from './css.fixture';
+import { cssNaming, toGlobalsCss } from './globals-css';
 
 /** `oklch(<l> <c> <h>)`: three space-separated numbers, no comma, no alpha slot. */
 const OKLCH_TRIPLE = /^oklch\(([^\s]+) ([^\s]+) ([^\s]+)\)$/;
@@ -48,144 +68,10 @@ const RAMP_ALIAS = /[A-Za-z][\w-]*\.\d{1,2}/;
 /** Every `var(--x)` reference a declaration value makes. */
 const VAR_REFERENCE = /var\(\s*(--[\w-]+)/g;
 
-const EXTENSIONS = derived('keyColors', 'exercises a schema bound rather than a real derivation');
-
-/**
- * A ramp whose step numbers are legible in the output: step n sits at lightness `(n + offset)/100`,
- * so a declaration's lightness names the step it came from and the two schemes never collide.
- *
- * Integer division by 100 is deliberate. IEEE division is correctly rounded, so `9/100` lands on
- * the same double the literal `0.09` parses to, and the assertions below compare decimal literals
- * against what the parser read back with no tolerance at all. Accumulating a step's lightness by
- * repeated addition carries no such guarantee.
- */
-function ramp(hue: number, chroma: number, offset: number): Ramp {
-	return Array.from({ length: 12 }, (_, index) => ({
-		step: index + 1,
-		l: (index + 1 + offset) / 100,
-		c: chroma,
-		h: hue,
-		$extensions: EXTENSIONS,
-	}));
-}
-
-/**
- * The whole shadcn contract as a semantic layer: one entry per `SEMANTIC_MAP` key, so the adapter
- * meets the token set a generated theme actually hands it rather than a five-token sample.
- *
- * A `ContrastingPair` takes its first candidate. Which of the two a real scheme keeps is
- * `semantic-layer.ts`'s contrast decision, and it changes nothing this file measures, because
- * either way the layer holds one plain alias under that name.
- */
-function shadcnSemanticLayer(): Record<string, SemanticEntry> {
-	return Object.fromEntries(
-		Object.entries(SEMANTIC_MAP).map(([token, assignment]) => [
-			token,
-			{
-				alias: typeof assignment === 'string' ? assignment : assignment.candidates[0],
-				$extensions: EXTENSIONS,
-			},
-		]),
-	);
-}
-
-const SEMANTIC = shadcnSemanticLayer();
-
-/**
- * The dark scheme's shadow, differing from `SHADOW_FIXTURE` in its colour, its vertical offset and
- * its blur.
- *
- * `checkMirroredLayers` pins the top-level `shadow` to `schemes.light.shadow`, so a set carries two
- * distinguishable shadows and only one of them is reachable from the top level. Reading the top
- * level would therefore paint the light scheme's shadow under `.dark` and look entirely healthy.
- * These three differences are what make that substitution visible.
- */
-const DARK_SHADOW_FIXTURE = {
-	source: 'derived',
-	values: {
-		md: {
-			...SHADOW_FIXTURE.values.md,
-			color: { l: 0.02, c: 0.01, h: 275.5, alpha: 0.45 },
-			offsetY: { value: 8, unit: 'px' },
-			blur: { value: 12, unit: 'px' },
-		},
-	},
-} as const;
-
-/** Light steps run 0.01 to 0.12; dark steps run 0.51 to 0.62. Chroma separates them a second way. */
-const LIGHT_SCHEME = {
-	primitives: { brand: ramp(260, 0.02, 0), neutral: ramp(250, 0.02, 0), danger: ramp(25, 0.02, 0) },
-	semantic: SEMANTIC,
-	shadow: SHADOW_FIXTURE,
-};
-
-const DARK_SCHEME = {
-	primitives: {
-		brand: ramp(260, 0.03, 50),
-		neutral: ramp(250, 0.03, 50),
-		danger: ramp(25, 0.03, 50),
-	},
-	semantic: SEMANTIC,
-	shadow: DARK_SHADOW_FIXTURE,
-};
-
-/**
- * Parsed rather than cast, so the fixture is a token set the schema accepts instead of one the
- * compiler was told to believe in. The parse also rebuilds the structure, which keeps `deepFreeze`
- * below from freezing anything the module-level literals still share.
- */
-const PINNED_SET: TokenSet = TokenSetSchema.parse({
-	...LIGHT_SCHEME,
-	schemes: { light: LIGHT_SCHEME, dark: DARK_SCHEME },
-	...NON_COLOR_FIXTURE,
-});
-
-/** The declarations postcss found under each selector, keyed by the selector it parsed. */
-function declarationsBySelector(css: string): Map<string, Declaration[]> {
-	const found = new Map<string, Declaration[]>();
-
-	parse(css).walkRules((rule) => {
-		const declarations: Declaration[] = [];
-		rule.walkDecls((declaration) => {
-			declarations.push(declaration);
-		});
-		found.set(rule.selector, declarations);
-	});
-
-	return found;
-}
-
-function propertyNames(declarations: Declaration[]): string[] {
-	// `map` already returned a fresh array, so this sort mutates nothing postcss still holds.
-	// `toSorted` would say it directly and is ES2023 against an ES2022 target, the same trade
-	// `core/css/step-numbers.test.ts` makes.
-	// oxlint-disable-next-line unicorn/no-array-sort
-	return declarations.map((declaration) => declaration.prop).sort();
-}
-
 function channels(value: string): [number, number, number] {
 	const match = OKLCH_TRIPLE.exec(value);
 	if (!match) throw new Error(`not an oklch() triple: ${value}`);
 	return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-function valueOf(declarations: Declaration[], property: string): string {
-	const found = declarations.find((declaration) => declaration.prop === property);
-	if (!found) throw new Error(`no ${property} declaration`);
-	return found.value;
-}
-
-function deepFreeze<T>(value: T): T {
-	if (value && typeof value === 'object') {
-		for (const held of Object.values(value)) deepFreeze(held);
-		Object.freeze(value);
-	}
-	return value;
-}
-
-function sorted(names: readonly string[]): string[] {
-	// oxlint-disable-next-line unicorn/no-array-sort
-	return [...names].sort();
 }
 
 /** The property names criterion 1 asks for, taken off the contract rather than off the output. */
@@ -208,36 +94,6 @@ const EXPECTED_SCALAR_PROPERTIES = [
 	'--cmb-leading-normal',
 	'--cmb-tracking-normal',
 ];
-
-/**
- * The twelve numbers a Tailwind or shadcn consumer already types, as in `bg-brand-500` and
- * `text-brand-700`. Written out here instead of read back from `STEP_NUMBERS`, because that table
- * is one of the things under test: importing it would let a wrong name pass on both sides at once.
- *
- * 25 sits below 50 because Tailwind's own palette has eleven stops and a Cambium ramp has twelve.
- * `core/css/step-numbers.ts` argues that choice; the list here only states what a consumer gets.
- */
-const CONVENTIONAL_NUMBERS = [
-	'25',
-	'50',
-	'100',
-	'200',
-	'300',
-	'400',
-	'500',
-	'600',
-	'700',
-	'800',
-	'900',
-	'950',
-];
-
-/**
- * The ramps `PINNED_SET` carries, which is deliberately not all seven of `RAMP_NAMES`. The adapter
- * reads the keys the token set actually holds, so a fixture short four ramps is the case that
- * catches a hardcoded list.
- */
-const FIXTURE_RAMPS = ['brand', 'neutral', 'danger'];
 
 /**
  * Every ramp step, plus the one unnumbered alias. Strip the `cmb-` and what is left is the Tailwind
@@ -270,7 +126,7 @@ const EXPECTED_DARK_PROPERTIES = sorted([
 
 describe('toGlobalsCss', () => {
 	it('parses as valid CSS holding exactly the light and dark selectors', () => {
-		const root = parse(toGlobalsCss(PINNED_SET));
+		const root = parse(toGlobalsCss(PINNED_SET, cssNaming()));
 		const selectors: string[] = [];
 
 		root.walkRules((rule) => {
@@ -285,7 +141,7 @@ describe('toGlobalsCss', () => {
 	});
 
 	it('declares every semantic token, every ramp step, every shadow and every scalar under :root', () => {
-		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming()));
 
 		expect(propertyNames(byScheme.get(':root') ?? [])).toEqual(EXPECTED_ROOT_PROPERTIES);
 	});
@@ -294,7 +150,7 @@ describe('toGlobalsCss', () => {
 	// token present in light and missing in dark is the defect this pair catches, and comparing the
 	// two selectors to each other would report them as agreeing when both are short the same token.
 	it('declares every semantic token, every ramp step and every shadow under the dark selector', () => {
-		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming()));
 
 		expect(propertyNames(byScheme.get('.dark') ?? [])).toEqual(EXPECTED_DARK_PROPERTIES);
 	});
@@ -304,7 +160,7 @@ describe('toGlobalsCss', () => {
 	// and a divergence waiting to happen the moment somebody makes radius scheme-dependent, which
 	// is the decision this layout forecloses.
 	it('mirrors colours, ramps and shadows across both selectors and keeps the scalars to :root', () => {
-		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming()));
 		const light = new Set(propertyNames(byScheme.get(':root') ?? []));
 		const dark = new Set(propertyNames(byScheme.get('.dark') ?? []));
 
@@ -324,7 +180,7 @@ describe('toGlobalsCss', () => {
 	});
 
 	it('emits every semantic colour as an oklch() call', () => {
-		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming()));
 
 		for (const declarations of byScheme.values()) {
 			for (const property of EXPECTED_COLOR_PROPERTIES) {
@@ -334,7 +190,7 @@ describe('toGlobalsCss', () => {
 	});
 
 	it('resolves every alias, leaving no ramp.step reference in a declaration value', () => {
-		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming()));
 
 		for (const declarations of byScheme.values()) {
 			for (const declaration of declarations) {
@@ -344,7 +200,7 @@ describe('toGlobalsCss', () => {
 	});
 
 	it('references no custom property it does not also declare', () => {
-		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming()));
 		const declared = new Set(
 			[...byScheme.values()].flatMap((declarations) =>
 				declarations.map((declaration) => declaration.prop),
@@ -361,7 +217,7 @@ describe('toGlobalsCss', () => {
 	});
 
 	it('takes each selector from its own scheme, so dark is not a copy of light', () => {
-		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming()));
 		const light = byScheme.get(':root') ?? [];
 		const dark = byScheme.get('.dark') ?? [];
 
@@ -376,7 +232,7 @@ describe('toGlobalsCss', () => {
 	});
 
 	it('numbers each ramp step the way a consumer expects rather than by its internal index', () => {
-		const light = declarationsBySelector(toGlobalsCss(PINNED_SET)).get(':root') ?? [];
+		const light = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming())).get(':root') ?? [];
 
 		// `PINNED_SET` pins step n at lightness n/100, so the lightness a declaration carries names the
 		// step it came from. 25 and 950 are the two ends of the ramp, 500 is the number most consumers
@@ -393,7 +249,7 @@ describe('toGlobalsCss', () => {
 	});
 
 	it('takes each ramp step from its own scheme, so bg-brand-500 moves under .dark', () => {
-		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming()));
 
 		// The reason the ramps are declared under both selectors instead of once in the theme block:
 		// `primitives` sits inside `ColorSchemeSchema`, so the two schemes hold different ramps, and a
@@ -407,7 +263,7 @@ describe('toGlobalsCss', () => {
 	});
 
 	it('gives the brand colour an unnumbered name, and gives no other ramp one', () => {
-		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming()));
 		const light = byScheme.get(':root') ?? [];
 		const dark = byScheme.get('.dark') ?? [];
 
@@ -433,7 +289,7 @@ describe('toGlobalsCss', () => {
 	});
 
 	it('writes each shadow as a box-shadow value taken from its own scheme', () => {
-		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET));
+		const byScheme = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming()));
 		const light = BOX_SHADOW.exec(valueOf(byScheme.get(':root') ?? [], '--cmb-shadow-md'));
 		const dark = BOX_SHADOW.exec(valueOf(byScheme.get('.dark') ?? [], '--cmb-shadow-md'));
 
@@ -446,7 +302,7 @@ describe('toGlobalsCss', () => {
 	});
 
 	it('writes each scheme-agnostic scalar at the value and unit the token set holds', () => {
-		const root = declarationsBySelector(toGlobalsCss(PINNED_SET)).get(':root') ?? [];
+		const root = declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming())).get(':root') ?? [];
 
 		// Straight off `NON_COLOR_FIXTURE`. The weight and the line height are unitless, and every
 		// dimension keeps its unit, including the tracking step sitting at zero. A bare `0` would be
@@ -458,9 +314,44 @@ describe('toGlobalsCss', () => {
 		expect(valueOf(root, '--cmb-tracking-normal')).toBe('0em');
 	});
 
+	it('prints a shadow geometry and the colour beside it at one precision', () => {
+		// One `box-shadow` declaration carries four lengths and a colour, and until #13's review the
+		// lengths and the channels went through two separate round-and-trim helpers with a comment
+		// claiming they agreed. A third is a number with no exact binary form and no terminating
+		// decimal, so it is the input that would separate two roundings: `0.333333px` beside
+		// `oklch(0.333333 …)` is the two halves agreeing, and anything else is them disagreeing
+		// inside a value a compositor reads as one thing.
+		const third = 1 / 3;
+		const shadow = {
+			source: 'derived',
+			values: {
+				md: {
+					...SHADOW_FIXTURE.values.md,
+					blur: { value: third, unit: 'px' },
+					color: { l: third, c: 0.02, h: 259.8, alpha: third },
+				},
+			},
+		};
+		const light = { ...LIGHT_SCHEME, shadow };
+		const dark = { ...DARK_SCHEME, shadow };
+		const set = TokenSetSchema.parse({
+			...light,
+			schemes: { light, dark },
+			...NON_COLOR_FIXTURE,
+		});
+
+		const root = declarationsBySelector(toGlobalsCss(set, cssNaming())).get(':root') ?? [];
+		const parts = BOX_SHADOW.exec(valueOf(root, '--cmb-shadow-md'));
+
+		expect(parts?.[3]).toBe('0.333333px');
+		expect(parts?.[5]).toBe('oklch(0.333333 0.02 259.8 / 33.333333%)');
+	});
+
 	it('carries a caller-supplied prefix everywhere but on the semantic colours', () => {
 		const names = propertyNames(
-			declarationsBySelector(toGlobalsCss(PINNED_SET, { prefix: 'acme' })).get(':root') ?? [],
+			declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming({ prefix: 'acme' }))).get(
+				':root',
+			) ?? [],
 		);
 
 		expect(names).toContain('--acme-shadow-md');
@@ -480,19 +371,42 @@ describe('toGlobalsCss', () => {
 		// `@theme inline { --shadow-md: var(--shadow-md) }` reads itself: the theme entry and the
 		// property it points at are one name, so the shadow resolves to nothing and every
 		// `shadow-md` utility paints nothing, silently.
-		expect(() => toGlobalsCss(PINNED_SET, { prefix: '' })).toThrow(/--shadow-md/);
+		expect(() => toGlobalsCss(PINNED_SET, cssNaming({ prefix: '' }))).toThrow(/--shadow-md/);
 		// Not only the empty prefix. A prefix that is itself a namespace root walks the property
 		// straight back inside one.
-		expect(() => toGlobalsCss(PINNED_SET, { prefix: 'text' })).toThrow(/--text-shadow-md/);
+		expect(() => toGlobalsCss(PINNED_SET, cssNaming({ prefix: 'text' }))).toThrow(
+			/--text-shadow-md/,
+		);
+	});
+
+	it('refuses a semantic token whose bare property lands inside a Tailwind namespace', () => {
+		// The semantic colours go out bare so a shadcn project's components find `--background` where
+		// they expect it, and that is safe exactly as long as the name sits outside every namespace
+		// Tailwind claims. `SemanticLayerSchema` keys on any non-empty string, so nothing upstream
+		// keeps a token called `blur-sm` out, and `--blur-sm` is the property Tailwind's own
+		// `blur-sm` utility reads: the consuming project would resolve a blur radius to an oklch()
+		// colour. `core/css/stylesheet.test.ts` compiles that reading rather than asserting it.
+		expect(() => toGlobalsCss(setWithSemanticToken('blur-sm'), cssNaming())).toThrow(/--blur-sm/);
+		expect(() => toGlobalsCss(setWithSemanticToken('blur-sm'), cssNaming())).toThrow(/blur/);
+
+		// A prefix cannot rescue it, because the semantic colours never take one: the bare name is
+		// the whole point of them, so the token itself has to be refused.
+		expect(() =>
+			toGlobalsCss(setWithSemanticToken('blur-sm'), cssNaming({ prefix: 'acme' })),
+		).toThrow(/--blur-sm/);
+
+		// The names shadcn actually ships stay legal. `background` and `card-foreground` sit outside
+		// every namespace root, which is why bare works at all.
+		expect(() => toGlobalsCss(PINNED_SET, cssNaming())).not.toThrow();
 	});
 
 	it('is a pure function of the token set: same set in, same bytes out, input untouched', () => {
 		const frozen = deepFreeze(TokenSetSchema.parse(structuredClone(PINNED_SET)));
 		const before = structuredClone(PINNED_SET);
 
-		expect(toGlobalsCss(PINNED_SET)).toBe(toGlobalsCss(PINNED_SET));
-		expect(() => toGlobalsCss(frozen)).not.toThrow();
-		expect(toGlobalsCss(frozen)).toBe(toGlobalsCss(PINNED_SET));
+		expect(toGlobalsCss(PINNED_SET, cssNaming())).toBe(toGlobalsCss(PINNED_SET, cssNaming()));
+		expect(() => toGlobalsCss(frozen, cssNaming())).not.toThrow();
+		expect(toGlobalsCss(frozen, cssNaming())).toBe(toGlobalsCss(PINNED_SET, cssNaming()));
 		expect(PINNED_SET).toEqual(before);
 	});
 
@@ -511,7 +425,7 @@ describe('toGlobalsCss', () => {
 		// The fixture only bites if `ring` was there to remove; a no-op filter would leave the two
 		// schemes mirrored and the throw would never be reached.
 		expect(Object.keys(withoutRing)).toHaveLength(Object.keys(SEMANTIC).length - 1);
-		expect(() => toGlobalsCss(lopsided)).toThrow(/ring/);
+		expect(() => toGlobalsCss(lopsided, cssNaming())).toThrow(/ring/);
 	});
 
 	it('refuses a set whose two schemes name different shadow steps', () => {
@@ -529,8 +443,8 @@ describe('toGlobalsCss', () => {
 		// `:root` alone leaves a dark page casting a shadow tuned for a white one, with nothing
 		// upstream to notice. `checkMirroredLayers` compares each scheme against the top level and
 		// never puts the two schemes side by side.
-		expect(() => toGlobalsCss(lopsided)).toThrow(/shadow steps/);
-		expect(() => toGlobalsCss(lopsided)).toThrow(/md/);
+		expect(() => toGlobalsCss(lopsided, cssNaming())).toThrow(/shadow steps/);
+		expect(() => toGlobalsCss(lopsided, cssNaming())).toThrow(/md/);
 	});
 
 	it('refuses a set whose two schemes declare different ramps', () => {
@@ -553,7 +467,7 @@ describe('toGlobalsCss', () => {
 		// Nothing upstream compares the two schemes' ramps: `checkAliasesResolve` looks inside one
 		// scheme and `checkMirroredLayers` compares the top level against light, so neither puts the
 		// two side by side.
-		expect(() => toGlobalsCss(lopsided)).toThrow(/ramp steps/);
-		expect(() => toGlobalsCss(lopsided)).toThrow(/warning-500/);
+		expect(() => toGlobalsCss(lopsided, cssNaming())).toThrow(/ramp steps/);
+		expect(() => toGlobalsCss(lopsided, cssNaming())).toThrow(/warning-500/);
 	});
 });

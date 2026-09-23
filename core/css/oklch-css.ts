@@ -1,5 +1,11 @@
 import type { Oklch } from '../oklch';
 
+/**
+ * Decimals a CSS number rounds to unless a caller says otherwise: the precision `quantizeToSrgb`
+ * (`core/oklch.ts`) already settles the sRGB round trip on.
+ */
+const DEFAULT_PLACES = 6;
+
 /** Options controlling how {@link toOklchCss} rounds a colour's channels before they print. */
 export type OklchCssOptions = {
 	/**
@@ -44,15 +50,33 @@ export type OklchCssColor = Oklch & { alpha?: number };
  * it is numerically indistinguishable from `0`.
  */
 export function toOklchCss(color: OklchCssColor, options: OklchCssOptions = {}): string {
-	const places = options.places ?? 6;
-	const triple = `${formatChannel(color.l, places)} ${formatChannel(color.c, places)} ${formatChannel(color.h, places)}`;
+	const places = options.places ?? DEFAULT_PLACES;
+	const triple = `${formatCssNumber(color.l, places)} ${formatCssNumber(color.c, places)} ${formatCssNumber(color.h, places)}`;
 
 	if (color.alpha === undefined) return `oklch(${triple})`;
 
-	return `oklch(${triple} / ${formatChannel(color.alpha * 100, places)}%)`;
+	return `oklch(${triple} / ${formatCssNumber(color.alpha * 100, places)}%)`;
 }
 
-function formatChannel(value: number, places: number): string {
+/**
+ * A number the way this repo writes one into CSS: rounded to `places`, trailing zeros trimmed,
+ * negative zero folded to the bare digit.
+ *
+ * Exported because a `box-shadow` declaration carries four lengths and a colour, and `toGlobalsCss`
+ * (`core/css/globals-css.ts`) writes the lengths while this module writes the colour. Two copies of
+ * the rounding would let one declaration print its geometry at one precision and its colour at
+ * another, and the comment saying they agreed was the only thing holding them together until #13's
+ * review. One function is what makes the agreement structural.
+ *
+ * Rounding at all is about the arithmetic upstream rather than the tokens: a derived tracking step
+ * or type scale is a chain of floating-point multiplications, and `0.30000000000000004em` is a
+ * length every browser accepts and no reader can audit against the scale that produced it.
+ *
+ * Zero folds to `0`, negative zero included, for the reason `roundTo` in `core/oklch.ts` gives:
+ * round-off can carry a value across zero from below, and `-0` is a literal some CSS tooling still
+ * trips over even though it is numerically indistinguishable.
+ */
+export function formatCssNumber(value: number, places: number = DEFAULT_PLACES): string {
 	const rounded = roundTo(value, places);
 
 	if (rounded === 0) return '0';

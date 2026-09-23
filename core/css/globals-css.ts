@@ -10,7 +10,7 @@ import {
 	type SignedDimensionValue,
 	type TokenSet,
 } from '../token-set';
-import { toOklchCss } from './oklch-css';
+import { formatCssNumber, toOklchCss } from './oklch-css';
 import { stepNumberName } from './step-numbers';
 
 /**
@@ -24,13 +24,7 @@ const DARK_SELECTOR = '.dark';
 const DEFAULT_PREFIX = 'cmb';
 
 /** The one ramp that also gets an unnumbered name. See {@link rampDeclarations}. */
-const BRAND_RAMP = 'brand';
-
-/**
- * Decimals a scalar rounds to. Matches `toOklchCss`'s default, so the geometry and the colour
- * inside one shadow declaration print at one precision.
- */
-const PLACES = 6;
+export const BRAND_RAMP = 'brand';
 
 /**
  * Every theme namespace root Tailwind v4 claims, read off the installed `tailwindcss/theme.css` at
@@ -66,14 +60,46 @@ const TAILWIND_NAMESPACES = [
 	'tracking',
 ] as const;
 
-/** Options controlling how {@link toGlobalsCss} names the properties it writes. */
-export type GlobalsCssOptions = {
+/** Options controlling how {@link cssNaming} names the properties an adapter writes. */
+export type CssNamingOptions = {
 	/**
 	 * Namespace carried by every property except the semantic colours, without the leading `--` and
 	 * without the trailing hyphen. Defaults to `cmb`.
 	 */
 	prefix?: string;
 };
+
+/**
+ * The one naming rule both adapters write properties through.
+ *
+ * A token set exports as two halves: the scheme rules `toGlobalsCss` writes, and the `@theme
+ * inline` block `toThemeBlock` (`core/css/theme-block.ts`) writes, in which every entry is a
+ * `var()` pointing at a property the first half declares. Two copies of the rule would put that
+ * agreement one careless edit away from a stylesheet that parses and paints nothing, so there is
+ * one copy and both halves take it as an argument rather than each building its own from a prefix.
+ *
+ * Taking it as an argument is also what makes a mismatched pair cost a deliberate act. Neither half
+ * defaults the naming, so `toThemeBlock(set)` beside `toGlobalsCss(set, cssNaming({ prefix }))`
+ * does not compile; producing halves that disagree takes two `cssNaming` calls with two different
+ * prefixes, written out. `toStylesheet` (`core/css/stylesheet.ts`) is the entry point that hands
+ * one naming to both and is what a caller wanting a working stylesheet should reach for.
+ */
+export type CssNaming = {
+	/** `--cmb-shadow-md` for the Tailwind entry name `shadow-md`. */
+	prefixedProperty(entry: string): string;
+	/** `--background` for the semantic token `background`. */
+	semanticProperty(token: string): string;
+};
+
+/** Resolves {@link CssNamingOptions} into the {@link CssNaming} both adapters name properties by. */
+export function cssNaming(options: CssNamingOptions = {}): CssNaming {
+	const prefix = options.prefix ?? DEFAULT_PREFIX;
+
+	return {
+		prefixedProperty: (entry: string) => prefixedProperty(entry, prefix),
+		semanticProperty,
+	};
+}
 
 /** One custom-property declaration, before it is joined into a rule body. */
 type CssDeclaration = { property: string; value: string };
@@ -97,16 +123,19 @@ type CssDeclaration = { property: string; value: string };
  *
  * Semantic colours are bare: `--background`, `--foreground`, and so on, exactly as shadcn writes
  * them, which keeps this output drop-in for a project whose components already read those names.
- * Bare is safe for a colour because Tailwind's colour namespace is `--color-*`, so a theme entry
- * `--color-background: var(--background)` names two different properties.
+ * Bare works for those names because none of them starts with a Tailwind namespace root, so
+ * `--color-background: var(--background)` names two different properties. That is a fact about the
+ * names rather than about the category, and `SemanticLayerSchema` keys on any non-empty string, so
+ * `semanticProperty` checks each one against the same table the prefixed properties are checked
+ * against instead of taking the category's word for it.
  *
- * Everything else carries `prefix`, because the same trick does not survive the move. Bare,
- * `--shadow-md` is already Tailwind's shadow namespace, so the theme entry
- * `--shadow-md: var(--shadow-md)` reads itself and resolves to nothing: a stylesheet that parses
- * and paints no shadow. A ramp step is a colour and still lands in that group, because its theme
- * entry is `--color-brand-500`, which sits inside the colour namespace where a semantic name never
- * does. Strip the prefix from what this emits and what is left is the Tailwind v4 theme entry the
- * property maps onto.
+ * Everything else carries `prefix`, because bare would not survive the move. Bare, `--shadow-md`
+ * is already Tailwind's shadow namespace, so the theme entry `--shadow-md: var(--shadow-md)` reads
+ * itself and resolves to nothing: a stylesheet that parses and paints no shadow. A ramp step is a
+ * colour and still lands in that group, because its theme entry is `--color-brand-500`, which sits
+ * inside the colour namespace that a semantic name has to stay out of to be emitted at all. Strip
+ * the prefix from what this emits and what is left is the Tailwind v4 theme entry the property maps
+ * onto.
  *
  * - `--cmb-color-brand-500` → `--color-brand-500` (a ramp step; see {@link rampDeclarations})
  * - `--cmb-shadow-md` → `--shadow-md`
@@ -119,11 +148,13 @@ type CssDeclaration = { property: string; value: string };
  * So the theme block writes `--<entry>: var(--<prefix>-<entry>)` and needs no second table mapping
  * category names onto namespaces.
  *
- * A prefix that walks a property back inside a namespace is refused by name rather than skipped,
- * the same call `resolveScheme` and `stepNumberName` make: the alternative is an export that is
- * short a token and says so nowhere. An empty prefix therefore always throws: `PrimitiveLayerSchema`
- * requires at least one ramp and `TokenSetSchema` requires radius, typography and tracking, so
- * every set reaching this carries something that would land bare inside a namespace.
+ * A property that lands inside a namespace is refused by name rather than skipped, the same call
+ * `resolveScheme` and `stepNumberName` make: the alternative is an export that is short a token and
+ * says so nowhere. Both sides of the prefix are refused by the one rule — a prefix that walks a
+ * property back inside a namespace, and a semantic token whose own name is already there. An empty
+ * prefix therefore always throws: `PrimitiveLayerSchema` requires at least one ramp and
+ * `TokenSetSchema` requires radius, typography and tracking, so every set reaching this carries
+ * something that would land bare inside a namespace.
  *
  * The shadows come from `schemes.light.shadow` and `schemes.dark.shadow`, never from the top-level
  * `tokenSet.shadow`. `checkMirroredLayers` pins that top-level copy to the light scheme's, so
@@ -141,12 +172,11 @@ type CssDeclaration = { property: string; value: string };
  * only add a second opinion on a set `resolveScheme` already refuses to flatten.
  *
  * Scope is the two scheme blocks. The `@theme inline` block that maps these properties onto
- * Tailwind's namespaces is `core/css/theme-block.ts`, and the `@import` and `@custom-variant`
- * preamble belongs to whatever assembles a whole file from the two.
+ * Tailwind's namespaces is `core/css/theme-block.ts`, and the `@custom-variant dark` line that
+ * makes `.dark` mean anything belongs to `toStylesheet` (`core/css/stylesheet.ts`), which assembles
+ * the whole file from the two halves and is what a caller should reach for.
  */
-export function toGlobalsCss(tokenSet: TokenSet, options: GlobalsCssOptions = {}): string {
-	const prefix = options.prefix ?? DEFAULT_PREFIX;
-
+export function toGlobalsCss(tokenSet: TokenSet, naming: CssNaming): string {
 	const light = resolveScheme(tokenSet.schemes.light);
 	const dark = resolveScheme(tokenSet.schemes.dark);
 
@@ -171,16 +201,16 @@ export function toGlobalsCss(tokenSet: TokenSet, options: GlobalsCssOptions = {}
 	// them land at once for a seven-ramp set, and a reader editing a pasted stylesheet is looking for
 	// the semantic names they recognise.
 	const rootBody = [
-		...colorDeclarations(tokens, light),
-		...shadowDeclarations(tokenSet.schemes.light.shadow, prefix),
-		...rampDeclarations(tokenSet.schemes.light.primitives, prefix),
-		...scalarDeclarations(tokenSet, prefix),
+		...colorDeclarations(tokens, light, naming),
+		...shadowDeclarations(tokenSet.schemes.light.shadow, naming),
+		...rampDeclarations(tokenSet.schemes.light.primitives, naming),
+		...scalarDeclarations(tokenSet, naming),
 	];
 
 	const darkBody = [
-		...colorDeclarations(tokens, dark),
-		...shadowDeclarations(tokenSet.schemes.dark.shadow, prefix),
-		...rampDeclarations(tokenSet.schemes.dark.primitives, prefix),
+		...colorDeclarations(tokens, dark, naming),
+		...shadowDeclarations(tokenSet.schemes.dark.shadow, naming),
+		...rampDeclarations(tokenSet.schemes.dark.primitives, naming),
 	];
 
 	return `${rule(LIGHT_SELECTOR, rootBody)}\n${rule(DARK_SELECTOR, darkBody)}`;
@@ -195,13 +225,17 @@ function rule(selector: string, declarations: readonly CssDeclaration[]): string
 function colorDeclarations(
 	tokens: readonly string[],
 	colors: Record<string, Oklch>,
+	naming: CssNaming,
 ): CssDeclaration[] {
-	return tokens.map((token) => ({ property: `--${token}`, value: toOklchCss(colors[token]!) }));
+	return tokens.map((token) => ({
+		property: naming.semanticProperty(token),
+		value: toOklchCss(colors[token]!),
+	}));
 }
 
-function shadowDeclarations(scale: ShadowScale, prefix: string): CssDeclaration[] {
+function shadowDeclarations(scale: ShadowScale, naming: CssNaming): CssDeclaration[] {
 	return Object.entries(scale.values).map(([step, shadow]) => ({
-		property: prefixedProperty(`shadow-${step}`, prefix),
+		property: naming.prefixedProperty(`shadow-${step}`),
 		value: boxShadow(shadow),
 	}));
 }
@@ -237,10 +271,10 @@ function shadowDeclarations(scale: ShadowScale, prefix: string): CssDeclaration[
  * remaining five an alias each would leave six ramps out of seven following a rule, which is the
  * shape a consumer trips over, so brand stays the one exception.
  */
-function rampDeclarations(primitives: Record<string, Ramp>, prefix: string): CssDeclaration[] {
+function rampDeclarations(primitives: Record<string, Ramp>, naming: CssNaming): CssDeclaration[] {
 	const steps = Object.entries(primitives).flatMap(([name, ramp]) =>
 		ramp.map((step) => ({
-			property: prefixedProperty(`color-${rampStepName(name, step.step)}`, prefix),
+			property: naming.prefixedProperty(`color-${rampStepName(name, step.step)}`),
 			value: toOklchCss(step),
 		})),
 	);
@@ -251,7 +285,7 @@ function rampDeclarations(primitives: Record<string, Ramp>, prefix: string): Css
 
 	return [
 		...steps,
-		{ property: prefixedProperty(`color-${BRAND_RAMP}`, prefix), value: toOklchCss(brand) },
+		{ property: naming.prefixedProperty(`color-${BRAND_RAMP}`), value: toOklchCss(brand) },
 	];
 }
 
@@ -301,28 +335,28 @@ function boxShadow(shadow: Shadow): string {
  * `typography` root, and its sizes, weights and line heights land under `text`, `font-weight` and
  * `leading` respectively.
  */
-function scalarDeclarations(tokenSet: TokenSet, prefix: string): CssDeclaration[] {
+function scalarDeclarations(tokenSet: TokenSet, naming: CssNaming): CssDeclaration[] {
 	const { size, weight, lineHeight } = tokenSet.typography.values;
 
 	return [
 		...Object.entries(tokenSet.radius.values).map(([name, dimension]) => ({
-			property: prefixedProperty(`radius-${name}`, prefix),
+			property: naming.prefixedProperty(`radius-${name}`),
 			value: length(dimension),
 		})),
 		...Object.entries(size).map(([name, dimension]) => ({
-			property: prefixedProperty(`text-${name}`, prefix),
+			property: naming.prefixedProperty(`text-${name}`),
 			value: length(dimension),
 		})),
 		...Object.entries(weight).map(([name, token]) => ({
-			property: prefixedProperty(`font-weight-${name}`, prefix),
-			value: formatNumber(token.value),
+			property: naming.prefixedProperty(`font-weight-${name}`),
+			value: formatCssNumber(token.value),
 		})),
 		...Object.entries(lineHeight).map(([name, token]) => ({
-			property: prefixedProperty(`leading-${name}`, prefix),
-			value: formatNumber(token.value),
+			property: naming.prefixedProperty(`leading-${name}`),
+			value: formatCssNumber(token.value),
 		})),
 		...Object.entries(tokenSet.tracking.values).map(([name, dimension]) => ({
-			property: prefixedProperty(`tracking-${name}`, prefix),
+			property: naming.prefixedProperty(`tracking-${name}`),
 			value: length(dimension),
 		})),
 	];
@@ -340,9 +374,7 @@ function scalarDeclarations(tokenSet: TokenSet, prefix: string): CssDeclaration[
  */
 function prefixedProperty(name: string, prefix: string): string {
 	const property = prefix === '' ? name : `${prefix}-${name}`;
-	const namespace = TAILWIND_NAMESPACES.find(
-		(root) => property === root || property.startsWith(`${root}-`),
-	);
+	const namespace = claimedNamespace(property);
 
 	if (namespace) {
 		throw new Error(
@@ -351,6 +383,41 @@ function prefixedProperty(name: string, prefix: string): string {
 	}
 
 	return `--${property}`;
+}
+
+/**
+ * A semantic token's property, left bare, refusing a token whose own name lands inside a namespace.
+ *
+ * Bare is what makes this output drop-in — a shadcn project's components read `--background` by
+ * that name — and it is safe for every name shadcn ships, because none of them starts with a
+ * namespace root. That is a property of those names and not of the category: `SemanticLayerSchema`
+ * keys on any non-empty string, so the layer that built the set decides what arrives here.
+ *
+ * A token named `blur-sm` arrives bare as `--blur-sm`, which is the property Tailwind's own
+ * `blur-sm` utility reads for its radius. The consuming project's stock theme declares it inside
+ * `@layer theme`, and a pasted `:root` rule is unlayered, so ours wins the cascade wherever the two
+ * land and `blur-sm` resolves a length to an `oklch()` colour. The declaration is dropped at
+ * computed-value time with nothing logged: the utility simply stops working.
+ *
+ * So the same rule bites on both sides of the prefix. A prefix cannot rescue this one, because a
+ * semantic colour never takes one; the token itself is what has to be renamed, and refusing it by
+ * name is the only way the caller hears about it.
+ */
+function semanticProperty(token: string): string {
+	const namespace = claimedNamespace(token);
+
+	if (namespace) {
+		throw new Error(
+			`--${token} falls inside Tailwind's "${namespace}" namespace, so declaring the semantic token "${token}" bare would rebind the property that namespace's utilities read; the token has to be renamed`,
+		);
+	}
+
+	return `--${token}`;
+}
+
+/** The Tailwind namespace root a property name falls under, exactly or as a descendant. */
+function claimedNamespace(property: string): string | undefined {
+	return TAILWIND_NAMESPACES.find((root) => property === root || property.startsWith(`${root}-`));
 }
 
 /**
@@ -399,26 +466,5 @@ function absentFrom(from: readonly string[], present: readonly string[]): string
  * survives the export.
  */
 function length(dimension: DimensionValue | SignedDimensionValue): string {
-	return `${formatNumber(dimension.value)}${dimension.unit}`;
-}
-
-/**
- * A scalar rounded and trimmed the way `toOklchCss` treats a channel, so a shadow's geometry and
- * its colour print at one precision inside the one declaration that holds both.
- *
- * Rounding at all is about the arithmetic upstream, not about the tokens: a derived tracking or
- * type scale is a chain of floating-point multiplications, and `0.30000000000000004em` is a length
- * every browser accepts and no reader can audit against the scale that produced it.
- *
- * Zero folds to the bare digit, negative zero included, for the reason `roundTo` in `core/oklch.ts`
- * gives: round-off can carry a value across zero from below, and `-0px` is a literal some CSS
- * tooling still trips over.
- */
-function formatNumber(value: number): string {
-	const scale = 10 ** PLACES;
-	const rounded = Math.round(value * scale) / scale;
-
-	if (rounded === 0) return '0';
-
-	return rounded.toFixed(PLACES).replace(/0+$/, '').replace(/\.$/, '');
+	return `${formatCssNumber(dimension.value)}${dimension.unit}`;
 }

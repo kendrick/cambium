@@ -9,98 +9,29 @@
  * proved that file's own alias/var criterion is vacuous — it emits no `var()` at all — so that half
  * of criterion 5 has to be proved here, against the sibling adapter's real output, or it is never
  * proved anywhere.
+ *
+ * That cross-adapter check stops at the property names. Whether Tailwind resolves them into
+ * utilities that paint is `core/css/stylesheet.test.ts`, which runs the real compiler over the two
+ * halves as one file.
  */
-import { type Declaration, parse } from 'postcss';
+import { parse } from 'postcss';
 import { describe, expect, it } from 'vitest';
 
-import { derived } from '../provenance';
 import { SEMANTIC_MAP } from '../semantic-map';
-import { type Ramp, type SemanticEntry, type TokenSet, TokenSetSchema } from '../token-set';
-import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from '../token-set.fixture';
-import { toGlobalsCss } from './globals-css';
+import { type TokenSet, TokenSetSchema } from '../token-set';
+import {
+	allDeclarations,
+	CONVENTIONAL_NUMBERS,
+	deepFreeze,
+	FIXTURE_RAMPS,
+	PINNED_SET,
+	propertyNames,
+	setWithSemanticToken,
+	valueOf,
+	VAR_REFERENCE,
+} from './css.fixture';
+import { type CssNamingOptions, cssNaming, toGlobalsCss } from './globals-css';
 import { toThemeBlock } from './theme-block';
-
-const EXTENSIONS = derived('keyColors', 'exercises a schema bound rather than a real derivation');
-
-/** Same construction `globals-css.test.ts` uses: step n sits at lightness n/100. */
-function ramp(hue: number, chroma: number, offset: number): Ramp {
-	return Array.from({ length: 12 }, (_, index) => ({
-		step: index + 1,
-		l: (index + 1 + offset) / 100,
-		c: chroma,
-		h: hue,
-		$extensions: EXTENSIONS,
-	}));
-}
-
-function shadcnSemanticLayer(): Record<string, SemanticEntry> {
-	return Object.fromEntries(
-		Object.entries(SEMANTIC_MAP).map(([token, assignment]) => [
-			token,
-			{
-				alias: typeof assignment === 'string' ? assignment : assignment.candidates[0],
-				$extensions: EXTENSIONS,
-			},
-		]),
-	);
-}
-
-const SEMANTIC = shadcnSemanticLayer();
-
-const LIGHT_SCHEME = {
-	primitives: { brand: ramp(260, 0.02, 0), neutral: ramp(250, 0.02, 0), danger: ramp(25, 0.02, 0) },
-	semantic: SEMANTIC,
-	shadow: SHADOW_FIXTURE,
-};
-
-const DARK_SCHEME = {
-	primitives: {
-		brand: ramp(260, 0.03, 50),
-		neutral: ramp(250, 0.03, 50),
-		danger: ramp(25, 0.03, 50),
-	},
-	semantic: SEMANTIC,
-	shadow: SHADOW_FIXTURE,
-};
-
-/** Parsed rather than cast, for the reason `globals-css.test.ts` gives. */
-const PINNED_SET: TokenSet = TokenSetSchema.parse({
-	...LIGHT_SCHEME,
-	schemes: { light: LIGHT_SCHEME, dark: DARK_SCHEME },
-	...NON_COLOR_FIXTURE,
-});
-
-function deepFreeze<T>(value: T): T {
-	if (value && typeof value === 'object') {
-		for (const held of Object.values(value)) deepFreeze(held);
-		Object.freeze(value);
-	}
-	return value;
-}
-
-/** Every declaration in an `@theme` at-rule, wherever postcss nested it. */
-function themeDeclarations(css: string): Declaration[] {
-	const root = parse(css);
-	const declarations: Declaration[] = [];
-	root.walkDecls((declaration) => {
-		declarations.push(declaration);
-	});
-	return declarations;
-}
-
-function propertyNames(declarations: Declaration[]): string[] {
-	// oxlint-disable-next-line unicorn/no-array-sort
-	return declarations.map((declaration) => declaration.prop).sort();
-}
-
-/** Every `var(--x)` reference a declaration value makes. */
-const VAR_REFERENCE = /var\(\s*(--[\w-]+)/g;
-
-function valueOf(declarations: Declaration[], property: string): string {
-	const found = declarations.find((declaration) => declaration.prop === property);
-	if (!found) throw new Error(`no ${property} declaration`);
-	return found.value;
-}
 
 /**
  * Every property `toGlobalsCss` declares, under either selector.
@@ -111,34 +42,17 @@ function valueOf(declarations: Declaration[], property: string): string {
  * checking against light alone (or against an intersection) would fail entries this adapter is
  * right to emit.
  */
-function declaredByGlobalsCss(tokenSet: TokenSet, options?: { prefix?: string }): Set<string> {
-	const declared = new Set<string>();
-	parse(toGlobalsCss(tokenSet, options)).walkDecls((declaration) => {
-		declared.add(declaration.prop);
-	});
-	return declared;
+function declaredByGlobalsCss(tokenSet: TokenSet, options: CssNamingOptions = {}): Set<string> {
+	return new Set(
+		allDeclarations(toGlobalsCss(tokenSet, cssNaming(options))).map(
+			(declaration) => declaration.prop,
+		),
+	);
 }
-
-const CONVENTIONAL_NUMBERS = [
-	'25',
-	'50',
-	'100',
-	'200',
-	'300',
-	'400',
-	'500',
-	'600',
-	'700',
-	'800',
-	'900',
-	'950',
-];
-
-const FIXTURE_RAMPS = ['brand', 'neutral', 'danger'];
 
 describe('toThemeBlock', () => {
 	it('parses as valid CSS holding one @theme inline at-rule', () => {
-		const root = parse(toThemeBlock(PINNED_SET));
+		const root = parse(toThemeBlock(PINNED_SET, cssNaming()));
 
 		expect(root.nodes).toHaveLength(1);
 		const [atRule] = root.nodes;
@@ -149,7 +63,7 @@ describe('toThemeBlock', () => {
 	});
 
 	it('registers the colour, radius, typography, tracking and shadow namespaces', () => {
-		const names = propertyNames(themeDeclarations(toThemeBlock(PINNED_SET)));
+		const names = propertyNames(allDeclarations(toThemeBlock(PINNED_SET, cssNaming())));
 
 		// Typography has no single Tailwind root: it fans out across sizes, weights and line
 		// heights, so all three roots stand in for the one namespace criterion 3 names.
@@ -163,7 +77,7 @@ describe('toThemeBlock', () => {
 	});
 
 	it('registers every semantic colour, bare, pointing at the bare property globals-css declares', () => {
-		const declarations = themeDeclarations(toThemeBlock(PINNED_SET));
+		const declarations = allDeclarations(toThemeBlock(PINNED_SET, cssNaming()));
 
 		for (const token of Object.keys(SEMANTIC_MAP)) {
 			expect(valueOf(declarations, `--color-${token}`)).toBe(`var(--${token})`);
@@ -171,7 +85,7 @@ describe('toThemeBlock', () => {
 	});
 
 	it('numbers each ramp step by the conventional name, declared as data rather than computed inline', () => {
-		const declarations = themeDeclarations(toThemeBlock(PINNED_SET));
+		const declarations = allDeclarations(toThemeBlock(PINNED_SET, cssNaming()));
 
 		// Written as literals rather than imported from `step-numbers.ts`, the way
 		// `globals-css.test.ts` treats the same table: importing the table under test would let a
@@ -186,10 +100,10 @@ describe('toThemeBlock', () => {
 	});
 
 	it('gives the brand ramp its unnumbered alias, and gives no other ramp one', () => {
-		const names = propertyNames(themeDeclarations(toThemeBlock(PINNED_SET)));
+		const names = propertyNames(allDeclarations(toThemeBlock(PINNED_SET, cssNaming())));
 
 		expect(names).toContain('--color-brand');
-		expect(valueOf(themeDeclarations(toThemeBlock(PINNED_SET)), '--color-brand')).toBe(
+		expect(valueOf(allDeclarations(toThemeBlock(PINNED_SET, cssNaming())), '--color-brand')).toBe(
 			'var(--cmb-color-brand)',
 		);
 
@@ -203,7 +117,7 @@ describe('toThemeBlock', () => {
 	});
 
 	it('registers every scalar the token set carries, mapped onto its Tailwind root', () => {
-		const declarations = themeDeclarations(toThemeBlock(PINNED_SET));
+		const declarations = allDeclarations(toThemeBlock(PINNED_SET, cssNaming()));
 
 		expect(valueOf(declarations, '--radius-lg')).toBe('var(--cmb-radius-lg)');
 		expect(valueOf(declarations, '--text-base')).toBe('var(--cmb-text-base)');
@@ -213,13 +127,13 @@ describe('toThemeBlock', () => {
 	});
 
 	it('registers every shadow step', () => {
-		const declarations = themeDeclarations(toThemeBlock(PINNED_SET));
+		const declarations = allDeclarations(toThemeBlock(PINNED_SET, cssNaming()));
 
 		expect(valueOf(declarations, '--shadow-md')).toBe('var(--cmb-shadow-md)');
 	});
 
 	it('holds no literal value: every declaration is a var() reference', () => {
-		const declarations = themeDeclarations(toThemeBlock(PINNED_SET));
+		const declarations = allDeclarations(toThemeBlock(PINNED_SET, cssNaming()));
 
 		for (const declaration of declarations) {
 			expect(/^var\(--[\w-]+\)$/.test(declaration.value)).toBe(true);
@@ -232,7 +146,7 @@ describe('toThemeBlock', () => {
 		// all, so the assertion worth making is the var() one, against the sibling adapter's real
 		// declarations rather than against this module's own naming.
 		const declared = declaredByGlobalsCss(PINNED_SET);
-		const declarations = themeDeclarations(toThemeBlock(PINNED_SET));
+		const declarations = allDeclarations(toThemeBlock(PINNED_SET, cssNaming()));
 
 		for (const declaration of declarations) {
 			for (const [, property] of declaration.value.matchAll(VAR_REFERENCE)) {
@@ -244,7 +158,7 @@ describe('toThemeBlock', () => {
 	it('references no property that toGlobalsCss does not also declare, under a caller-supplied prefix', () => {
 		const options = { prefix: 'acme' };
 		const declared = declaredByGlobalsCss(PINNED_SET, options);
-		const declarations = themeDeclarations(toThemeBlock(PINNED_SET, options));
+		const declarations = allDeclarations(toThemeBlock(PINNED_SET, cssNaming(options)));
 
 		for (const declaration of declarations) {
 			for (const [, property] of declaration.value.matchAll(VAR_REFERENCE)) {
@@ -254,7 +168,7 @@ describe('toThemeBlock', () => {
 	});
 
 	it('carries a caller-supplied prefix everywhere but on the bare semantic colours', () => {
-		const declarations = themeDeclarations(toThemeBlock(PINNED_SET, { prefix: 'acme' }));
+		const declarations = allDeclarations(toThemeBlock(PINNED_SET, cssNaming({ prefix: 'acme' })));
 
 		expect(valueOf(declarations, '--shadow-md')).toBe('var(--acme-shadow-md)');
 		expect(valueOf(declarations, '--radius-lg')).toBe('var(--acme-radius-lg)');
@@ -263,13 +177,35 @@ describe('toThemeBlock', () => {
 		expect(valueOf(declarations, '--color-background')).toBe('var(--background)');
 	});
 
+	it('refuses the empty prefix, which would point every entry at itself', () => {
+		// `@theme inline { --color-brand-25: var(--color-brand-25) }` reads itself: the entry and the
+		// property it points at are one name, so the colour resolves to nothing and every
+		// `bg-brand-25` utility paints nothing, silently. `toGlobalsCss` threw on the empty prefix
+		// from the start and this half emitted it, which is what naming both through one `CssNaming`
+		// ends. The ramp entries come first here, so the ramp is the collision reported; in
+		// `globals-css.test.ts` the shadow is, for the same reason in the other order.
+		expect(() => toThemeBlock(PINNED_SET, cssNaming({ prefix: '' }))).toThrow(/--color-brand-25/);
+		expect(() => toThemeBlock(PINNED_SET, cssNaming({ prefix: 'text' }))).toThrow(
+			/--text-color-brand-25/,
+		);
+	});
+
+	it('refuses a semantic token whose bare property lands inside a Tailwind namespace', () => {
+		// The reference side of the same collision `globals-css.test.ts` checks on the declaring
+		// side: this module would write `--color-blur-sm: var(--blur-sm)`, pointing at a property
+		// Tailwind's own `blur-sm` utility reads. Both halves name properties through one
+		// `CssNaming`, so both refuse it; a guard on one side only would leave the other emitting an
+		// entry whose target the sibling refused to declare.
+		expect(() => toThemeBlock(setWithSemanticToken('blur-sm'), cssNaming())).toThrow(/--blur-sm/);
+	});
+
 	it('is a pure function of the token set: same set in, same bytes out, input untouched', () => {
 		const frozen = deepFreeze(TokenSetSchema.parse(structuredClone(PINNED_SET)));
 		const before = structuredClone(PINNED_SET);
 
-		expect(toThemeBlock(PINNED_SET)).toBe(toThemeBlock(PINNED_SET));
-		expect(() => toThemeBlock(frozen)).not.toThrow();
-		expect(toThemeBlock(frozen)).toBe(toThemeBlock(PINNED_SET));
+		expect(toThemeBlock(PINNED_SET, cssNaming())).toBe(toThemeBlock(PINNED_SET, cssNaming()));
+		expect(() => toThemeBlock(frozen, cssNaming())).not.toThrow();
+		expect(toThemeBlock(frozen, cssNaming())).toBe(toThemeBlock(PINNED_SET, cssNaming()));
 		expect(PINNED_SET).toEqual(before);
 	});
 });
