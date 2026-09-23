@@ -31,10 +31,12 @@ import {
 	declarationsBySelector,
 	deepFreeze,
 	GENERATED_SET,
+	OUT_OF_BOUNDS,
 	PINNED_SET,
 	setWithName,
 	setWithSemanticToken,
 	VAR_REFERENCE,
+	zodIssuePaths,
 } from './css.fixture';
 import { cssNaming, toGlobalsCss, type VocabularyCategory } from './globals-css';
 import { toStylesheet } from './stylesheet';
@@ -559,5 +561,9 @@ describe('toStylesheet', () => {
 		expect(() => toStylesheet(frozen)).not.toThrow();
 		expect(toStylesheet(frozen)).toBe(toStylesheet(PINNED_SET));
 		expect(PINNED_SET).toEqual(before);
+	});
+
+	it.each(OUT_OF_BOUNDS)('refuses a $bound through the schema, naming $path', ({ path, set }) => {
+		expect(zodIssuePaths(() => toStylesheet(set))).toContain(path);
 	});
 });

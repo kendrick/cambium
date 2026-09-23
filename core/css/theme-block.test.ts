@@ -25,11 +25,13 @@ import {
 	CONVENTIONAL_NUMBERS,
 	deepFreeze,
 	FIXTURE_RAMPS,
+	OUT_OF_BOUNDS,
 	PINNED_SET,
 	propertyNames,
 	setWithName,
 	valueOf,
 	VAR_REFERENCE,
+	zodIssuePaths,
 } from './css.fixture';
 import {
 	type CssNamingOptions,
@@ -244,6 +246,13 @@ describe('toThemeBlock', () => {
 		expect(toThemeBlock(frozen, cssNaming())).toBe(toThemeBlock(PINNED_SET, cssNaming()));
 		expect(PINNED_SET).toEqual(before);
 	});
+
+	// The theme block prints no value, only `var()` references, so none of these would reach its
+	// output. It refuses them anyway: called on its own it is half a stylesheet, and a set the other
+	// half refuses has no business producing this one.
+	it.each(OUT_OF_BOUNDS)('refuses a $bound through the schema, naming $path', ({ path, set }) => {
+		expect(zodIssuePaths(() => toThemeBlock(set, cssNaming()))).toContain(path);
+	});
 });
 
 /** The layer's one `:where(.dark)` rule, read back off a postcss parse. */
@@ -304,6 +313,10 @@ describe('toDarkThemeLayer', () => {
 		expect(valueOf(layered, '--color-brand-500')).toBe('var(--acme-color-brand-500)');
 		expect(valueOf(layered, '--shadow-md')).toBe('var(--acme-shadow-md)');
 		expect(valueOf(layered, '--color-background')).toBe('var(--background)');
+	});
+
+	it.each(OUT_OF_BOUNDS)('refuses a $bound through the schema, naming $path', ({ path, set }) => {
+		expect(zodIssuePaths(() => toDarkThemeLayer(set, cssNaming()))).toContain(path);
 	});
 
 	it('references no property that toGlobalsCss does not also declare', () => {

@@ -1,4 +1,5 @@
 import { type Declaration, parse } from 'postcss';
+import { ZodError } from 'zod';
 
 import { BrandSeedSchema } from '../brand-seed';
 import { BALANCED } from '../interpretation';
@@ -316,4 +317,70 @@ export function valueOf(declarations: Declaration[], property: string): string {
 export function sorted(names: readonly string[]): string[] {
 	// oxlint-disable-next-line unicorn/no-array-sort
 	return [...names].sort();
+}
+
+/**
+ * `PINNED_SET` with one number pushed past a bound `TokenSetSchema` enforces, which the `TokenSet`
+ * type can't carry. The compiler accepts every one of these, so only a parse stands between each and
+ * the stylesheet.
+ *
+ * A negative radius or blur prints as a length that parses and then goes invalid in the property
+ * reading it through `var()`, so `rounded-lg` or `shadow-md` quietly paints nothing. A line height of
+ * 0 is legal CSS and draws every line of the text using it on top of the one before. The blur sits
+ * in the dark scheme only: the top-level shadow mirrors light, and a bound broken where nothing
+ * mirrors it is the case a check reading one copy would miss.
+ */
+export const OUT_OF_BOUNDS: readonly { bound: string; path: string; set: TokenSet }[] = [
+	{
+		bound: 'negative radius',
+		path: 'radius.values.lg.value',
+		set: withScalar((set) => {
+			set.radius.values.lg!.value = -4;
+		}),
+	},
+	{
+		bound: 'negative dark shadow blur',
+		path: 'schemes.dark.shadow.values.md.blur.value',
+		set: withScalar((set) => {
+			set.schemes.dark.shadow.values.md!.blur.value = -2;
+		}),
+	},
+	{
+		bound: 'zero line height',
+		path: 'typography.values.lineHeight.normal.value',
+		set: withScalar((set) => {
+			set.typography.values.lineHeight.normal!.value = 0;
+		}),
+	},
+];
+
+/**
+ * `PINNED_SET` with the light brand ramp's first step at hue 360, in both copies of the light scheme
+ * so `checkMirroredLayers` still passes. Legal on the way in, and the schema folds it to 0: the case
+ * where emitting from the parsed set and emitting from the argument print different bytes.
+ */
+export const HUE_360_SET: TokenSet = withScalar((set) => {
+	set.primitives.brand![0]!.h = 360;
+	set.schemes.light.primitives.brand![0]!.h = 360;
+});
+
+function withScalar(edit: (set: TokenSet) => void): TokenSet {
+	const set = structuredClone(PINNED_SET);
+	edit(set);
+	return set;
+}
+
+/**
+ * The dotted path of every issue in the `ZodError` that `run` throws. Fails the test if `run`
+ * returns, or throws anything else: a CSS adapter's own error naming the value would not show that
+ * the schema was the thing that refused it.
+ */
+export function zodIssuePaths(run: () => unknown): string[] {
+	try {
+		run();
+	} catch (error) {
+		if (!(error instanceof ZodError)) throw error;
+		return error.issues.map((issue) => issue.path.join('.'));
+	}
+	throw new Error('expected a ZodError, and nothing was thrown');
 }

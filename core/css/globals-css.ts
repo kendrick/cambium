@@ -16,6 +16,7 @@ import {
 	type ShadowScale,
 	type SignedDimensionValue,
 	type TokenSet,
+	TokenSetSchema,
 } from '../token-set';
 import { formatCssNumber, toOklchCss } from './oklch-css';
 import { stepNumberName } from './step-numbers';
@@ -110,7 +111,8 @@ export type VocabularyCategory = keyof typeof GENERATED_VOCABULARY;
 
 /**
  * Refuses a token set carrying any name outside {@link GENERATED_VOCABULARY}, naming each one and
- * its category. Both adapters call it first, so neither can emit a name the other would refuse.
+ * its category. Both adapters call it on the parsed set before building anything, so neither can emit
+ * a name the other would refuse.
  *
  * Both schemes are read, because a name only one of them carries would otherwise reach the mirror
  * check and be reported as a mismatch instead of as the foreign name it is.
@@ -180,6 +182,32 @@ const TAILWIND_NAMESPACES = [
 	'text',
 	'tracking',
 ] as const;
+
+declare const PARSED: unique symbol;
+
+/**
+ * A token set `TokenSetSchema` has accepted. Only {@link parseTokenSet} hands one out, so an
+ * `emit*` function taking one can't be handed a set nobody parsed without a cast saying so.
+ */
+export type ParsedTokenSet = TokenSet & { readonly [PARSED]: true };
+
+/**
+ * Parses a token set before an adapter reads it, and returns the parsed copy.
+ *
+ * `TokenSet` is Zod's output type, so the compiler accepting an argument doesn't mean the schema
+ * would. The bounds a type can't carry are the ones that matter here: a radius of `-4` prints as
+ * `-4rem`, a declaration that parses and then leaves `rounded-lg` invalid at computed-value time, and
+ * a line height of 0 draws every line of text on top of the one before. `buildTokenSet` never
+ * parses, and `resolveScheme` checks aliases and no scalar bound, so nothing upstream stands in for
+ * this.
+ *
+ * Every adapter reads the copy this returns, never its argument. The schema folds a hue of 360 to 0,
+ * and reading the parsed copy is what makes the CSS print the 0 the DTCG export prints. The argument
+ * is never written: Zod builds a new object.
+ */
+export function parseTokenSet(tokenSet: TokenSet): ParsedTokenSet {
+	return TokenSetSchema.parse(tokenSet) as ParsedTokenSet;
+}
 
 /** Options controlling how {@link cssNaming} names the properties an adapter writes. */
 export type CssNamingOptions = {
@@ -307,9 +335,10 @@ export type CssDeclaration = { property: string; value: string };
  * returns. This adapter needs no counterpart to that file's defensive clone, because it hands back
  * a string it built rather than any part of the token set.
  *
- * `serializeDtcg` parses its argument first and this does not. That parse buys DTCG a hue of
- * exactly 360 folded to 0, which the vendored schema rejects and CSS accepts, so parsing here would
- * only add a second opinion on a set `resolveScheme` already refuses to flatten.
+ * The set goes through {@link parseTokenSet} before anything reads it, the same parse
+ * `serializeDtcg` opens with, so a negative radius or blur is a `ZodError` naming its path rather
+ * than a length the consumer drops. {@link emitGlobalsCss} is the same adapter minus the parse, for
+ * `toStylesheet`, which parses once and hands the one parsed set to all three halves.
  *
  * Scope is the two scheme blocks. The `@theme inline` block that maps these properties onto
  * Tailwind's namespaces is `core/css/theme-block.ts`, and the `@custom-variant dark` line that
@@ -317,6 +346,11 @@ export type CssDeclaration = { property: string; value: string };
  * the whole file from the two halves and is what a caller should reach for.
  */
 export function toGlobalsCss(tokenSet: TokenSet, naming: CssNaming): string {
+	return emitGlobalsCss(parseTokenSet(tokenSet), naming);
+}
+
+/** {@link toGlobalsCss} on a set {@link parseTokenSet} has already parsed. */
+export function emitGlobalsCss(tokenSet: ParsedTokenSet, naming: CssNaming): string {
 	requireGeneratedVocabulary(tokenSet);
 
 	const light = resolveScheme(tokenSet.schemes.light);

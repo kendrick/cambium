@@ -39,7 +39,9 @@ import {
 	declarationsBySelector,
 	deepFreeze,
 	FIXTURE_RAMPS,
+	HUE_360_SET,
 	LIGHT_SCHEME,
+	OUT_OF_BOUNDS,
 	PINNED_SET,
 	propertyNames,
 	ramp,
@@ -47,6 +49,7 @@ import {
 	SEMANTIC,
 	sorted,
 	valueOf,
+	zodIssuePaths,
 } from './css.fixture';
 import {
 	cssNaming,
@@ -498,6 +501,18 @@ describe('toGlobalsCss', () => {
 		expect(() => toGlobalsCss(frozen, cssNaming())).not.toThrow();
 		expect(toGlobalsCss(frozen, cssNaming())).toBe(toGlobalsCss(PINNED_SET, cssNaming()));
 		expect(PINNED_SET).toEqual(before);
+	});
+
+	it.each(OUT_OF_BOUNDS)('refuses a $bound through the schema, naming $path', ({ path, set }) => {
+		expect(zodIssuePaths(() => toGlobalsCss(set, cssNaming()))).toContain(path);
+	});
+
+	it('prints a hue of 360 as the 0 the schema folds it to, as the DTCG export does', () => {
+		const root = declarationsBySelector(toGlobalsCss(HUE_360_SET, cssNaming())).get(':root') ?? [];
+
+		// The fixture only bites if the argument really held 360; the parse is what folds it.
+		expect(HUE_360_SET.schemes.light.primitives.brand![0]!.h).toBe(360);
+		expect(valueOf(root, '--cmb-color-brand-25')).toMatch(/^oklch\(\S+ \S+ 0\)$/);
 	});
 
 	it('refuses a set whose two schemes name different semantic tokens', () => {
