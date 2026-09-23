@@ -2,6 +2,7 @@ node_modules/
 .next/
 out/
 .vitest/
+test-results/
 next-env.d.ts
 *.tsbuildinfo
 swatches/

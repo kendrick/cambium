@@ -33,6 +33,7 @@ Listed in `package.json` order.
 | `test` | scopes | Reaches Vitest as a filter. A `--` in front of the path defeats it and runs the whole unit project, which then reports a full-suite pass that reads exactly like the scoped one. |
 | `test:watch` | scopes | The same filter as `test`, and the same `--` trap. |
 | `test:bundle` | scopes, to the `bundle` project | That project is `**/*.bundle.test.ts` alone, so an ordinary test path matches nothing and exits 1. |
+| `test:e2e` | scopes | Reaches Playwright as a regex matched against each spec file's path, the same `--` trap as `test`: `pnpm test:e2e smoke` runs only `e2e/smoke.spec.ts`, `pnpm test:e2e -- smoke` runs the whole suite instead. A path matching nothing exits 1: `Error: No tests found`. Runs against `out/`, the export `pnpm build` writes; `scripts/serve-out.mjs` exits 1 naming `out/`, before a browser opens, if the export is missing. |
 | `dtcg:refresh` | is ignored | Reads no `argv`. Fetches over the network and overwrites `core/dtcg/format.2025.10.json`. |
 | `dtcg:build` | is the output target | `process.argv[2]`, at `scripts/build-dtcg-validator.mjs:23`. Called bare, it overwrites the committed `core/dtcg/format-validator.generated.mjs`. |
 | `swatches` | is ignored | `scripts/swatches.mjs` reads no `argv`. |
@@ -40,9 +41,27 @@ Listed in `package.json` order.
 | `evaluate` | is the seed file | The same `runCli`. Writes `swatches/seed.html`, which is gitignored. |
 | `verify` | reaches only `test:bundle` | pnpm appends the argument to the end of an `&&` chain, so the first five links run unscoped and the last one runs filtered. |
 
+## The browser `test:e2e` needs first
+
+`pnpm install` puts `@playwright/test` in `node_modules`; it does not put a browser anywhere. Playwright keeps browser binaries in a cache outside the repo (`~/Library/Caches/ms-playwright` on macOS), versioned per Playwright release, so a checkout that has run `pnpm install` still fails the first `test:e2e` on a missing binary rather than a missing package.
+
+Install one with:
+
+```
+pnpm exec playwright install chromium
+```
+
+`playwright.config.ts` declares a single project, `chromium`, so that is the only browser the suite ever launches. The bare `playwright install`, with no browser named, downloads Chromium, Firefox, and WebKit — two of which `test:e2e` never opens.
+
+`pnpm exec` over a bare `npx playwright install`: both resolve to the same local binary here, because `pnpm install` already placed it in `node_modules/.bin`, but that is the only reason they agree. Point `pnpm exec` at a binary that is not there and it fails loudly, `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL`; `npx` without `--no-install` falls back to fetching whatever the registry calls that package and running that instead. The rest of this table already runs everything through `pnpm exec` or a `pnpm` script for the same reason — this is not a special case for Playwright.
+
 ## The scripts that write
 
 `format` and `lint:fix` write across the whole tree when called bare, and both take a path, so give them one. `dtcg:build` and `dtcg:refresh` overwrite committed files, `dtcg:refresh` from the network, and neither belongs inside a task that did not ask for it. `evaluate` writes `swatches/seed.html`, which git ignores.
+
+`test:e2e` writes `test-results/` at the repo root. That is Playwright's `outputDir`, and the `list` reporter does not switch it off: `.last-run.json` lands on every run, and an `error-context.md` lands under a per-scenario directory for every scenario that fails. A fully green run writes both, because `e2e/console-gate.spec.ts` is marked `test.fail()` and a scenario that fails on purpose still leaves its error context behind.
+
+`.gitignore` covers that directory and has to keep covering it. oxfmt reads `.gitignore`, `verify` chains `format:check`, and `.last-run.json` is JSON that oxfmt formats. Drop the rule and the next `pnpm format:check` after any browser run reports `test-results/.last-run.json (13ms)` and exits 1, taking `pnpm verify` down with it over a file no diff produced. `error-context.md` is quieter: `.oxfmtrc.json` ignores markdown, so it never reaches `format:check` and shows up only as untracked noise in `git status`.
 
 ## Working forms worth memorising
 
@@ -52,6 +71,8 @@ pnpm format:check core/token-set.ts
 pnpm test core/purity.test.ts
 pnpm exec vitest run --project unit core/purity.test.ts
 pnpm exec oxlint core/purity.test.ts
+pnpm exec playwright install chromium
+pnpm build && pnpm test:e2e e2e/smoke.spec.ts
 ```
 
 `package-scripts.test.ts` at the repo root holds both `format` and `format:check` to these forms. It spawns the real command, because what reads a script string is pnpm's runner and then oxfmt, and neither reads `package.json` the way a test asserting on `package.json` would assume. It then reads the working tree rather than the summary oxfmt prints, because a script can rewrite every file in the repo and still report `on 1 files`. The writing form runs against a temp file outside the repo, and nothing in the suite runs a bare `pnpm format`, because a test run is no better placed to rewrite the tree than a dispatched task is.
