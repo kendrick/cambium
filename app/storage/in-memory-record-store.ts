@@ -35,6 +35,8 @@ export function createInMemoryRecordStore(): RecordStore {
 					validated.id,
 					stored.versions.length,
 					validated.versions.length,
+					stored.revision,
+					validated.revision,
 				);
 			}
 

@@ -37,6 +37,20 @@ import type { BrandRecord } from '../../core/brand-record';
  * record of what was generated at one moment, so editing one rewrites history a later version may
  * cite.
  *
+ * Which incarnation a write came from is the one thing these rules cannot check. An id deleted and
+ * recreated carries a new record whose revision starts wherever its creator set it, which is 1 in
+ * practice, so a copy of the deleted incarnation satisfies both rules above against the record that
+ * replaced it. Its write lands on a brand that never saw it. The two requests are identical—an
+ * image-only commit from the dead copy is byte for byte what the live record's own holder would
+ * send to add its first image—so nothing here can part them, and closing it takes identity carried
+ * on the record, which `core/brand-record.ts` owns rather than this seam. #78 opened it: demanding
+ * a longer history used to refuse those writes whatever incarnation they came from, and accepting
+ * metadata-only writes took that side effect away. No product code calls `delete` today, and every
+ * record is created under a fresh uuid, so nothing a user can do reaches it.
+ * Restore is the first flow that would, which puts it with #15 and #29 below.
+ * `record-store-contract.ts` pins the current behaviour in the test named
+ * "accepts a write from an incarnation that was deleted and recreated, which is a known hole".
+ *
  * Restoring an archive over a record that still exists gets no special handling here. `put` judges
  * an archive as it judges any other write, so it accepts one whose revision is the successor of the
  * stored revision and whose versions extend the stored history, storing it over what is there.
@@ -134,40 +148,76 @@ export function followsStoredRecord(stored: BrandRecord, incoming: BrandRecord):
 }
 
 /**
- * Thrown when a `put` arrives from a copy storage has already moved past. Either the incoming
- * revision is not the one after the stored record's, or the history the write brings is not the
- * stored history continued. The version counts this error carries are context rather than the test
- * the write failed, and they measure neither that test nor how far behind the losing copy is. Two
- * writers that each added only an image produce equal counts. A loser that appended no version
- * behind a winner that appended one produces 2 against 1. `kind` follows the same
- * discriminated-error convention as `StorageQuotaExceededError` and the core's `SeedParseError`,
- * so a caller branches on a field rather than on a message. The recovery is always the same—re-read
- * the record and commit again—and a caller can only choose it if it can tell this apart from a
- * malformed record or a full origin.
+ * Thrown when `followsStoredRecord` refuses a write. Exactly one of three things is true of the
+ * refused write, and the two revisions are what say which.
  *
- * The counts are reported because the store is the only thing that can report them honestly.
- * `StaleWorkspaceError` one layer up deliberately carries none, since anything the workspace could
- * offer would be what it wrote rather than what storage holds.
+ * `incomingRevision <= storedRevision` means another write landed while this copy was deriving its
+ * own next commit. `incomingRevision > storedRevision + 1` means the copy is further ahead than one
+ * commit, so it carries work storage never took, whether or not anyone else also wrote. Otherwise
+ * the revision follows and the history rule is what refused the write.
+ *
+ * The recovery differs across those, which is why the error has to part them. A copy that was
+ * overtaken re-reads and commits again, and loses nothing. A copy that ran ahead re-reads and
+ * loses the commits storage never took, so re-reading is the wrong move and telling it otherwise
+ * costs it work it cannot get back. The message says which case this is, and
+ * `storedRevision` and `incomingRevision` let a caller decide without reading the message at all.
+ *
+ * The version counts are context rather than the test the write failed, and they measure neither
+ * that test nor how far behind the losing copy is. Two writers that each added only an image
+ * produce equal counts. A loser that appended no version behind a winner that appended one
+ * produces 2 against 1. They are still reported, because the store is the only thing that can
+ * report them honestly, and a caller showing a person what is at stake wants them.
+ *
+ * `kind` follows the same discriminated-error convention as `StorageQuotaExceededError` and the
+ * core's `SeedParseError`, so a caller branches on a field rather than on a message, and can tell
+ * this apart from a malformed record or a full origin. `StaleWorkspaceError` one layer up
+ * deliberately carries no counts, since anything the workspace could offer would be what it wrote
+ * rather than what storage holds.
  */
 export class StaleRecordWriteError extends Error {
 	readonly kind = 'stale-record-write';
 	readonly recordId: string;
 	readonly storedVersions: number;
 	readonly incomingVersions: number;
+	readonly storedRevision: number;
+	readonly incomingRevision: number;
 
 	constructor(
 		recordId: string,
 		storedVersions: number,
 		incomingVersions: number,
+		storedRevision: number,
+		incomingRevision: number,
 		options?: { cause?: unknown },
 	) {
-		super(
-			`record ${recordId} has been written since this copy was read, so writing it back would drop what landed in between; storage holds ${storedVersions} versions and this copy holds ${incomingVersions}`,
-			options,
-		);
+		super(staleWriteMessage(recordId, storedRevision, incomingRevision), options);
 		this.name = 'StaleRecordWriteError';
 		this.recordId = recordId;
 		this.storedVersions = storedVersions;
 		this.incomingVersions = incomingVersions;
+		this.storedRevision = storedRevision;
+		this.incomingRevision = incomingRevision;
 	}
+}
+
+/**
+ * The sentence for whichever of the three refusals happened, told apart by the revisions alone.
+ * Version counts stay out of it: they are the same number in the case two writers race on images,
+ * and they run the wrong way for a copy that ran ahead, so a message built on them describes the
+ * write rather than the reason it was refused.
+ */
+function staleWriteMessage(recordId: string, stored: number, incoming: number): string {
+	if (incoming > stored + 1) {
+		// No number of unseen commits is stated, because this cannot tell how far back the copy
+		// read. Storage at 2 and a copy at 4 is a copy that read 1 and committed three times as
+		// easily as one that read 2 and committed twice, and the difference of the two revisions
+		// counts the second while undercounting the first.
+		return `record ${recordId} is stored at revision ${stored} and this copy is at revision ${incoming}, so the copy is more than one commit ahead and holds work storage never took; re-reading the record would discard that work`;
+	}
+
+	if (incoming <= stored) {
+		return `record ${recordId} has been written since this copy was read, so writing it back would drop what landed in between; storage is at revision ${stored} and this copy is at revision ${incoming}`;
+	}
+
+	return `record ${recordId} is stored at revision ${stored} and this copy follows at revision ${incoming}, but the history it brings is not the stored history continued`;
 }

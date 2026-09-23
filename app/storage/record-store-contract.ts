@@ -407,6 +407,75 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			});
 		});
 
+		// A caller catching this has two different recoveries to choose between, and the documented
+		// one is wrong for half the cases. A copy another writer overtook should re-read and commit
+		// again. A copy that ran ahead holds commits storage never took, and re-reading discards
+		// them. The revisions are what part the two, so the error carries both and a caller branches
+		// on a field rather than on the wording of a message.
+		it('reports both revisions, so a caller can tell a copy that ran ahead from one another writer overtook', async () => {
+			const overtakenRecord = makeRecord();
+			await store.put(overtakenRecord);
+			await store.put(appended(overtakenRecord));
+
+			const overtaken = await store
+				.put(appended(overtakenRecord, { interpretation: 'expressive' }))
+				.then(
+					() => null,
+					(thrown: unknown) => thrown,
+				);
+
+			// Storage moved to 2 while this copy was still deriving its own 2 from revision 1.
+			expect(overtaken).toMatchObject({
+				kind: 'stale-record-write',
+				recordId: overtakenRecord.id,
+				storedRevision: 2,
+				incomingRevision: 2,
+			});
+
+			const aheadRecord = makeRecord();
+			await store.put(aheadRecord);
+
+			const ahead = await store.put(appended(appended(aheadRecord))).then(
+				() => null,
+				(thrown: unknown) => thrown,
+			);
+
+			// Nobody else wrote. This copy committed twice without writing back, so it arrives at 3
+			// against a stored 1, and a caller can see that from the two fields alone.
+			expect(ahead).toMatchObject({
+				kind: 'stale-record-write',
+				recordId: aheadRecord.id,
+				storedRevision: 1,
+				incomingRevision: 3,
+			});
+		});
+
+		// The message is the other half of the same problem, and the half a person reads. For a copy
+		// that ran ahead, nothing landed in between, so a message saying something did names an
+		// event that never happened and prescribes a recovery that throws the copy's own commits
+		// away.
+		it('does not tell a copy that ran ahead that another write landed in between', async () => {
+			const record = makeRecord();
+			await store.put(record);
+
+			const thrown = await store.put(appended(appended(record))).then(
+				() => null,
+				(error: unknown) => error,
+			);
+
+			expect(thrown).toBeInstanceOf(StaleRecordWriteError);
+			const { message } = thrown as StaleRecordWriteError;
+
+			expect(message).not.toContain('has been written since this copy was read');
+			// Says what is actually true instead: where storage stands, and where this copy stands.
+			expect(message).toContain('revision 1');
+			expect(message).toContain('revision 3');
+			// Only the ran-ahead sentence says this. Without it the assertions above pass against the
+			// diverged-history sentence too, which names neither the right cause nor the right
+			// recovery, so the test would reach this branch without being able to fail on it.
+			expect(message).toContain('more than one commit ahead');
+		});
+
 		// #67 pinned the old rule's limit here: a write that changed only `images` read as stale,
 		// because `versions.length` never moved for it. #78 closes that with `revision`, which
 		// counts every commit to the record rather than only the ones that grow the version
@@ -459,6 +528,55 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 
 			await expect(store.put(recreated)).resolves.toEqual(recreated);
 			expect((await read(store, original.id)).versions).toHaveLength(1);
+		});
+
+		/**
+		 * A known hole, pinned here so it cannot move without someone noticing. This test asserts
+		 * what the seam does today, not what it should do.
+		 *
+		 * A caller holding a copy of one incarnation can land an image-only write on the different
+		 * record that later took the same id. Both incarnations start at revision 1, so the stale
+		 * write's revision follows the stored one, and where the two histories agree #67's rule has
+		 * nothing to refuse either. The request the dead incarnation's holder sends is byte for byte
+		 * the request the live incarnation's own holder would send to add its first image, so no
+		 * rule inside this seam can accept one and refuse the other. Closing it takes identity that
+		 * survives on the record, which `core/brand-record.ts` owns rather than `followsStoredRecord`.
+		 *
+		 * #78 opened it. Before #78 an image-only write was refused whatever incarnation it came
+		 * from, because `put` demanded a strictly longer history, and accepting metadata-only writes
+		 * took that side effect away.
+		 *
+		 * Nothing in the product reaches it: `delete` has no caller outside the test suites, and every
+		 * record is created under a fresh uuid, so no id is recreated. Restoring an archive over an
+		 * id that already exists is the first flow that gets here, and `record-store.ts` assigns
+		 * restore to #15 and #29.
+		 *
+		 * When that fix lands, delete this test. Its inverse is the assertion to write in its place.
+		 */
+		it('accepts a write from an incarnation that was deleted and recreated, which is a known hole', async () => {
+			const original = makeRecord();
+			await store.put(original);
+			const copyOfTheOriginal = await read(store, original.id);
+
+			// A different brand takes the id the first one had.
+			await store.delete(original.id);
+			const recreated = makeRecord({ id: original.id, versions: original.versions });
+			await store.put(recreated);
+
+			const fromTheDeadIncarnation = withAddedImage(copyOfTheOriginal, {
+				id: 'img-from-a-deleted-incarnation',
+				downscaled: 'data:image/png;base64,AA==',
+				originalHash: 'sha256:ghost',
+			});
+
+			await expect(store.put(fromTheDeadIncarnation)).resolves.toMatchObject({
+				images: fromTheDeadIncarnation.images,
+			});
+			// Read back rather than trusting what `put` resolved with: the image is on the record
+			// storage actually holds, which is the record the second brand's owner reads.
+			expect((await read(store, original.id)).images.map((image) => image.id)).toEqual([
+				'img-from-a-deleted-incarnation',
+			]);
 		});
 
 		// Two commits issued without awaiting between them, which is what a double click or two

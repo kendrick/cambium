@@ -124,6 +124,8 @@ export async function createIndexedDbRecordStore(): Promise<RecordStore> {
 						validated.id,
 						stored.versions.length,
 						validated.versions.length,
+						stored.revision,
+						validated.revision,
 					);
 				}
 
