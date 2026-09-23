@@ -414,7 +414,7 @@ describe('toGlobalsCss', () => {
 	});
 
 	/*
-	 * The six names #13's two reviews showed breaking a Tailwind consumer, every one of which passed
+	 * The names #13's two reviews showed breaking a Tailwind consumer, every one of which passed
 	 * the old shape check. `stylesheet.test.ts` compiles what each would have done; this is the
 	 * refusal, which has to name both the token and the category it arrived in.
 	 */

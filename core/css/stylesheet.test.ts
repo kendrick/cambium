@@ -368,7 +368,7 @@ describe('toStylesheet', () => {
 	});
 
 	/*
-	 * The six names #13's reviews showed breaking a consumer, each run the way the cases above run:
+	 * The names #13's reviews showed breaking a consumer, each run the way the cases above run:
 	 * whatever the adapter hands back is compiled first, and the utility the name would have broken
 	 * has to come out reading Cambium's property. So with the whitelist gone, each case fails on
 	 * what Tailwind made of the stylesheet, not only on a missing refusal.

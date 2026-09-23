@@ -78,8 +78,8 @@ const FALLBACK_TYPOGRAPHY = typeScale(null).values;
  * input, so the fallback call names every step a seeded call would.
  *
  * A whitelist because the thing that breaks a name is Tailwind's utility resolution, and a check on
- * a name's shape can't see that. #13's reviews found six names that pass any reasonable shape
- * check and still break the consumer: a semantic `base` turns `.text-base` into a colour and drops
+ * a name's shape can't see that. #13's reviews found names that pass any reasonable shape check
+ * and still break the consumer, in six ways: a semantic `base` turns `.text-base` into a colour and drops
  * the size, a weight `mono` loses to `font-mono`'s font family, a semantic `sm` does the same to
  * `.text-sm`, `inherit` and `transparent` compile `bg-*` to the CSS keyword, `center` and `fixed`
  * hand `bg-*` a background position or attachment as well as a colour, and `tw-shadow` overwrites
@@ -363,8 +363,9 @@ export function toGlobalsCss(tokenSet: TokenSet, naming: CssNaming): string {
  * Tailwind keeps the last of two same-named theme entries and a browser the last of two same-named
  * declarations, so a repeat means one token loses its utility with nothing logged. The generator's
  * vocabulary can't produce one today: {@link requireGeneratedVocabulary} admits no semantic name
- * like `brand-500` that would land beside ramp step 7 on `--color-brand-500`. This is the backstop
- * for the day that vocabulary grows.
+ * like `brand-500` that would land beside ramp step 7 on `--color-brand-500`. A repeat can still
+ * arrive without the vocabulary changing, from a code change such as a second unnumbered ramp
+ * alias beside `BRAND_RAMP`, and this is what catches it.
  *
  * Names aren't checked here. Token names are checked against the generator's vocabulary before any
  * block is built, and the prefix is checked when `cssNaming` resolves it.

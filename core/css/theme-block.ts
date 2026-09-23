@@ -120,7 +120,9 @@ export function toThemeBlock(tokenSet: TokenSet, naming: CssNaming): string {
  *
  * Only colour and shadow, because only they vary by scheme; radius, type and tracking are declared
  * on `:root` alone and have nothing to swap. The entries come from the same `colorEntries` and
- * `shadowEntries` the theme block calls, so the two lists can't drift apart.
+ * `shadowEntries` the theme block calls, so a change to how an entry is named reaches both. The two
+ * call sites still list those helpers separately, and a test holds this layer's declarations equal
+ * to the theme block's colour and shadow entries.
  */
 export function toDarkThemeLayer(tokenSet: TokenSet, naming: CssNaming): string {
 	requireGeneratedVocabulary(tokenSet);

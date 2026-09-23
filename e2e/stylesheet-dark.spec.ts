@@ -17,9 +17,16 @@ import { expect, test } from './fixtures';
  * gets beside them, so "differs" can't pass on a third colour that is neither scheme's.
  *
  * The stylesheet comes straight off `toStylesheet(PINNED_SET)`, compiled by the `@tailwindcss/postcss`
- * this repo pins, and goes in through `setContent`. Nothing here touches the built app, which doesn't
- * use this adapter yet.
+ * this repo pins, and goes in through `setContent`, because no page of the app uses this adapter
+ * yet. It still runs under `./fixtures`, whose IndexedDB cleanup visits the served origin, so like
+ * every spec here it needs `pnpm build` first.
  */
+
+/**
+ * What `getComputedStyle` reports when a utility painted nothing. A class that failed to compile,
+ * or a `var()` that went invalid, lands here rather than on an empty string.
+ */
+const UNPAINTED = { backgroundColor: 'rgba(0, 0, 0, 0)', boxShadow: 'none' } as const;
 
 const CASES = [
 	{ id: 'arbitrary-ramp', className: 'bg-[var(--color-brand-500)]', property: 'backgroundColor' },
@@ -79,8 +86,8 @@ test('a nested .dark repaints arbitrary theme-entry values and named utilities a
 		CASES.map(({ id, property }) => ({ id, property })),
 	);
 
-	for (const { id } of CASES) {
-		expect.soft(computed[`light-${id}`], `${id} outside .dark`).not.toBe('');
+	for (const { id, property } of CASES) {
+		expect.soft(computed[`light-${id}`], `${id} outside .dark`).not.toBe(UNPAINTED[property]);
 		expect
 			.soft(computed[`dark-${id}`], `${id} inside .dark vs outside`)
 			.not.toBe(computed[`light-${id}`]);
