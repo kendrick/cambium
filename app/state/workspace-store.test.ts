@@ -310,6 +310,23 @@ describe('the workspace store', () => {
 		expect(store.getState().activeOrdinal).toBe(2);
 	});
 
+	// `BrandSeedSchema` has two spellings of one hue, and the workspace has to hold storage's
+	// spelling, not its own.
+	it('adopts the record storage holds, hue and all, rather than the one it proposed', async () => {
+		const { store, recordStore } = openWorkspace();
+
+		store.getState().editSeed({ keyColors: seedWith(360).keyColors });
+
+		const returned = await store.getState().commit(PROVENANCE);
+		const stored = await recordStore.get(returned.id);
+
+		expect(store.getState().record).toEqual(stored);
+		expect(returned).toEqual(stored);
+		// Asserted directly, not just through the equality above: if `HueSchema` ever stopped
+		// canonicalising, both sides would still hold 360 and the equality would pass vacuously.
+		expect(store.getState().record?.versions[1]?.seed?.keyColors?.[0]?.oklch[2]).toBe(0);
+	});
+
 	it('serialises overlapping commits so the second builds on the first', async () => {
 		const { store, recordStore } = openWorkspace();
 
