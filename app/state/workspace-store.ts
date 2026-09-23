@@ -89,27 +89,25 @@ export class CommitAbandonedError extends Error {
  * A workspace can fall behind its own writes. Adoption is skipped whenever the workspace moved
  * while a write was in flight, so reopening a record from an object held since before that write
  * leaves the store showing fewer versions than storage holds. Appending from there recounts an
- * ordinal that already exists, and `put` replaces the whole record, so the finished commit would
- * disappear without anything failing. That is the lost update #67 describes across tabs, except
- * inside one store, where the store knows enough to catch it.
+ * ordinal that already exists, from a revision storage has already moved past.
  *
- * It catches exactly the records this store wrote past, by object identity, so a record deleted and
- * recreated under the same id is unaffected.
+ * `RecordStore.put` would refuse that write with `StaleRecordWriteError`, so nothing is lost either
+ * way. This check runs first and refuses it without a round trip, for exactly the records this
+ * store wrote past, by object identity, so a record deleted and recreated under the same id is
+ * unaffected.
  *
- * It narrows the lost update rather than closing it. Every `RecordStore.get` returns a fresh object
- * graph, so a stale copy of a record loaded through a separate `get` is a different object holding
- * the same old history, and nothing here recognises it. One tab is enough to reach that. Closing it
- * needs a staleness check where the record actually lives, which is the same conclusion the queue
- * reaches about two tabs a few screens down, and for the same reason: the only authority on what is
- * stored is storage. #67 owns it.
+ * Storage is what catches the rest. Every `RecordStore.get` returns a fresh object graph, so a stale
+ * copy loaded through a separate `get` is a different object holding the same old history and
+ * nothing here recognises it. It still carries the revision it was read at, so `put` refuses it,
+ * and refuses a stale commit from a second tab on the same grounds.
  *
  * Typed for the same reason as `RecordStampedAheadError`: the caller has a specific recovery, which
  * is to reload the record and commit again, and it can only choose it if it can tell this apart
  * from the misuse the other guards catch. `recordId` says what to reload, and is all this carries.
  *
  * It deliberately reports no version count. Anything this store could offer would be what it wrote
- * rather than what storage holds, and by the gap above it would be right only when the workspace is
- * exactly one write behind and quietly approximate otherwise, which a caller cannot tell apart. The
+ * rather than what storage holds, and another tab may have written since, so it would be right only
+ * when nothing else wrote and quietly approximate otherwise, which a caller cannot tell apart. The
  * reload is what learns the truth, from the only place it exists.
  */
 export class StaleWorkspaceError extends Error {
@@ -118,7 +116,7 @@ export class StaleWorkspaceError extends Error {
 
 	constructor(recordId: string, options?: { cause?: unknown }) {
 		super(
-			`this workspace is behind a write already made to record ${recordId}, so committing would drop one`,
+			`this workspace is behind a write already made to record ${recordId}, so reload it and commit again`,
 			options,
 		);
 		this.name = 'StaleWorkspaceError';
@@ -145,15 +143,16 @@ type CommitRequest = {
 
 export type WorkspaceState = {
 	/**
-	 * The record as this store last handed it to storage. Never holds uncommitted edits.
+	 * The record as storage last reported it. Never holds uncommitted edits.
 	 *
-	 * Not necessarily byte-identical to what storage holds. A `RecordStore` parses on the way in, and
-	 * `BrandSeedSchema` canonicalises values that have two spellings, so a hue committed as 360 is
-	 * stored as 0 and stays 360 here until the record is reopened. The two describe the same colour
-	 * and derive the same tokens, so nothing downstream can tell; making them identical would mean
-	 * either parsing here, which puts zod back in every client chunk that touches this store, or
-	 * reading the record back after every write. `RecordStore.put` returning what it stored would
-	 * settle it at the seam that already knows.
+	 * After a commit the workspace adopts, this is the record `RecordStore.put` resolved with, so it
+	 * matches what storage holds. The record this store proposed would not: `put` stamps the revision,
+	 * and `BrandSeedSchema` canonicalises values that have two spellings, so a hue committed as 360
+	 * comes back as 0 and is held here as 0. Adopting what `put` returns keeps zod out of every client
+	 * chunk that touches this store and saves a `get` after every write.
+	 *
+	 * `open` takes whatever record the caller hands it, so what this holds before the first commit
+	 * is only as current as that record.
 	 */
 	record: BrandRecord | null;
 	/**
@@ -485,10 +484,12 @@ export function createWorkspaceStore({
 		 * is enough to reach that, and the loss is silent. Queueing makes the second commit read what
 		 * the first one wrote.
 		 *
-		 * It serialises this store and nothing else. Two tabs hold two stores and two queues, and
-		 * `RecordStore.put` replaces a whole record with no compare-and-swap, so the same collision
-		 * is still reachable across tabs, and through a stale copy re-read inside one tab. Closing
-		 * either needs optimistic concurrency at the `RecordStore` seam, which is #67.
+		 * It serialises this store and nothing else. Two tabs hold two stores and two queues, and a
+		 * stale copy re-read inside one tab sits outside this queue's knowledge too. Neither loses a
+		 * version: `RecordStore.put` refuses a write whose revision is not the one storage holds, so
+		 * the second of two colliding commits rejects with `StaleRecordWriteError` instead of
+		 * replacing the first. The queue is what keeps a double-click inside one store from reaching
+		 * that refusal at all.
 		 */
 		let queue: Promise<unknown> = Promise.resolve();
 
@@ -506,7 +507,7 @@ export function createWorkspaceStore({
 		 *
 		 * Object identity is the most this store can key on, and it is not enough on its own. A record
 		 * re-read through `RecordStore.get` arrives as a new object, so a stale copy fetched that way
-		 * slips past. See `StaleWorkspaceError` and #67.
+		 * slips past this map and is refused by `RecordStore.put` instead. See `StaleWorkspaceError`.
 		 */
 		const superseded = new WeakMap<BrandRecord, BrandRecord>();
 

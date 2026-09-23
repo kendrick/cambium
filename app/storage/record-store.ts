@@ -127,6 +127,14 @@ export type RecordStore = {
  * not identify a lineage. A caller carries the revision it read and does not compute one; that is a
  * contract this function cannot enforce.
  *
+ * An insert reaches the same limit with no increment at all. A new record carries `FIRST_REVISION`,
+ * and `put` has nothing else to tell an insert from a commit by. Send a new record under an id storage
+ * holds at `FIRST_REVISION`, with a history the stored one continues, and `put` reads it as a copy
+ * read at that revision and commits it over the stored record. Telling the two apart needs a second input
+ * to `put`, which #67's non-goals rule out. It is dormant because the one product path that inserts,
+ * `save` in `components/landing/upload-form.tsx`, mints the id with `crypto.randomUUID()` inside the
+ * call and keeps nothing, so no insert reuses an id. The contract suite pins it as a known limit.
+ *
  * The history comparison does a job the revision cannot, which is why #67's rule stays on top of
  * it. A revision that agrees says nothing about whether the incoming history is well formed, and
  * comparing counts is necessary and not sufficient. A writer that read `[v1]` and committed twice

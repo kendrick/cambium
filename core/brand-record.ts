@@ -123,7 +123,8 @@ export const BrandVersionSchema = z.strictObject({
  *
  * `revision` starts at `FIRST_REVISION`, matching `ordinal` above rather than counting from 0, so
  * the third commit is revision 3. Nothing here ties it to `versions.length`, because a record can
- * gain commits and no version at all. The schema bounds it to a positive integer and no further:
+ * gain commits and no version at all. The schema bounds it to a positive safe integer, since Zod's
+ * `.int()` refuses anything past `Number.MAX_SAFE_INTEGER`, and checks nothing else about it:
  * whether a given revision is the one a write may be built on is a question only storage can answer,
  * and `RecordStore.put` holds that check.
  *

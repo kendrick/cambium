@@ -32,7 +32,7 @@ function makeRecord(overrides: Partial<BrandRecord> = {}): BrandRecord {
 	return {
 		id: crypto.randomUUID(),
 		schemaVersion: SCHEMA_VERSION,
-		revision: 1,
+		revision: FIRST_REVISION,
 		images: [],
 		versions: [makeVersion()],
 		...overrides,
@@ -322,7 +322,8 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 				}),
 			);
 
-			// The loser advances its own revision, which is what a caller of the pre-#78 seam did.
+			// The loser advances its own revision, as `app/state/workspace-store.ts` did on this branch
+			// before it began carrying the revision it read.
 			const fabricated = {
 				...withAddedImage(readByLoser, {
 					id: 'img-from-the-loser',
@@ -337,6 +338,59 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			});
 			expect((await read(store, record.id)).images.map((image) => image.id)).toEqual([
 				'img-from-the-loser',
+			]);
+		});
+
+		/**
+		 * A limit of this rule rather than a guarantee, pinned so it cannot move unnoticed.
+		 *
+		 * A new record carries `FIRST_REVISION`, which is also what a copy read straight after an
+		 * insert carries, and `put` takes nothing else that could tell the two apart. So a second
+		 * insert under an id storage holds at `FIRST_REVISION`, bringing a history the stored one
+		 * continues, is taken as a commit: it lands at the next revision and replaces the first
+		 * insert's images, with no error.
+		 *
+		 * The self-computed revision above is the same limit reached by a caller that increments;
+		 * this one needs no increment at all. It stays dormant while every insert mints a fresh id,
+		 * which `components/landing/upload-form.tsx` does. Delete this test if `put` gains a way to
+		 * tell an insert from a commit, and assert the refusal in its place.
+		 */
+		it('takes a second insert under an id stored at the first revision as a commit', async () => {
+			const id = crypto.randomUUID();
+			const versions = [makeVersion()];
+
+			await store.put(
+				makeRecord({
+					id,
+					versions,
+					images: [
+						{
+							id: 'img-from-the-first-insert',
+							downscaled: 'data:image/png;base64,AA==',
+							originalHash: 'sha256:a',
+						},
+					],
+				}),
+			);
+
+			const secondInsert = makeRecord({
+				id,
+				versions,
+				images: [
+					{
+						id: 'img-from-the-second-insert',
+						downscaled: 'data:image/png;base64,BB==',
+						originalHash: 'sha256:b',
+					},
+				],
+			});
+
+			await expect(store.put(secondInsert)).resolves.toMatchObject({
+				revision: FIRST_REVISION + 1,
+				images: secondInsert.images,
+			});
+			expect((await read(store, id)).images.map((image) => image.id)).toEqual([
+				'img-from-the-second-insert',
 			]);
 		});
 

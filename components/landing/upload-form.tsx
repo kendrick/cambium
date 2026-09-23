@@ -284,13 +284,13 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 	/**
 	 * Writes one record, once.
 	 *
-	 * `RecordStore.put` rejects a write that is not strictly ahead of what is stored, so putting the
-	 * same record twice fails and the recovery is delete-then-put. This route never needs that
-	 * recovery, and the reason is worth stating because it is the only thing holding: the id is
-	 * minted inside this function and nothing keeps it afterwards, so every save is a record storage
-	 * has not seen and a retry after a failure is a new record rather than a second attempt at the
-	 * old one. Hoisting that `crypto.randomUUID()` out to component state would quietly turn a retry
-	 * into a rejected re-put.
+	 * The id is minted inside this function and nothing keeps it afterwards, so every save is a record
+	 * storage has not seen, and a retry after a failure is a new record rather than a second attempt
+	 * at the old one. That is the only thing keeping this route safe. Hoisting that
+	 * `crypto.randomUUID()` out to component state would turn a retry into a second insert under an id
+	 * storage already holds, and `RecordStore.put` cannot tell that from a commit built on the first
+	 * save: it takes the write and stores it over whatever the first save left. `wasBuiltOnStored`
+	 * says why.
 	 *
 	 * The other two ways in are closed above and below: `saving` stops a double submit reaching this
 	 * twice, and `onSaved` sits outside the catch so a write that landed can never be reported as one
@@ -310,7 +310,7 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 			// the 24 kB of first-load headroom ADR-0002 reserves. `pnpm test:bundle` is what actually
 			// holds this; the comment only says why.
 			const [
-				{ SCHEMA_VERSION },
+				{ SCHEMA_VERSION, FIRST_REVISION },
 				{ createIndexedDbRecordStore, closeIndexedDbRecordStore },
 				storage,
 			] = await Promise.all([
@@ -322,7 +322,7 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 			const record: BrandRecord = {
 				id: crypto.randomUUID(),
 				schemaVersion: SCHEMA_VERSION,
-				revision: 1,
+				revision: FIRST_REVISION,
 				images: picked.map((image) => image.prepared.image),
 				// No versions yet. Producing the first one needs a key and a model call, which is #23.
 				versions: [],
@@ -331,9 +331,8 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 			const store = await createIndexedDbRecordStore();
 
 			try {
-				// The resolved value is ignored rather than assumed absent: #67 changes `put` to resolve
-				// with the record as stored. Nothing here writes twice, so there is nothing to carry
-				// forward.
+				// The resolved record is ignored. Nothing here writes twice, so there is no revision to
+				// carry forward.
 				await store.put(record);
 				savedId = record.id;
 			} finally {
