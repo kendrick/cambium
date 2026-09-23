@@ -28,6 +28,7 @@ import {
 	OUT_OF_BOUNDS,
 	PINNED_SET,
 	propertyNames,
+	setWithForeignPayload,
 	setWithName,
 	valueOf,
 	VAR_REFERENCE,
@@ -246,6 +247,27 @@ describe('toThemeBlock', () => {
 		expect(toThemeBlock(frozen, cssNaming())).toBe(toThemeBlock(PINNED_SET, cssNaming()));
 		expect(PINNED_SET).toEqual(before);
 	});
+
+	it.each([
+		{ adapter: 'toThemeBlock', run: toThemeBlock },
+		{ adapter: 'toDarkThemeLayer', run: toDarkThemeLayer },
+	])(
+		'$adapter leaves a foreign extension payload on the argument mutable and unchanged',
+		({ run }) => {
+			const payload = { tags: ['a'] };
+			const set = setWithForeignPayload(payload);
+			const before = structuredClone(set);
+
+			run(set, cssNaming());
+
+			// The parse hands this payload through by reference, so freezing or writing the parsed copy
+			// would reach the caller's object.
+			expect(Object.isFrozen(payload)).toBe(false);
+			expect(set).toEqual(before);
+			payload.tags.push('x');
+			expect(payload.tags).toEqual(['a', 'x']);
+		},
+	);
 
 	// The theme block prints no value, only `var()` references, so none of these would reach its
 	// output. It refuses them anyway: called on its own it is half a stylesheet, and a set the other

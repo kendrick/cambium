@@ -1,6 +1,6 @@
 import type { TokenSet } from '../token-set';
-import { type CssNamingOptions, cssNaming, emitGlobalsCss, parseTokenSet } from './globals-css';
-import { emitDarkThemeLayer, emitThemeBlock } from './theme-block';
+import { type CssNamingOptions, cssNaming, toGlobalsCss } from './globals-css';
+import { toDarkThemeLayer, toThemeBlock } from './theme-block';
 
 /**
  * The declaration that makes `.dark` mean anything.
@@ -57,9 +57,12 @@ const DARK_VARIANT = '@custom-variant dark (&:is(.dark *));';
  * is the file that already imports Tailwind; emitting one here would put the consuming project's
  * import somewhere the consumer did not write it.
  *
- * The set is parsed once, by `parseTokenSet` (`core/css/globals-css.ts`), and the parsed copy goes to
- * all three halves through their `emit*` forms. Calling the three public halves instead would parse
- * the same set three times over.
+ * Each of the three halves parses the set itself through `parseTokenSet` (`core/css/globals-css.ts`),
+ * so this parses it three times. A parse of a generated set costs about 0.3 ms, and in exchange each
+ * public adapter checks its own argument. Parsing once would need halves that take a parsed set
+ * on trust, and nothing here makes that trust safe. A type brand can be forged by spreading a parsed
+ * set. Deep-freezing the parsed copy also freezes a caller's `$extensions` payloads, because the
+ * parse passes those through by reference.
  *
  * Pure in the sense `serializeDtcg` (`core/dtcg/serialize.ts`) states the contract: same token set
  * in, same bytes out, key order included as above. Nothing here reads the DOM, the network,
@@ -67,7 +70,6 @@ const DARK_VARIANT = '@custom-variant dark (&:is(.dark *));';
  */
 export function toStylesheet(tokenSet: TokenSet, options: CssNamingOptions = {}): string {
 	const naming = cssNaming(options);
-	const set = parseTokenSet(tokenSet);
 
-	return `${DARK_VARIANT}\n\n${emitThemeBlock(set, naming)}\n${emitGlobalsCss(set, naming)}\n${emitDarkThemeLayer(set, naming)}`;
+	return `${DARK_VARIANT}\n\n${toThemeBlock(tokenSet, naming)}\n${toGlobalsCss(tokenSet, naming)}\n${toDarkThemeLayer(tokenSet, naming)}`;
 }

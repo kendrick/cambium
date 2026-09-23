@@ -33,6 +33,7 @@ import {
 	GENERATED_SET,
 	OUT_OF_BOUNDS,
 	PINNED_SET,
+	setWithForeignPayload,
 	setWithName,
 	setWithSemanticToken,
 	VAR_REFERENCE,
@@ -561,6 +562,29 @@ describe('toStylesheet', () => {
 		expect(() => toStylesheet(frozen)).not.toThrow();
 		expect(toStylesheet(frozen)).toBe(toStylesheet(PINNED_SET));
 		expect(PINNED_SET).toEqual(before);
+	});
+
+	it('leaves a foreign $extensions payload on the argument mutable and unchanged', () => {
+		const payload = { tags: ['a'] };
+		const set = setWithForeignPayload(payload);
+		const before = structuredClone(set);
+
+		toStylesheet(set);
+
+		// The parse hands this payload through by reference, so freezing or writing the parsed copy
+		// would reach the caller's object.
+		expect(Object.isFrozen(payload)).toBe(false);
+		expect(set).toEqual(before);
+		payload.tags.push('x');
+		expect(payload.tags).toEqual(['a', 'x']);
+	});
+
+	it('emits a set whose foreign extension holds bytes', () => {
+		// The schema accepts any value under a foreign namespace, typed arrays included, and a
+		// non-empty one can't be frozen. No extension reaches the CSS, so the bytes match the plain set.
+		const set = setWithForeignPayload({ blob: new Uint8Array([1, 2, 3]) });
+
+		expect(toStylesheet(set)).toBe(toStylesheet(PINNED_SET));
 	});
 
 	it.each(OUT_OF_BOUNDS)('refuses a $bound through the schema, naming $path', ({ path, set }) => {

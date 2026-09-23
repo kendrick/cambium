@@ -364,6 +364,21 @@ export const HUE_360_SET: TokenSet = withScalar((set) => {
 	set.schemes.light.primitives.brand![0]!.h = 360;
 });
 
+/**
+ * `PINNED_SET` with `payload` under a foreign vendor's namespace on the `lg` radius. The set holds
+ * `payload` itself, not a copy.
+ *
+ * `TokenExtensionsSchema` is a loose object, so the parse also passes an unknown namespace through as
+ * the caller's own object. An adapter that froze or wrote to its parsed copy would reach the
+ * caller's payload, and the purity tests need that reach to be possible. Radius is top-level only, so
+ * no mirror check needs a second copy of the payload.
+ */
+export function setWithForeignPayload(payload: object): TokenSet {
+	return withScalar((set) => {
+		set.radius.values.lg!.$extensions['com.example'] = payload;
+	});
+}
+
 function withScalar(edit: (set: TokenSet) => void): TokenSet {
 	const set = structuredClone(PINNED_SET);
 	edit(set);

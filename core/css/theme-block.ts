@@ -10,7 +10,6 @@ import {
 	BRAND_RAMP,
 	type CssNaming,
 	declarationBlock,
-	type ParsedTokenSet,
 	parseTokenSet,
 	requireGeneratedVocabulary,
 } from './globals-css';
@@ -89,20 +88,15 @@ const DARK_THEME_SELECTOR = ':where(.dark)';
  *
  * The set is parsed first, through `parseTokenSet` (`core/css/globals-css.ts`), though no value
  * reaches this block: every entry is a `var()`. Called alone it is still half a stylesheet, and a set
- * the other half refuses for a negative radius shouldn't get this half out. `emitThemeBlock` skips
- * the parse, for `toStylesheet`, which has already done it.
+ * the other half refuses for a negative radius shouldn't get this half out.
  *
  * Pure in the sense `serializeDtcg` (`core/dtcg/serialize.ts`) states the contract: same token set
  * in, same bytes out, key order included (`toStylesheet` in `core/css/stylesheet.ts` says why).
  * Nothing here reads the DOM, the network, storage or module state, and the token set is read and
  * never written.
  */
-export function toThemeBlock(tokenSet: TokenSet, naming: CssNaming): string {
-	return emitThemeBlock(parseTokenSet(tokenSet), naming);
-}
-
-/** {@link toThemeBlock} on a set `parseTokenSet` has already parsed. */
-export function emitThemeBlock(tokenSet: ParsedTokenSet, naming: CssNaming): string {
+export function toThemeBlock(argument: TokenSet, naming: CssNaming): string {
+	const tokenSet = parseTokenSet(argument);
 	requireGeneratedVocabulary(tokenSet);
 
 	const entries: ThemeEntry[] = [
@@ -151,14 +145,10 @@ export function emitThemeBlock(tokenSet: ParsedTokenSet, naming: CssNaming): str
  * the theme block also calls, and a test holds this layer's declarations equal to the theme
  * block's colour and shadow entries.
  *
- * Parsed first, like `toThemeBlock` and for the same reason; `emitDarkThemeLayer` skips the parse.
+ * Parsed first, like `toThemeBlock` and for the same reason.
  */
-export function toDarkThemeLayer(tokenSet: TokenSet, naming: CssNaming): string {
-	return emitDarkThemeLayer(parseTokenSet(tokenSet), naming);
-}
-
-/** {@link toDarkThemeLayer} on a set `parseTokenSet` has already parsed. */
-export function emitDarkThemeLayer(tokenSet: ParsedTokenSet, naming: CssNaming): string {
+export function toDarkThemeLayer(argument: TokenSet, naming: CssNaming): string {
+	const tokenSet = parseTokenSet(argument);
 	requireGeneratedVocabulary(tokenSet);
 
 	const entries = schemeDependentEntries(tokenSet, naming);

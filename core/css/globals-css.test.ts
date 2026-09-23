@@ -47,6 +47,7 @@ import {
 	ramp,
 	setWithName,
 	SEMANTIC,
+	setWithForeignPayload,
 	sorted,
 	valueOf,
 	zodIssuePaths,
@@ -54,9 +55,7 @@ import {
 import {
 	cssNaming,
 	declarationBlock,
-	emitGlobalsCss,
 	GENERATED_VOCABULARY,
-	parseTokenSet,
 	toGlobalsCss,
 	type VocabularyCategory,
 } from './globals-css';
@@ -137,20 +136,6 @@ const EXPECTED_DARK_PROPERTIES = sorted([
 	...EXPECTED_RAMP_PROPERTIES,
 	...EXPECTED_SHADOW_PROPERTIES,
 ]);
-
-describe('parseTokenSet', () => {
-	it('hands back a copy nothing can change after the parse vouched for it', () => {
-		// The `emit*` fast path trusts the brand instead of parsing again. A mutable copy would let a
-		// caller parse, then write a value the schema refuses, and still reach the stylesheet with it.
-		const parsed = parseTokenSet(PINNED_SET);
-		const [step] = Object.keys(parsed.radius.values);
-
-		expect(() => {
-			(parsed.radius.values[step] as { value: number }).value = -4;
-		}).toThrow(TypeError);
-		expect(emitGlobalsCss(parsed, cssNaming())).not.toContain('-4rem');
-	});
-});
 
 describe('toGlobalsCss', () => {
 	it('parses as valid CSS holding exactly the light and dark selectors', () => {
@@ -517,6 +502,21 @@ describe('toGlobalsCss', () => {
 		expect(() => toGlobalsCss(frozen, cssNaming())).not.toThrow();
 		expect(toGlobalsCss(frozen, cssNaming())).toBe(toGlobalsCss(PINNED_SET, cssNaming()));
 		expect(PINNED_SET).toEqual(before);
+	});
+
+	it('leaves a foreign $extensions payload on the argument mutable and unchanged', () => {
+		const payload = { tags: ['a'] };
+		const set = setWithForeignPayload(payload);
+		const before = structuredClone(set);
+
+		toGlobalsCss(set, cssNaming());
+
+		// The parse hands this payload through by reference, so freezing or writing the parsed copy
+		// would reach the caller's object.
+		expect(Object.isFrozen(payload)).toBe(false);
+		expect(set).toEqual(before);
+		payload.tags.push('x');
+		expect(payload.tags).toEqual(['a', 'x']);
 	});
 
 	it.each(OUT_OF_BOUNDS)('refuses a $bound through the schema, naming $path', ({ path, set }) => {

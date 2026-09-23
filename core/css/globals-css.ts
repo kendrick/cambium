@@ -111,8 +111,8 @@ export type VocabularyCategory = keyof typeof GENERATED_VOCABULARY;
 
 /**
  * Refuses a token set carrying any name outside {@link GENERATED_VOCABULARY}, naming each one and
- * its category. `emitGlobalsCss`, `emitThemeBlock` and `emitDarkThemeLayer` each call it on the
- * parsed set before building anything, so no half can emit a name another would refuse.
+ * its category. `toGlobalsCss`, `toThemeBlock` and `toDarkThemeLayer` each call it on the parsed
+ * set before building anything, so no half can emit a name another would refuse.
  *
  * Both schemes are read, because a name only one of them carries would otherwise reach the mirror
  * check and be reported as a mismatch instead of as the foreign name it is.
@@ -183,17 +183,6 @@ const TAILWIND_NAMESPACES = [
 	'tracking',
 ] as const;
 
-declare const PARSED: unique symbol;
-
-/**
- * A token set `TokenSetSchema` has accepted. Only {@link parseTokenSet} hands one out, frozen, so an
- * `emit*` function taking one gets a set nobody can have changed since the parse. The brand is a
- * compile-time check: a cast gets past it, and the `emit*` functions trust it rather than parse
- * again, because they exist so `toStylesheet` parses once. Anything outside `core/css/` should call
- * the `to*` adapters, which parse every time.
- */
-export type ParsedTokenSet = TokenSet & { readonly [PARSED]: true };
-
 /**
  * Parses a token set before an adapter reads it, and returns the parsed copy.
  *
@@ -204,21 +193,17 @@ export type ParsedTokenSet = TokenSet & { readonly [PARSED]: true };
  * parses, and `resolveScheme` checks aliases and no scalar bound, so nothing upstream stands in for
  * this.
  *
- * The four `to*` adapters read the copy this returns, never their argument. The schema folds a hue
- * of 360 to 0, and reading the parsed copy is what makes the CSS print the 0 the DTCG export prints.
- * The argument is never written: Zod builds a new object, and that object is frozen before it's
- * returned, so a value the parse accepted can't be swapped for one it would refuse.
+ * The three public adapters each call this on their own argument and read only the copy it returns.
+ * The schema folds a hue of 360 to 0, and reading the parsed copy is what makes the CSS print the 0
+ * the DTCG export prints. `toStylesheet` calls those three adapters, so it parses the set three
+ * times, and `core/css/stylesheet.ts` says why.
+ *
+ * The copy isn't frozen. `TokenExtensionsSchema` is a loose object, so a foreign `$extensions`
+ * payload comes through the parse as the caller's own object, and freezing the copy would freeze
+ * theirs too.
  */
-export function parseTokenSet(tokenSet: TokenSet): ParsedTokenSet {
-	return freezeDeep(TokenSetSchema.parse(tokenSet)) as ParsedTokenSet;
-}
-
-function freezeDeep<T>(value: T): T {
-	if (value !== null && typeof value === 'object') {
-		for (const held of Object.values(value)) freezeDeep(held);
-		Object.freeze(value);
-	}
-	return value;
+export function parseTokenSet(tokenSet: TokenSet): TokenSet {
+	return TokenSetSchema.parse(tokenSet);
 }
 
 /** Options controlling how {@link cssNaming} names the properties an adapter writes. */
@@ -349,20 +334,15 @@ export type CssDeclaration = { property: string; value: string };
  *
  * The set goes through {@link parseTokenSet} before anything reads it, the same parse
  * `serializeDtcg` opens with, so a negative radius or blur is a `ZodError` naming its path rather
- * than a length the consumer drops. {@link emitGlobalsCss} is the same adapter minus the parse, for
- * `toStylesheet`, which parses once and hands the one parsed set to all three halves.
+ * than a length the consumer drops. Everything below reads the parsed copy, never the argument.
  *
  * Scope is the two scheme blocks. The `@theme inline` block that maps these properties onto
  * Tailwind's namespaces is `core/css/theme-block.ts`, and the `@custom-variant dark` line that
  * makes `.dark` mean anything belongs to `toStylesheet` (`core/css/stylesheet.ts`), which assembles
  * the whole file from the two halves and is what a caller should reach for.
  */
-export function toGlobalsCss(tokenSet: TokenSet, naming: CssNaming): string {
-	return emitGlobalsCss(parseTokenSet(tokenSet), naming);
-}
-
-/** {@link toGlobalsCss} on a set {@link parseTokenSet} has already parsed. */
-export function emitGlobalsCss(tokenSet: ParsedTokenSet, naming: CssNaming): string {
+export function toGlobalsCss(argument: TokenSet, naming: CssNaming): string {
+	const tokenSet = parseTokenSet(argument);
 	requireGeneratedVocabulary(tokenSet);
 
 	const light = resolveScheme(tokenSet.schemes.light);
