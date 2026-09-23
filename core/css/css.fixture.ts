@@ -1,9 +1,14 @@
 import { type Declaration, parse } from 'postcss';
 
+import { BrandSeedSchema } from '../brand-seed';
+import { BALANCED } from '../interpretation';
+import { createOklchScaleEngine } from '../oklch-scale-engine';
 import { derived } from '../provenance';
+import { buildTokenSet } from '../semantic-layer';
 import { SEMANTIC_MAP } from '../semantic-map';
 import { type Ramp, type SemanticEntry, type TokenSet, TokenSetSchema } from '../token-set';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from '../token-set.fixture';
+import type { VocabularyCategory } from './globals-css';
 
 /**
  * What the three CSS adapter suites share: one pinned token set built to make a declaration name
@@ -114,40 +119,109 @@ export const PINNED_SET: TokenSet = TokenSetSchema.parse({
 });
 
 /**
- * `PINNED_SET` carrying one extra semantic token, named by the caller.
+ * `PINNED_SET` carrying one extra name in one category, named by the caller.
  *
- * `SemanticLayerSchema` is a record keyed on any non-empty string, so a token name is whatever the
- * layer that built the set put there. That makes a name landing inside a Tailwind namespace a
- * schema-legal input rather than a hypothetical, which is what the collision checks need.
+ * Every record these categories live in keys on any non-empty string, so a name the generator never
+ * emits is a schema-legal input rather than a hypothetical. That is what the vocabulary checks need:
+ * the set parses, and only the adapters stand between the name and the consumer. Per-scheme
+ * categories get the name in both schemes, so the refusal is about the name and not a mismatch
+ * between light and dark.
  */
-export function setWithSemanticToken(token: string): TokenSet {
-	const semantic = { ...SEMANTIC, [token]: { alias: 'neutral.5', $extensions: EXTENSIONS } };
-	const light = { ...LIGHT_SCHEME, semantic };
-	const dark = { ...DARK_SCHEME, semantic };
+export function setWithName(category: VocabularyCategory, name: string): TokenSet {
+	const light = structuredClone(LIGHT_SCHEME) as unknown as LooseScheme;
+	const dark = structuredClone(DARK_SCHEME) as unknown as LooseScheme;
+	const nonColor = structuredClone(NON_COLOR_FIXTURE) as unknown as LooseNonColor;
+	const { typography } = NON_COLOR_FIXTURE;
 
-	return TokenSetSchema.parse({ ...light, schemes: { light, dark }, ...NON_COLOR_FIXTURE });
+	switch (category) {
+		case 'semantic token':
+			light.semantic[name] = { alias: 'neutral.5', $extensions: EXTENSIONS };
+			dark.semantic[name] = { alias: 'neutral.5', $extensions: EXTENSIONS };
+			break;
+		case 'ramp':
+			light.primitives[name] = ramp(90, 0.02, 0);
+			dark.primitives[name] = ramp(90, 0.03, 50);
+			break;
+		case 'shadow step':
+			light.shadow.values[name] = SHADOW_FIXTURE.values.md;
+			dark.shadow.values[name] = DARK_SHADOW_FIXTURE.values.md;
+			break;
+		case 'radius step':
+			nonColor.radius.values[name] = NON_COLOR_FIXTURE.radius.values.lg;
+			break;
+		case 'type size':
+			nonColor.typography.values.size[name] = { ...typography.values.size.base, value: 2 };
+			break;
+		case 'font weight':
+			nonColor.typography.values.weight[name] = typography.values.weight.regular;
+			break;
+		case 'line height':
+			nonColor.typography.values.lineHeight[name] = typography.values.lineHeight.normal;
+			break;
+		case 'tracking step':
+			nonColor.tracking.values[name] = NON_COLOR_FIXTURE.tracking.values.normal;
+			break;
+	}
+
+	// The top level mirrors the light scheme, which `checkMirroredLayers` requires.
+	return TokenSetSchema.parse({ ...light, schemes: { light, dark }, ...nonColor });
+}
+
+/** The records `setWithName` writes into, loosened so any category can take a new key. */
+type LooseRecord = Record<string, unknown>;
+type LooseScheme = {
+	primitives: LooseRecord;
+	semantic: LooseRecord;
+	shadow: { values: LooseRecord };
+};
+type LooseNonColor = {
+	radius: { values: LooseRecord };
+	typography: { values: { size: LooseRecord; weight: LooseRecord; lineHeight: LooseRecord } };
+	tracking: { values: LooseRecord };
+};
+
+/** `PINNED_SET` carrying one extra semantic token; the common case of {@link setWithName}. */
+export function setWithSemanticToken(token: string): TokenSet {
+	return setWithName('semantic token', token);
 }
 
 /**
- * `PINNED_SET` carrying one extra typography size, named by the caller, at `2rem`.
+ * What the generator itself hands the adapters: a full token set built by the real scale engine and
+ * semantic layer from a one-colour seed, carrying every name in the generator's vocabulary. All
+ * seven ramps, the five shadow steps, eight type sizes and the rest.
  *
- * The size record keys on any non-empty string too, so a name Tailwind would parse as something
- * other than a size is as schema-legal as the semantic case above.
+ * Generated, unlike `PINNED_SET`, because its subject is the vocabulary. The whitelist admits
+ * exactly what the generator emits, so the set that proves the whitelist sound in Tailwind has to be
+ * the generator's own output. A hand-written copy could drift from it.
  */
-export function setWithTypeSize(name: string): TokenSet {
-	const { typography } = NON_COLOR_FIXTURE;
-	const size = {
-		...typography.values.size,
-		[name]: { value: 2, unit: 'rem', $extensions: typography.values.size.base.$extensions },
-	};
-
-	return TokenSetSchema.parse({
-		...LIGHT_SCHEME,
-		schemes: { light: LIGHT_SCHEME, dark: DARK_SCHEME },
-		...NON_COLOR_FIXTURE,
-		typography: { ...typography, values: { ...typography.values, size } },
+export const GENERATED_SET: TokenSet = (() => {
+	const seed = BrandSeedSchema.parse({
+		keyColors: [
+			{
+				oklch: [0.55, 0.15, 260],
+				proposedRole: 'brand',
+				sourceImageId: 'img-1',
+				sourceRegion: null,
+			},
+		],
+		neutralTemperature: null,
+		surfacePolarity: null,
+		radiusCharacter: null,
+		shadowCharacter: null,
+		trackingFeel: null,
+		typeClassification: null,
+		suggestedPairing: null,
+		typeScaleRatio: null,
+		imageClassifications: null,
+		expressive: null,
 	});
-}
+	const result = createOklchScaleEngine().generate(seed, BALANCED);
+
+	if (!result.ok)
+		throw new Error(`the scale engine rejected the fixture seed: ${result.error.kind}`);
+
+	return buildTokenSet(result.schemes, seed);
+})();
 
 /**
  * The ramps `PINNED_SET` carries, which is deliberately not all seven of `RAMP_NAMES`. The adapters
@@ -195,11 +269,16 @@ export function deepFreeze<T>(value: T): T {
 	return value;
 }
 
-/** The declarations postcss found under each selector, keyed by the selector it parsed. */
+/**
+ * The declarations postcss found under each top-level selector, keyed by the selector it parsed.
+ * Top-level only, because `toStylesheet` also writes a `.dark` inside `@layer theme`, and keying
+ * that one by its selector would overwrite the scheme rule of the same name.
+ */
 export function declarationsBySelector(css: string): Map<string, Declaration[]> {
 	const found = new Map<string, Declaration[]>();
 
 	parse(css).walkRules((rule) => {
+		if (rule.parent?.type !== 'root') return;
 		const declarations: Declaration[] = [];
 		rule.walkDecls((declaration) => {
 			declarations.push(declaration);

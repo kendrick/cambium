@@ -43,12 +43,18 @@ import {
 	PINNED_SET,
 	propertyNames,
 	ramp,
-	setWithSemanticToken,
+	setWithName,
 	SEMANTIC,
 	sorted,
 	valueOf,
 } from './css.fixture';
-import { cssNaming, toGlobalsCss } from './globals-css';
+import {
+	cssNaming,
+	declarationBlock,
+	GENERATED_VOCABULARY,
+	toGlobalsCss,
+	type VocabularyCategory,
+} from './globals-css';
 
 /** `oklch(<l> <c> <h>)`: three space-separated numbers, no comma, no alpha slot. */
 const OKLCH_TRIPLE = /^oklch\(([^\s]+) ([^\s]+) ([^\s]+)\)$/;
@@ -382,25 +388,106 @@ describe('toGlobalsCss', () => {
 		);
 	});
 
-	it('refuses a semantic token whose bare property lands inside a Tailwind namespace', () => {
-		// The semantic colours go out bare so a shadcn project's components find `--background` where
-		// they expect it, and that is safe exactly as long as the name sits outside every namespace
-		// Tailwind claims. `SemanticLayerSchema` keys on any non-empty string, so nothing upstream
-		// keeps a token called `blur-sm` out, and `--blur-sm` is the property Tailwind's own
-		// `blur-sm` utility reads: the consuming project would resolve a blur radius to an oklch()
-		// colour. `core/css/stylesheet.test.ts` compiles that reading rather than asserting it.
-		expect(() => toGlobalsCss(setWithSemanticToken('blur-sm'), cssNaming())).toThrow(/--blur-sm/);
-		expect(() => toGlobalsCss(setWithSemanticToken('blur-sm'), cssNaming())).toThrow(/blur/);
+	it("refuses a tw prefix, which would declare Tailwind's own --tw-* state", () => {
+		// `--tw-shadow` and `--tw-gradient-from` are properties Tailwind's utilities write and read
+		// for themselves. A prefix of `tw` would put every prefixed property of ours in that space.
+		for (const prefix of ['tw', 'tw-x', 'tw--x']) {
+			expect(() => toGlobalsCss(PINNED_SET, cssNaming({ prefix }))).toThrow(`prefix "${prefix}"`);
+		}
 
-		// A prefix cannot rescue it, because the semantic colours never take one: the bare name is
-		// the whole point of them, so the token itself has to be refused.
+		// Only the `tw-` namespace itself. A prefix that merely starts with the letters is not in it.
+		expect(() => toGlobalsCss(PINNED_SET, cssNaming({ prefix: 'twig' }))).not.toThrow();
+	});
+
+	it('takes a prefix with a run of hyphens inside it, and refuses one at either end', () => {
+		// `stylesheet.test.ts` compiles `foo--bar` through Tailwind; this is only the shape rule.
+		const names = propertyNames(
+			declarationsBySelector(toGlobalsCss(PINNED_SET, cssNaming({ prefix: 'foo--bar' }))).get(
+				':root',
+			) ?? [],
+		);
+		expect(names).toContain('--foo--bar-shadow-md');
+
+		for (const prefix of ['-foo', 'foo-', 'bad prefix', 'a:b']) {
+			expect(() => cssNaming({ prefix })).toThrow(`prefix "${prefix}"`);
+		}
+	});
+
+	/*
+	 * The six names #13's two reviews showed breaking a Tailwind consumer, every one of which passed
+	 * the old shape check. `stylesheet.test.ts` compiles what each would have done; this is the
+	 * refusal, which has to name both the token and the category it arrived in.
+	 */
+	it.each<{ category: VocabularyCategory; name: string }>([
+		{ category: 'semantic token', name: 'base' },
+		{ category: 'font weight', name: 'mono' },
+		{ category: 'semantic token', name: 'sm' },
+		{ category: 'semantic token', name: 'lg' },
+		{ category: 'semantic token', name: 'inherit' },
+		{ category: 'semantic token', name: 'transparent' },
+		{ category: 'semantic token', name: 'center' },
+		{ category: 'semantic token', name: 'fixed' },
+		{ category: 'semantic token', name: 'tw-shadow' },
+	])('refuses the $category "$name", which the generator never emits', ({ category, name }) => {
+		const set = setWithName(category, name);
+
+		expect(() => toGlobalsCss(set, cssNaming())).toThrow(`${category} "${name}"`);
+	});
+
+	// One foreign name per category, so a category left out of the check shows up as a set that
+	// exports. `blur-sm` also sits in a Tailwind namespace, and the vocabulary refuses it first.
+	it.each<{ category: VocabularyCategory; name: string }>([
+		{ category: 'semantic token', name: 'blur-sm' },
+		{ category: 'ramp', name: 'teal' },
+		{ category: 'shadow step', name: 'huge' },
+		{ category: 'radius step', name: 'pill' },
+		{ category: 'type size', name: 'base--line-height' },
+		{ category: 'font weight', name: 'black' },
+		{ category: 'line height', name: 'loose' },
+		{ category: 'tracking step', name: 'widest' },
+	])('refuses a $category outside the vocabulary, naming it', ({ category, name }) => {
+		expect(() => toGlobalsCss(setWithName(category, name), cssNaming())).toThrow(
+			`${category} "${name}"`,
+		);
+	});
+
+	it('accepts every name the generator emits, in every category', () => {
+		// The other half of the whitelist: every name in it has to export. One set per category
+		// carrying each accepted name; the fixture's own names are already in there, so a name the
+		// fixture holds is re-added rather than duplicated.
+		for (const [category, names] of Object.entries(GENERATED_VOCABULARY)) {
+			for (const name of names) {
+				expect(() =>
+					toGlobalsCss(setWithName(category as VocabularyCategory, name), cssNaming()),
+				).not.toThrow();
+			}
+		}
+	});
+
+	it('holds the whitelist to the generator vocabulary, category by category', () => {
+		// Written out, because these are the names a consumer types and the list the whitelist has to
+		// match. Deriving them from the generator here would compare the whitelist with itself.
+		expect(GENERATED_VOCABULARY).toEqual({
+			'semantic token': Object.keys(SEMANTIC_MAP),
+			ramp: ['brand', 'accent', 'neutral', 'danger', 'warning', 'success', 'info'],
+			'shadow step': ['xs', 'sm', 'md', 'lg', 'xl'],
+			'radius step': ['sm', 'md', 'lg', 'xl', '2xl', '3xl', '4xl'],
+			'type size': ['xs', 'sm', 'base', 'lg', 'xl', '2xl', '3xl', '4xl'],
+			'font weight': ['regular', 'medium', 'semibold', 'bold'],
+			'line height': ['tight', 'snug', 'normal', 'relaxed'],
+			'tracking step': ['tighter', 'tight', 'normal', 'wide', 'wider'],
+		});
+	});
+
+	it('refuses a block that would declare one property twice', () => {
+		// The vocabulary can't produce a repeat today, so this is reached directly: the backstop for
+		// the day the vocabulary grows.
 		expect(() =>
-			toGlobalsCss(setWithSemanticToken('blur-sm'), cssNaming({ prefix: 'acme' })),
-		).toThrow(/--blur-sm/);
-
-		// The names shadcn actually ships stay legal. `background` and `card-foreground` sit outside
-		// every namespace root, which is why bare works at all.
-		expect(() => toGlobalsCss(PINNED_SET, cssNaming())).not.toThrow();
+			declarationBlock(':root', [
+				{ property: '--background', value: 'red' },
+				{ property: '--background', value: 'blue' },
+			]),
+		).toThrow(/--background twice/);
 	});
 
 	it('is a pure function of the token set: same set in, same bytes out, input untouched', () => {

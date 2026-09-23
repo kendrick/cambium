@@ -27,12 +27,17 @@ import {
 	FIXTURE_RAMPS,
 	PINNED_SET,
 	propertyNames,
-	setWithSemanticToken,
+	setWithName,
 	valueOf,
 	VAR_REFERENCE,
 } from './css.fixture';
-import { type CssNamingOptions, cssNaming, toGlobalsCss } from './globals-css';
-import { toThemeBlock } from './theme-block';
+import {
+	type CssNamingOptions,
+	cssNaming,
+	toGlobalsCss,
+	type VocabularyCategory,
+} from './globals-css';
+import { toDarkThemeLayer, toThemeBlock } from './theme-block';
 
 /**
  * Every property `toGlobalsCss` declares, under either selector.
@@ -211,13 +216,23 @@ describe('toThemeBlock', () => {
 		expect(refusal).toContain('bad prefix');
 	});
 
-	it('refuses a semantic token whose bare property lands inside a Tailwind namespace', () => {
-		// The reference side of the same collision `globals-css.test.ts` checks on the declaring
-		// side: this module would write `--color-blur-sm: var(--blur-sm)`, pointing at a property
-		// Tailwind's own `blur-sm` utility reads. Both halves name properties through one
-		// `CssNaming`, so both refuse it; a guard on one side only would leave the other emitting an
-		// entry whose target the sibling refused to declare.
-		expect(() => toThemeBlock(setWithSemanticToken('blur-sm'), cssNaming())).toThrow(/--blur-sm/);
+	it.each<{ category: VocabularyCategory; name: string }>([
+		{ category: 'semantic token', name: 'base' },
+		{ category: 'font weight', name: 'mono' },
+		{ category: 'semantic token', name: 'sm' },
+		{ category: 'semantic token', name: 'inherit' },
+		{ category: 'semantic token', name: 'center' },
+		{ category: 'semantic token', name: 'tw-shadow' },
+		{ category: 'semantic token', name: 'blur-sm' },
+	])('refuses the $category "$name" on this half too, naming it', ({ category, name }) => {
+		// Called alone, this half has no sibling to refuse the set first. `--color-base` beside
+		// `--text-base` is exactly the pair that turns `.text-base` into a colour.
+		expect(() => toThemeBlock(setWithName(category, name), cssNaming())).toThrow(
+			`${category} "${name}"`,
+		);
+		expect(() => toDarkThemeLayer(setWithName(category, name), cssNaming())).toThrow(
+			`${category} "${name}"`,
+		);
 	});
 
 	it('is a pure function of the token set: same set in, same bytes out, input untouched', () => {
@@ -228,5 +243,74 @@ describe('toThemeBlock', () => {
 		expect(() => toThemeBlock(frozen, cssNaming())).not.toThrow();
 		expect(toThemeBlock(frozen, cssNaming())).toBe(toThemeBlock(PINNED_SET, cssNaming()));
 		expect(PINNED_SET).toEqual(before);
+	});
+});
+
+/** The layer's one `.dark` rule, read back off a postcss parse. */
+function darkRule(css: string) {
+	const root = parse(css);
+	expect(root.nodes).toHaveLength(1);
+	const [layer] = root.nodes;
+	if (layer?.type !== 'atrule') throw new Error('expected an at-rule');
+	expect(layer.name).toBe('layer');
+	expect(layer.params).toBe('theme');
+	expect(layer.nodes).toHaveLength(1);
+	const [rule] = layer.nodes ?? [];
+	if (rule?.type !== 'rule') throw new Error('expected one rule inside the layer');
+	return rule;
+}
+
+describe('toDarkThemeLayer', () => {
+	it('parses as one .dark rule inside @layer theme', () => {
+		expect(darkRule(toDarkThemeLayer(PINNED_SET, cssNaming())).selector).toBe('.dark');
+	});
+
+	it("redeclares exactly the theme block's colour and shadow entries, with the same references", () => {
+		// The layer is only right if it covers every entry that varies by scheme and nothing else,
+		// with the reference the theme block gives it. Comparing against the theme block's parsed
+		// output is what "generated from the same data" has to mean at the output.
+		const themed = allDeclarations(toThemeBlock(PINNED_SET, cssNaming())).filter(
+			({ prop }) => prop.startsWith('--color-') || prop.startsWith('--shadow-'),
+		);
+		const layered = allDeclarations(toDarkThemeLayer(PINNED_SET, cssNaming()));
+
+		expect(layered.map(({ prop, value }) => [prop, value])).toEqual(
+			themed.map(({ prop, value }) => [prop, value]),
+		);
+	});
+
+	it('names the three entries the reviews measured, pointing at the scheme properties', () => {
+		// Red-team's probe, verbatim: the ramp step, the semantic colour, the shadow.
+		const layered = allDeclarations(toDarkThemeLayer(PINNED_SET, cssNaming()));
+
+		expect(valueOf(layered, '--color-brand-500')).toBe('var(--cmb-color-brand-500)');
+		expect(valueOf(layered, '--color-background')).toBe('var(--background)');
+		expect(valueOf(layered, '--shadow-md')).toBe('var(--cmb-shadow-md)');
+	});
+
+	it('leaves the scheme-independent entries out', () => {
+		const names = propertyNames(allDeclarations(toDarkThemeLayer(PINNED_SET, cssNaming())));
+
+		for (const root of ['--radius-', '--text-', '--font-weight-', '--leading-', '--tracking-']) {
+			expect(names.filter((name) => name.startsWith(root))).toEqual([]);
+		}
+	});
+
+	it('carries a caller-supplied prefix into its references', () => {
+		const layered = allDeclarations(toDarkThemeLayer(PINNED_SET, cssNaming({ prefix: 'acme' })));
+
+		expect(valueOf(layered, '--color-brand-500')).toBe('var(--acme-color-brand-500)');
+		expect(valueOf(layered, '--shadow-md')).toBe('var(--acme-shadow-md)');
+		expect(valueOf(layered, '--color-background')).toBe('var(--background)');
+	});
+
+	it('references no property that toGlobalsCss does not also declare', () => {
+		const declared = declaredByGlobalsCss(PINNED_SET);
+
+		for (const declaration of allDeclarations(toDarkThemeLayer(PINNED_SET, cssNaming()))) {
+			for (const [, property] of declaration.value.matchAll(VAR_REFERENCE)) {
+				expect(declared).toContain(property);
+			}
+		}
 	});
 });

@@ -84,8 +84,9 @@ export function formatCssNumber(value: number, places: number = DEFAULT_PLACES):
 	const rounded = roundTo(value, places);
 
 	// The schemas bound few of these numbers from above, and rounding scales by 10^places first, so
-	// a large enough value overflows here and would print `Infinity`: an identifier to CSS, which
-	// voids every declaration it lands in without a word.
+	// a large enough value overflows here and would print `Infinity`, which CSS reads as an
+	// identifier. A custom property holding it still parses; the property reading it through
+	// `var()` goes invalid at computed-value time and quietly computes as `unset`.
 	if (!Number.isFinite(rounded)) {
 		throw new Error(`${value} is too large to print as a CSS number at ${places} decimal places`);
 	}

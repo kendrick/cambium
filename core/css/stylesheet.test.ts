@@ -13,8 +13,8 @@
  *
  * What a compile can see stops at selectors and property names. Tailwind passes a custom
  * property's value through unread, so nothing here sees a computed colour, and nothing here can
- * say what a nested `.dark` resolves to. That takes a browser computing styles; `toStylesheet`'s
- * docblock records the one case measured that way.
+ * say what a nested `.dark` resolves to. That takes a browser computing styles, and
+ * `e2e/stylesheet-dark.spec.ts` is where one does.
  *
  * `source(none)` keeps the compile hermetic: Tailwind scans no files, so the candidates come from
  * the `@source inline(...)` line and the output is a function of this file alone. A whole compile
@@ -26,14 +26,17 @@ import { describe, expect, it } from 'vitest';
 
 import type { TokenSet } from '../token-set';
 import {
+	allDeclarations,
+	CONVENTIONAL_NUMBERS,
 	declarationsBySelector,
 	deepFreeze,
+	GENERATED_SET,
 	PINNED_SET,
+	setWithName,
 	setWithSemanticToken,
-	setWithTypeSize,
 	VAR_REFERENCE,
 } from './css.fixture';
-import { cssNaming, toGlobalsCss } from './globals-css';
+import { cssNaming, toGlobalsCss, type VocabularyCategory } from './globals-css';
 import { toStylesheet } from './stylesheet';
 import { toThemeBlock } from './theme-block';
 
@@ -71,6 +74,27 @@ function utility(compiled: string, selector: string): Declaration[] {
 	utilityRule(compiled, selector).walkDecls((declaration) => {
 		declarations.push(declaration);
 	});
+
+	return declarations;
+}
+
+/**
+ * The declarations of the one compiled rule whose selector is exactly `selector`. The prefix match
+ * above is ambiguous across a whole vocabulary, where `.bg-card` is also the start of
+ * `.bg-card-foreground`.
+ */
+function exactUtility(compiled: string, selector: string): Declaration[] {
+	const declarations: Declaration[] = [];
+	let rules = 0;
+	parse(compiled).walkRules((rule) => {
+		if (rule.selector !== selector) return;
+		rules += 1;
+		rule.walkDecls((declaration) => {
+			declarations.push(declaration);
+		});
+	});
+
+	if (rules !== 1) throw new Error(`expected one rule for ${selector}, found ${rules}`);
 
 	return declarations;
 }
@@ -114,7 +138,11 @@ function themeLayerProperties(compiled: string): string[] {
 	return properties;
 }
 
-/** Every custom property the generated stylesheet declares, under either selector. */
+/**
+ * Every custom property the generated stylesheet's scheme rules declare, under `:root` or `.dark`.
+ * The layered `.dark` rule redeclares Tailwind theme entries on purpose, so it is left out: it
+ * names what the theme block names, and the checks that use this are about the scheme rules.
+ */
 function declaredBy(generated: string): Set<string> {
 	return new Set(
 		[...declarationsBySelector(generated).values()].flatMap((declarations) =>
@@ -189,6 +217,7 @@ describe('toStylesheet', () => {
 			'@theme inline',
 			':root',
 			'.dark',
+			'@layer theme',
 		]);
 	});
 
@@ -285,13 +314,12 @@ describe('toStylesheet', () => {
 			expect(themeLayerProperties(compiled)).not.toContain(property);
 		}
 
-		// And the token that would break the rule is refused by name rather than emitted, on both
-		// halves at once, because both name properties through the one `CssNaming`.
-		expect(() => toStylesheet(setWithSemanticToken('blur-sm'))).toThrow(/--blur-sm/);
+		// And a set carrying that token is refused, naming it, because the generator never emits it.
+		expect(() => toStylesheet(setWithSemanticToken('blur-sm'))).toThrow('semantic token "blur-sm"');
 	});
 
 	/*
-	 * The three cases below share one property: every name the pair emits reaches the consumer as
+	 * The refusal cases below share one property: every name the pair emits reaches the consumer as
 	 * exactly the property it was written as. Each one takes the adapter's refusal or its output,
 	 * whichever it gives, and runs the consumer over the output first. So with the guard gone, the
 	 * test fails on what PostCSS or Tailwind made of the stylesheet, not just on a missing throw.
@@ -316,39 +344,206 @@ describe('toStylesheet', () => {
 	);
 
 	it('refuses a type size that Tailwind would read as another size’s line height', async () => {
-		// Tailwind reads a theme key's `--` suffix as a companion of the key before it, so a size
-		// named `base--line-height` would become `text-base`'s line height rather than a size.
-		const { generated, refusal } = attempt(setWithTypeSize('base--line-height'));
+		// Tailwind reads a `--` in a `--text-*` theme key as a companion of the key before it, so a
+		// size named `base--line-height` would become `text-base`'s line height rather than a size.
+		const { generated, refusal } = attempt(setWithName('type size', 'base--line-height'));
 		const compiled = generated === undefined ? undefined : await compile(generated, ['text-base']);
 		const read = compiled === undefined ? [] : propertiesRead(utility(compiled, '.text-base'));
 
 		expect(read).not.toContain('--cmb-text-base--line-height');
-		expect(refusal).toContain('--text-base--line-height');
+		expect(refusal).toContain('type size "base--line-height"');
 	});
 
 	it.each([
+		{ token: 'brand-500', shares: 'ramp step 7, on --color-brand-500' },
+		{ token: 'brand', shares: 'the brand alias, on --color-brand' },
+		{ token: 'cmb-color-brand-500', shares: 'ramp step 7, on --cmb-color-brand-500 under :root' },
+	])('refuses a semantic token $token that would share a property with $shares', ({ token }) => {
+		// Tailwind keeps the last of two same-named theme entries and a browser the last of two
+		// same-named declarations, so one of the two tokens loses its utility with nothing logged.
+		const { generated, refusal } = attempt(setWithSemanticToken(token));
+
+		expect(generated === undefined ? [] : repeatedWithinABlock(generated)).toEqual([]);
+		expect(refusal).toContain(`semantic token "${token}"`);
+	});
+
+	/*
+	 * The six names #13's reviews showed breaking a consumer, each run the way the cases above run:
+	 * whatever the adapter hands back is compiled first, and the utility the name would have broken
+	 * has to come out reading Cambium's property. So with the whitelist gone, each case fails on
+	 * what Tailwind made of the stylesheet, not only on a missing refusal.
+	 */
+	it.each<{
+		category: VocabularyCategory;
+		name: string;
+		candidate: string;
+		selector: string;
+		intact: (declarations: Declaration[]) => boolean;
+	}>([
 		{
-			token: 'brand-500',
-			offender: '--color-brand-500',
-			block: 'the theme block, beside ramp step 7',
+			// `.text-base` turns into `color: var(--base)` and the size is gone.
+			category: 'semantic token',
+			name: 'base',
+			candidate: 'text-base',
+			selector: '.text-base',
+			intact: (declarations) => propertiesRead(declarations).includes('--cmb-text-base'),
 		},
-		{ token: 'brand', offender: '--color-brand', block: 'the theme block, beside the brand alias' },
 		{
-			token: 'cmb-color-brand-500',
-			offender: '--cmb-color-brand-500',
-			block: ':root, beside ramp step 7',
+			// `.font-mono` stays `font-family: var(--font-mono)`, and the weight has no utility.
+			category: 'font weight',
+			name: 'mono',
+			candidate: 'font-mono',
+			selector: '.font-mono',
+			intact: (declarations) => propertiesRead(declarations).includes('--cmb-font-weight-mono'),
+		},
+		{
+			// `.text-sm` turns into a colour.
+			category: 'semantic token',
+			name: 'sm',
+			candidate: 'text-sm',
+			selector: '.text-sm',
+			intact: (declarations) => !propertiesRead(declarations).includes('--sm'),
+		},
+		{
+			// `bg-inherit` compiles to the CSS keyword and never reads the token.
+			category: 'semantic token',
+			name: 'inherit',
+			candidate: 'bg-inherit',
+			selector: '.bg-inherit',
+			intact: (declarations) => propertiesRead(declarations).includes('--inherit'),
+		},
+		{
+			// `bg-center` sets a colour and a background position at once.
+			category: 'semantic token',
+			name: 'center',
+			candidate: 'bg-center',
+			selector: '.bg-center',
+			intact: (declarations) => !propertiesRead(declarations).includes('--center'),
+		},
+		{
+			// `--tw-shadow` is the property `shadow-md` itself writes and reads back.
+			category: 'semantic token',
+			name: 'tw-shadow',
+			candidate: 'shadow-md',
+			selector: '.shadow-md',
+			intact: () => true,
 		},
 	])(
-		'refuses a semantic token $token that would share a property in $block',
-		({ token, offender }) => {
-			// Tailwind keeps the last of two same-named theme entries and a browser the last of two
-			// same-named declarations, so one of the two tokens loses its utility with nothing logged.
-			const { generated, refusal } = attempt(setWithSemanticToken(token));
+		'refuses the $category "$name" before Tailwind can misread it',
+		async ({ category, name, candidate, selector, intact }) => {
+			const { generated, refusal } = attempt(setWithName(category, name));
+			const compiled = generated === undefined ? undefined : await compile(generated, [candidate]);
+			const broken = compiled !== undefined && !intact(utility(compiled, selector));
+			const declared = allDeclarations(generated ?? '').map(({ prop }) => prop);
 
-			expect(generated === undefined ? [] : repeatedWithinABlock(generated)).toEqual([]);
-			expect(refusal).toContain(offender);
+			expect(broken).toBe(false);
+			expect(declared).not.toContain('--tw-shadow');
+			expect(refusal).toContain(`${category} "${name}"`);
 		},
 	);
+
+	it('emits no --tw-* property, whatever prefix it is given', () => {
+		// `--tw-*` is Tailwind's own utility state. The vocabulary keeps semantic names out of it and
+		// `cssNaming` keeps prefixes out of it; this is the output-level check on both.
+		for (const prefix of [undefined, 'acme', 'twig', 'foo--bar']) {
+			const { generated } = attempt(GENERATED_SET, prefix);
+			const properties = allDeclarations(generated ?? '').map(({ prop }) => prop);
+
+			expect(properties.length).toBeGreaterThan(0);
+			expect(properties.filter((property) => property.startsWith('--tw-'))).toEqual([]);
+		}
+
+		for (const prefix of ['tw', 'tw-cmb']) {
+			const { generated, refusal } = attempt(GENERATED_SET, prefix);
+			const properties = allDeclarations(generated ?? '').map(({ prop }) => prop);
+
+			expect(properties.filter((property) => property.startsWith('--tw-'))).toEqual([]);
+			expect(refusal).toContain(`prefix "${prefix}"`);
+		}
+	});
+
+	it('wires every utility up under a prefix holding a run of hyphens', async () => {
+		// The one relaxation of the prefix rule, compiled: a `--` in a prefix lands in raw
+		// properties, never in a theme key, so Tailwind reads nothing into it.
+		const generated = toStylesheet(PINNED_SET, { prefix: 'foo--bar' });
+		const compiled = await compile(generated, CANDIDATES);
+
+		for (const { selector, reads } of UTILITIES) {
+			const renamed = reads.replace('--cmb-', '--foo--bar-');
+			expect(propertiesRead(utility(compiled, selector))).toContain(renamed);
+			expect(declaredBy(generated)).toContain(renamed);
+		}
+	});
+
+	/*
+	 * The whitelist is only as sound as the vocabulary it admits. This compiles the generator's own
+	 * output, every name in every category, and checks each utility a consumer would write for it
+	 * reads Cambium's property and nothing Tailwind owns. A name added to the generator that
+	 * collides the way `base` or `mono` did fails here.
+	 */
+	it('compiles every name the generator emits onto the property this stylesheet declares', async () => {
+		const generated = toStylesheet(GENERATED_SET);
+		const { light } = GENERATED_SET.schemes;
+		const { size, weight, lineHeight } = GENERATED_SET.typography.values;
+
+		const expected = [
+			...Object.keys(light.semantic).map((name) => [`bg-${name}`, `--${name}`]),
+			...Object.keys(light.primitives).flatMap((name) =>
+				CONVENTIONAL_NUMBERS.map((number) => [
+					`bg-${name}-${number}`,
+					`--cmb-color-${name}-${number}`,
+				]),
+			),
+			['bg-brand', '--cmb-color-brand'],
+			...Object.keys(light.shadow.values).map((name) => [`shadow-${name}`, `--cmb-shadow-${name}`]),
+			...Object.keys(GENERATED_SET.radius.values).map((name) => [
+				`rounded-${name}`,
+				`--cmb-radius-${name}`,
+			]),
+			...Object.keys(size).map((name) => [`text-${name}`, `--cmb-text-${name}`]),
+			...Object.keys(weight).map((name) => [`font-${name}`, `--cmb-font-weight-${name}`]),
+			...Object.keys(lineHeight).map((name) => [`leading-${name}`, `--cmb-leading-${name}`]),
+			...Object.keys(GENERATED_SET.tracking.values).map((name) => [
+				`tracking-${name}`,
+				`--cmb-tracking-${name}`,
+			]),
+		] as const;
+
+		// A generated set that came back short would make every loop below vacuous. 26 semantic
+		// colours, 7 ramps of 12 steps plus the brand alias, 5 shadows, 7 radii, 8 sizes, 4 weights,
+		// 4 line heights and 5 tracking steps.
+		expect(expected).toHaveLength(26 + 7 * 12 + 1 + 5 + 7 + 8 + 4 + 4 + 5);
+
+		const compiled = await compile(
+			generated,
+			expected.map(([candidate]) => candidate),
+		);
+		const declared = declaredBy(generated);
+
+		// Collected rather than asserted one by one, so a failure names every utility that broke.
+		const miswired: string[] = [];
+		for (const [candidate, property] of expected) {
+			const read = propertiesRead(exactUtility(compiled, `.${candidate}`));
+			if (!read.includes(property)) miswired.push(`${candidate} does not read ${property}`);
+			if (!declared.has(property)) miswired.push(`${candidate}: ${property} is not declared`);
+
+			// Anything else a utility reads is Tailwind's, and the one expected case is a size's
+			// line-height companion from the stock theme, which Cambium doesn't set.
+			const companion = `--${candidate}--line-height`;
+			for (const other of read.filter((each) => !declared.has(each))) {
+				if (!(candidate.startsWith('text-') && other === companion)) {
+					miswired.push(`${candidate} also reads ${other}`);
+				}
+			}
+		}
+		expect(miswired).toEqual([]);
+
+		for (const property of declared) {
+			expect(themeLayerProperties(compiled)).not.toContain(property);
+			expect(property.startsWith('--tw-')).toBe(false);
+		}
+		expect(repeatedWithinABlock(generated)).toEqual([]);
+	});
 
 	it('is a pure function of the token set: same set in, same bytes out, input untouched', () => {
 		const frozen = deepFreeze(structuredClone(PINNED_SET));

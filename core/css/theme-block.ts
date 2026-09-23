@@ -6,7 +6,13 @@ import {
 	type ShadowScale,
 	type TokenSet,
 } from '../token-set';
-import { BRAND_RAMP, type CssNaming, declarationBlock } from './globals-css';
+import {
+	BRAND_RAMP,
+	type CssNaming,
+	DARK_SELECTOR,
+	declarationBlock,
+	requireGeneratedVocabulary,
+} from './globals-css';
 import { stepNumberName } from './step-numbers';
 
 /** One theme entry: the bare Tailwind name and the raw property its `var()` points at. */
@@ -58,15 +64,15 @@ type ThemeEntry = { name: string; reference: string };
  * other ramp name `SEMANTIC_MAP` also uses as a key, and `--color-accent` is already the semantic
  * token's, which is the collision that decides the rule rather than an exception to it.
  *
- * Names come off the token set's own semantic layer, ramp keys and scalar keys rather than off
- * `SEMANTIC_MAP` or a hardcoded ramp list, the way `toGlobalsCss` already reads its own inputs: a
- * set short a ramp, or one carrying a semantic key `SEMANTIC_MAP` never named, still gets every
- * token it holds exported under its own name. A set that cannot be exported that way is refused by
- * name rather than exported with a token missing or shadowed. Three kinds of name get refused. One
- * a Tailwind namespace already claims, which `CssNaming` refuses on both halves. One that is not a
- * plain hyphenated identifier, since PostCSS or Tailwind would read it as something else. And two
- * tokens landing on one entry, such as a semantic `brand-500` beside ramp step 7, both
- * `--color-brand-500`; `declarationBlock` (`core/css/globals-css.ts`) refuses the last two.
+ * Names come off the token set's own semantic layer, ramp keys and scalar keys, the way
+ * `toGlobalsCss` reads its inputs, so a set short a ramp exports the ramps it has. Every one of
+ * those names has to be in `GENERATED_VOCABULARY` (`core/css/globals-css.ts`), the generator's own
+ * vocabulary, and `requireGeneratedVocabulary` refuses a set carrying any other name before an entry
+ * is built. That is what keeps a token from being exported shadowed: a semantic `base` beside the
+ * type size `base` would compile `.text-base` to a colour and drop the size, and a weight `mono`
+ * would lose `font-mono` to the font family. A prefix that walks a reference back inside a Tailwind
+ * namespace is refused when the entry is built, by `CssNaming`. A malformed or `tw-` prefix is
+ * refused earlier still, when `cssNaming` resolves it.
  *
  * Property names only, taken from the light scheme. A theme entry does not carry a colour, so it
  * cannot itself be scheme-dependent, and reading one scheme's names is exactly right when the two
@@ -80,6 +86,8 @@ type ThemeEntry = { name: string; reference: string };
  * never written.
  */
 export function toThemeBlock(tokenSet: TokenSet, naming: CssNaming): string {
+	requireGeneratedVocabulary(tokenSet);
+
 	const { light } = tokenSet.schemes;
 
 	const entries: ThemeEntry[] = [
@@ -90,10 +98,48 @@ export function toThemeBlock(tokenSet: TokenSet, naming: CssNaming): string {
 		...shadowEntries(light.shadow, naming),
 	];
 
-	return declarationBlock(
-		'@theme inline',
-		entries.map(({ name, reference }) => ({ property: `--${name}`, value: `var(${reference})` })),
-	);
+	return declarationBlock('@theme inline', entries.map(toDeclaration));
+}
+
+/**
+ * The theme block's colour and shadow entries again, redeclared under `.dark` inside
+ * `@layer theme`, so that a nested `.dark` reaches an arbitrary value naming a theme entry.
+ *
+ * Tailwind declares each theme entry once, on `:root`. There `--color-brand-500:
+ * var(--cmb-color-brand-500)` resolves against the light value, and descendants inherit the resolved
+ * colour, not the `var()`. A `.dark` wrapper below the root swaps `--cmb-color-brand-500` on the
+ * wrapper and leaves the inherited entry alone, so `bg-[var(--color-brand-500)]` inside it keeps
+ * the light colour. Named utilities are fine without this, because `@theme inline` compiles the raw
+ * property straight into them. Redeclaring the entry on `.dark` makes it resolve again there.
+ * `e2e/stylesheet-dark.spec.ts` measures both in Chromium.
+ *
+ * Layered because these are Tailwind's own theme names. `@layer theme` is where Tailwind declares
+ * them, so this rule sits beside them, and anything a consumer writes in a later layer or unlayered
+ * still wins. Unlayered, it would beat every layered declaration of those names on a `.dark`
+ * element, whatever the consumer's own theme says about them.
+ *
+ * Only colour and shadow, because only they vary by scheme; radius, type and tracking are declared
+ * on `:root` alone and have nothing to swap. The entries come from the same `colorEntries` and
+ * `shadowEntries` the theme block calls, so the two lists can't drift apart.
+ */
+export function toDarkThemeLayer(tokenSet: TokenSet, naming: CssNaming): string {
+	requireGeneratedVocabulary(tokenSet);
+
+	const { light } = tokenSet.schemes;
+
+	const entries: ThemeEntry[] = [
+		...colorEntries(light.semantic, light.primitives, naming),
+		...shadowEntries(light.shadow, naming),
+	];
+
+	const rule = declarationBlock(DARK_SELECTOR, entries.map(toDeclaration));
+	const indented = rule.replace(/^(?=.)/gm, '\t');
+
+	return `@layer theme {\n${indented}}\n`;
+}
+
+function toDeclaration({ name, reference }: ThemeEntry): { property: string; value: string } {
+	return { property: `--${name}`, value: `var(${reference})` };
 }
 
 /**
@@ -101,9 +147,9 @@ export function toThemeBlock(tokenSet: TokenSet, naming: CssNaming): string {
  * the reference side.
  *
  * `--background` sits outside every Tailwind namespace, so `--color-background` and `--background`
- * are two different names and that reference is safe left bare. `naming.semanticProperty` is what
- * establishes that rather than assumes it: a token whose own name lands inside a namespace is
- * refused there, on this side and on the declaring side at once. A ramp step's raw property never
+ * are two different names and that reference is safe left bare. That holds for every semantic name
+ * because `requireGeneratedVocabulary` admits only `SEMANTIC_MAP`'s keys, none of which starts with
+ * a namespace root; `naming.semanticProperty` checks nothing itself. A ramp step's raw property never
  * gets it for free — left bare it would be `--color-brand-500` itself, already inside Tailwind's
  * colour namespace, so the entry of the same name would read itself and resolve to nothing — which
  * is why the reference side takes the prefix.

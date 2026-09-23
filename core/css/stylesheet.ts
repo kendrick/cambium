@@ -1,6 +1,6 @@
 import type { TokenSet } from '../token-set';
 import { type CssNamingOptions, cssNaming, toGlobalsCss } from './globals-css';
-import { toThemeBlock } from './theme-block';
+import { toDarkThemeLayer, toThemeBlock } from './theme-block';
 
 /**
  * The declaration that makes `.dark` mean anything.
@@ -18,8 +18,9 @@ const DARK_VARIANT = '@custom-variant dark (&:is(.dark *));';
 
 /**
  * A token set as the whole stylesheet a project pastes into its `globals.css`: the dark variant,
- * the `@theme inline` block that registers Tailwind's namespaces, and the `:root` and `.dark` rules
- * that hold the values.
+ * the `@theme inline` block that registers Tailwind's namespaces, the `:root` and `.dark` rules
+ * that hold the values, and a `.dark` rule in `@layer theme` that makes a nested `.dark` reach the
+ * theme entries too.
  *
  * This is the entry point. `toGlobalsCss` and `toThemeBlock` are two halves of one file and only
  * work as a pair — every entry in the theme block is a `var()` pointing at a property the scheme
@@ -35,26 +36,14 @@ const DARK_VARIANT = '@custom-variant dark (&:is(.dark *));';
  * The order is `app/globals.css`'s: variant, theme block, then the scheme rules. It is the order a
  * reader of a hand-maintained shadcn stylesheet already knows, and `@theme inline` entries resolve
  * against whatever the cascade settles on rather than against what precedes them, so the layout is
- * for the reader rather than for the compiler.
+ * for the reader rather than for the compiler. The layered `.dark` rule comes last because it has
+ * no counterpart in `app/globals.css`, and it's the part a reader is least likely to be looking for.
  *
- * One usage does not follow a nested `.dark`: an arbitrary value that names a theme entry, such as
- * `bg-[var(--color-brand-500)]`, `bg-[var(--color-background)]` or `shadow-[var(--shadow-md)]`.
- * Tailwind declares the entry on `:root`, where `var(--cmb-color-brand-500)` resolves to the light
- * value, and descendants inherit that resolved value. A `.dark` on a wrapper below the root swaps
- * the raw property on the wrapper and leaves the inherited entry alone, so the element keeps its
- * light colour. `.dark` on the root element is unaffected, and so is every named utility
- * (`bg-brand-500`, `bg-background`, `shadow-md`, the `/50` and gradient forms), because `@theme
- * inline` compiles the raw property straight into them. In an arbitrary value, name the raw
- * property instead: `bg-[var(--cmb-color-brand-500)]`, `bg-[var(--background)]`,
- * `shadow-[var(--cmb-shadow-md)]`, at whatever prefix the stylesheet was built with. All of this
- * was measured once in Chromium against this output. No test repeats it: a Tailwind compile cannot
- * see a computed value, and the Playwright tier drives the built app, which this adapter is not
- * wired into yet.
- *
- * It is recorded here rather than fixed. A fix would redeclare every colour and shadow entry under
- * `.dark`, which puts Tailwind namespace names into an unlayered rule, the thing the namespace
- * check in `core/css/globals-css.ts` exists to prevent. It would also part ways with shadcn's own
- * `globals.css`, whose `@theme inline` block behaves the same way.
+ * That layered rule is what shadcn's own `globals.css` lacks. Without it, an arbitrary value naming
+ * a theme entry, such as `bg-[var(--color-brand-500)]` or `shadow-[var(--shadow-md)]`, keeps its
+ * light value inside a nested `.dark` while the named utility beside it turns dark.
+ * `toDarkThemeLayer` (`core/css/theme-block.ts`) says why, and `e2e/stylesheet-dark.spec.ts`
+ * measures it.
  *
  * Declarations follow each record's insertion order, so two sets holding the same tokens in a
  * different key order emit different bytes. That order is the scale's own (`xs` before `sm` before
@@ -74,5 +63,5 @@ const DARK_VARIANT = '@custom-variant dark (&:is(.dark *));';
 export function toStylesheet(tokenSet: TokenSet, options: CssNamingOptions = {}): string {
 	const naming = cssNaming(options);
 
-	return `${DARK_VARIANT}\n\n${toThemeBlock(tokenSet, naming)}\n${toGlobalsCss(tokenSet, naming)}`;
+	return `${DARK_VARIANT}\n\n${toThemeBlock(tokenSet, naming)}\n${toGlobalsCss(tokenSet, naming)}\n${toDarkThemeLayer(tokenSet, naming)}`;
 }
