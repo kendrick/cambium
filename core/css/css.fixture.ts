@@ -129,6 +129,27 @@ export function setWithSemanticToken(token: string): TokenSet {
 }
 
 /**
+ * `PINNED_SET` carrying one extra typography size, named by the caller, at `2rem`.
+ *
+ * The size record keys on any non-empty string too, so a name Tailwind would parse as something
+ * other than a size is as schema-legal as the semantic case above.
+ */
+export function setWithTypeSize(name: string): TokenSet {
+	const { typography } = NON_COLOR_FIXTURE;
+	const size = {
+		...typography.values.size,
+		[name]: { value: 2, unit: 'rem', $extensions: typography.values.size.base.$extensions },
+	};
+
+	return TokenSetSchema.parse({
+		...LIGHT_SCHEME,
+		schemes: { light: LIGHT_SCHEME, dark: DARK_SCHEME },
+		...NON_COLOR_FIXTURE,
+		typography: { ...typography, values: { ...typography.values, size } },
+	});
+}
+
+/**
  * The ramps `PINNED_SET` carries, which is deliberately not all seven of `RAMP_NAMES`. The adapters
  * read the keys the token set actually holds, so a fixture short four ramps is the case that
  * catches a hardcoded list.

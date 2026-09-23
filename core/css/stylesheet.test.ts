@@ -1,15 +1,20 @@
 /**
  * The consumer here is the Tailwind compiler, not a string and not even a CSS parser. What a
  * generated stylesheet has to do is survive being pasted into a project's `globals.css` and come
- * out the other side as utilities that paint. So most of what follows runs the real
- * `@tailwindcss/postcss` at the version this repo pins, hands it the output verbatim, and reads the
- * compiled utilities back: `.bg-background` has to resolve to a property this stylesheet declares,
- * and `dark:bg-background` has to land under `.dark` rather than inside a media query.
+ * out the other side as utilities wired to the properties it declares. So most of what follows
+ * runs the real `@tailwindcss/postcss` at the version this repo pins, hands it the output verbatim,
+ * and reads the compiled utilities back: `.bg-background` has to read a property this stylesheet
+ * declares, and `dark:bg-background` has to land under `.dark` rather than inside a media query.
  *
  * That is the one check the adapters' own suites cannot make. Each of them proves its half parses
  * and names what it should; neither can say whether the pair works, because the failure is a
  * `var()` resolving to nothing, which parses cleanly and paints nothing. `#13`'s review found two
  * of those, and both are compiled here rather than argued.
+ *
+ * What a compile can see stops at selectors and property names. Tailwind passes a custom
+ * property's value through unread, so nothing here sees a computed colour, and nothing here can
+ * say what a nested `.dark` resolves to. That takes a browser computing styles; `toStylesheet`'s
+ * docblock records the one case measured that way.
  *
  * `source(none)` keeps the compile hermetic: Tailwind scans no files, so the candidates come from
  * the `@source inline(...)` line and the output is a function of this file alone. A whole compile
@@ -19,11 +24,13 @@ import postcss, { type Declaration, parse, type Rule } from 'postcss';
 import tailwindcss from '@tailwindcss/postcss';
 import { describe, expect, it } from 'vitest';
 
+import type { TokenSet } from '../token-set';
 import {
 	declarationsBySelector,
 	deepFreeze,
 	PINNED_SET,
 	setWithSemanticToken,
+	setWithTypeSize,
 	VAR_REFERENCE,
 } from './css.fixture';
 import { cssNaming, toGlobalsCss } from './globals-css';
@@ -117,7 +124,43 @@ function declaredBy(generated: string): Set<string> {
 }
 
 /**
- * One utility per namespace the token set registers, written the way a consumer writes them. The
+ * What a consumer gets from a set: the stylesheet, or the refusal that replaces it.
+ *
+ * Caught rather than asserted with `toThrow`, so a test can hand whatever came out to the consumer
+ * before it checks the refusal. Remove a guard and the test fails on what the consumer made of the
+ * output, not just on a missing throw.
+ */
+function attempt(set: TokenSet, prefix?: string): { generated?: string; refusal?: string } {
+	try {
+		return { generated: toStylesheet(set, prefix === undefined ? {} : { prefix }) };
+	} catch (error) {
+		return { refusal: (error as Error).message };
+	}
+}
+
+/**
+ * Every property declared more than once inside a single parsed block. `:root` and `.dark`
+ * repeating each other is the design, so a repeat only counts within one rule or at-rule.
+ */
+function repeatedWithinABlock(generated: string): string[] {
+	const repeated: string[] = [];
+	parse(generated).walk((node) => {
+		if (node.type !== 'rule' && node.type !== 'atrule') return;
+		const seen = new Set<string>();
+		node.each((child) => {
+			if (child.type !== 'decl') return;
+			if (seen.has(child.prop)) repeated.push(child.prop);
+			seen.add(child.prop);
+		});
+	});
+
+	return repeated;
+}
+
+/**
+ * One utility per Tailwind root the token set registers onto, written the way a consumer writes
+ * them, and two for colour, whose semantic and ramp entries are named differently. Typography
+ * counts three times because Tailwind splits it across `text`, `font-weight` and `leading`. The
  * expected property is a literal on purpose: it is the contract the two halves have to agree on,
  * and deriving it from either half would let both drift together.
  */
@@ -125,6 +168,9 @@ const UTILITIES = [
 	{ candidate: 'bg-background', selector: '.bg-background', reads: '--background' },
 	{ candidate: 'text-brand-500', selector: '.text-brand-500', reads: '--cmb-color-brand-500' },
 	{ candidate: 'rounded-lg', selector: '.rounded-lg', reads: '--cmb-radius-lg' },
+	{ candidate: 'text-base', selector: '.text-base', reads: '--cmb-text-base' },
+	{ candidate: 'font-regular', selector: '.font-regular', reads: '--cmb-font-weight-regular' },
+	{ candidate: 'leading-normal', selector: '.leading-normal', reads: '--cmb-leading-normal' },
 	{ candidate: 'tracking-normal', selector: '.tracking-normal', reads: '--cmb-tracking-normal' },
 	{ candidate: 'shadow-md', selector: '.shadow-md', reads: '--cmb-shadow-md' },
 ];
@@ -190,17 +236,21 @@ describe('toStylesheet', () => {
 		}
 	});
 
-	it('is the only way to get the pair, because two halves under two prefixes paint nothing', async () => {
+	it('is the only way to get the pair, because two halves under two prefixes strand every prefixed utility', async () => {
 		// The hazard this entry point forecloses, compiled rather than argued, and assembled the only
 		// way the types still allow: two `cssNaming` calls carrying two different prefixes. The pair
-		// parses cleanly and every utility it feeds resolves to an undeclared property, which CSS
+		// parses cleanly and every prefixed utility it feeds reads an undeclared property, which CSS
 		// treats as invalid at computed-value time — no error anywhere, and no radius on the page.
+		// The semantic utilities carry no prefix and survive, which is what makes the mismatch easy
+		// to miss on a page that shows mostly `bg-background`.
 		const mismatched = `${toThemeBlock(PINNED_SET, cssNaming({ prefix: 'acme' }))}${toGlobalsCss(PINNED_SET, cssNaming())}`;
 		const compiled = await compile(mismatched, CANDIDATES);
 
 		expect(propertiesRead(utility(compiled, '.rounded-lg'))).toEqual(['--acme-radius-lg']);
 		expect(declaredBy(mismatched)).not.toContain('--acme-radius-lg');
 		expect(declaredBy(mismatched)).toContain('--cmb-radius-lg');
+		expect(propertiesRead(utility(compiled, '.bg-background'))).toEqual(['--background']);
+		expect(declaredBy(mismatched)).toContain('--background');
 
 		// The same utility off the one entry point reads a property that is there.
 		const paired = toStylesheet(PINNED_SET, { prefix: 'acme' });
@@ -210,9 +260,9 @@ describe('toStylesheet', () => {
 	it('takes one prefix for both halves, so neither can be called with a prefix of its own', () => {
 		// The coupling as a type rather than as a comment. `toGlobalsCss(set)` paired with
 		// `toThemeBlock(set, { prefix: 'acme' })` was the silent mismatch above, and it is now two
-		// compile errors rather than a stylesheet that paints nothing. If the naming argument ever
-		// goes back to being optional, this line stops erroring and `tsc` fails on the unused
-		// expectation, which is the point of writing it as one.
+		// compile errors rather than a stylesheet whose prefixed utilities paint nothing. If the
+		// naming argument ever goes back to being optional, this line stops erroring and `tsc` fails
+		// on the unused expectation, which is the point of writing it as one.
 		// @ts-expect-error - a naming is required, so a defaulted call cannot pair with a prefixed one
 		expect(() => toGlobalsCss(PINNED_SET)).toThrow(TypeError);
 		expect(() => toGlobalsCss(PINNED_SET, cssNaming())).not.toThrow();
@@ -239,6 +289,66 @@ describe('toStylesheet', () => {
 		// halves at once, because both name properties through the one `CssNaming`.
 		expect(() => toStylesheet(setWithSemanticToken('blur-sm'))).toThrow(/--blur-sm/);
 	});
+
+	/*
+	 * The three cases below share one property: every name the pair emits reaches the consumer as
+	 * exactly the property it was written as. Each one takes the adapter's refusal or its output,
+	 * whichever it gives, and runs the consumer over the output first. So with the guard gone, the
+	 * test fails on what PostCSS or Tailwind made of the stylesheet, not just on a missing throw.
+	 */
+
+	it.each([
+		{
+			label: 'a semantic token',
+			set: () => setWithSemanticToken('has space'),
+			prefix: undefined,
+			offender: 'has space',
+		},
+		{ label: 'a prefix', set: () => PINNED_SET, prefix: 'bad prefix', offender: 'bad prefix' },
+	])(
+		'refuses $label that leaves a property name no CSS parser reads',
+		({ set, prefix, offender }) => {
+			const { generated, refusal } = attempt(set(), prefix);
+
+			expect(() => parse(generated ?? '')).not.toThrow();
+			expect(refusal).toContain(offender);
+		},
+	);
+
+	it('refuses a type size that Tailwind would read as another size’s line height', async () => {
+		// Tailwind reads a theme key's `--` suffix as a companion of the key before it, so a size
+		// named `base--line-height` would become `text-base`'s line height rather than a size.
+		const { generated, refusal } = attempt(setWithTypeSize('base--line-height'));
+		const compiled = generated === undefined ? undefined : await compile(generated, ['text-base']);
+		const read = compiled === undefined ? [] : propertiesRead(utility(compiled, '.text-base'));
+
+		expect(read).not.toContain('--cmb-text-base--line-height');
+		expect(refusal).toContain('--text-base--line-height');
+	});
+
+	it.each([
+		{
+			token: 'brand-500',
+			offender: '--color-brand-500',
+			block: 'the theme block, beside ramp step 7',
+		},
+		{ token: 'brand', offender: '--color-brand', block: 'the theme block, beside the brand alias' },
+		{
+			token: 'cmb-color-brand-500',
+			offender: '--cmb-color-brand-500',
+			block: ':root, beside ramp step 7',
+		},
+	])(
+		'refuses a semantic token $token that would share a property in $block',
+		({ token, offender }) => {
+			// Tailwind keeps the last of two same-named theme entries and a browser the last of two
+			// same-named declarations, so one of the two tokens loses its utility with nothing logged.
+			const { generated, refusal } = attempt(setWithSemanticToken(token));
+
+			expect(generated === undefined ? [] : repeatedWithinABlock(generated)).toEqual([]);
+			expect(refusal).toContain(offender);
+		},
+	);
 
 	it('is a pure function of the token set: same set in, same bytes out, input untouched', () => {
 		const frozen = deepFreeze(structuredClone(PINNED_SET));

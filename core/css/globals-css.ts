@@ -23,6 +23,20 @@ const DARK_SELECTOR = '.dark';
 
 const DEFAULT_PREFIX = 'cmb';
 
+/**
+ * A name segment run both adapters will emit: ASCII letters, digits and underscores, joined by
+ * single hyphens, with none leading or trailing.
+ *
+ * Narrower than CSS's own identifier grammar on purpose. Every name here reaches two consumers,
+ * PostCSS and Tailwind, and Tailwind reads more into a name than CSS does: a `--` inside a theme
+ * key marks what follows as a companion of the key before it, so `--text-base--line-height` is
+ * `text-base`'s line height and not a size. Refusing any doubled hyphen closes that for every
+ * companion Tailwind has or adds later, and it rules out a leading or trailing hyphen for the same
+ * reason, since either one doubles up against the hyphen the adapters join names with. Non-ASCII
+ * would parse; nothing Cambium generates uses it, so it is refused rather than argued.
+ */
+const SOUND_NAME = /^[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*$/;
+
 /** The one ramp that also gets an unnumbered name. See {@link rampDeclarations}. */
 export const BRAND_RAMP = 'brand';
 
@@ -75,8 +89,9 @@ export type CssNamingOptions = {
  * A token set exports as two halves: the scheme rules `toGlobalsCss` writes, and the `@theme
  * inline` block `toThemeBlock` (`core/css/theme-block.ts`) writes, in which every entry is a
  * `var()` pointing at a property the first half declares. Two copies of the rule would put that
- * agreement one careless edit away from a stylesheet that parses and paints nothing, so there is
- * one copy and both halves take it as an argument rather than each building its own from a prefix.
+ * agreement one careless edit away from a stylesheet that parses and leaves every prefixed utility
+ * without a value, so there is one copy and both halves take it as an argument rather than each
+ * building its own from a prefix.
  *
  * Taking it as an argument is also what makes a mismatched pair cost a deliberate act. Neither half
  * defaults the naming, so `toThemeBlock(set)` beside `toGlobalsCss(set, cssNaming({ prefix }))`
@@ -95,14 +110,23 @@ export type CssNaming = {
 export function cssNaming(options: CssNamingOptions = {}): CssNaming {
 	const prefix = options.prefix ?? DEFAULT_PREFIX;
 
+	// Checked here, once, rather than left to the block writer, because a prefix also reaches the
+	// output inside the theme block's `var()` references, which `declarationBlock` never reads as
+	// names. The empty prefix passes this and is refused by the namespace check instead.
+	if (prefix !== '' && !SOUND_NAME.test(prefix)) {
+		throw new Error(
+			`prefix "${prefix}" is not a run of hyphen-separated letters, digits and underscores, so the properties it names would not reach a consumer intact`,
+		);
+	}
+
 	return {
 		prefixedProperty: (entry: string) => prefixedProperty(entry, prefix),
 		semanticProperty,
 	};
 }
 
-/** One custom-property declaration, before it is joined into a rule body. */
-type CssDeclaration = { property: string; value: string };
+/** One custom-property declaration, before it is joined into a block. */
+export type CssDeclaration = { property: string; value: string };
 
 /**
  * Writes a token set out as the custom-property blocks a shadcn project drops into its
@@ -145,8 +169,11 @@ type CssDeclaration = { property: string; value: string };
  * - `--cmb-leading-normal` → `--leading-normal` (a line height)
  * - `--cmb-tracking-normal` → `--tracking-normal`
  *
- * So the theme block writes `--<entry>: var(--<prefix>-<entry>)` and needs no second table mapping
- * category names onto namespaces.
+ * So the theme block writes `--<entry>: var(--<prefix>-<entry>)` and needs no table mapping an
+ * entry onto its property. It does spell each category's entry name again (`font-weight-${name}`
+ * and the rest are written out in both files), so a root renamed on one side only is not prevented
+ * here. `theme-block.test.ts` catches it: every `var()` the theme block writes has to name a
+ * property this adapter declares.
  *
  * A property that lands inside a namespace is refused by name rather than skipped, the same call
  * `resolveScheme` and `stepNumberName` make: the alternative is an export that is short a token and
@@ -161,11 +188,12 @@ type CssDeclaration = { property: string; value: string };
  * reading it would cast the light page's shadow under `.dark`. That substitution renders cleanly
  * and looks like a shadow that simply failed to darken.
  *
- * Pure in the sense the acceptance criterion asks for: same token set in, same bytes out. Nothing
- * reads the DOM, the network, storage, or module state, and the token set is read and never
- * written. That is the contract `serializeDtcg` (`core/dtcg/serialize.ts`) states for the
- * `DtcgDocumentPair` it returns. This adapter needs no counterpart to that file's defensive clone,
- * because it hands back a string it built rather than any part of the token set.
+ * Pure in the sense the acceptance criterion asks for: same token set in, same bytes out, key order
+ * included (`toStylesheet` in `core/css/stylesheet.ts` says why). Nothing reads the DOM, the
+ * network, storage, or module state, and the token set is read and never written. That is the
+ * contract `serializeDtcg` (`core/dtcg/serialize.ts`) states for the `DtcgDocumentPair` it
+ * returns. This adapter needs no counterpart to that file's defensive clone, because it hands back
+ * a string it built rather than any part of the token set.
  *
  * `serializeDtcg` parses its argument first and this does not. That parse buys DTCG a hue of
  * exactly 360 folded to 0, which the vendored schema rejects and CSS accepts, so parsing here would
@@ -213,13 +241,45 @@ export function toGlobalsCss(tokenSet: TokenSet, naming: CssNaming): string {
 		...rampDeclarations(tokenSet.schemes.dark.primitives, naming),
 	];
 
-	return `${rule(LIGHT_SELECTOR, rootBody)}\n${rule(DARK_SELECTOR, darkBody)}`;
+	return `${declarationBlock(LIGHT_SELECTOR, rootBody)}\n${declarationBlock(DARK_SELECTOR, darkBody)}`;
 }
 
-function rule(selector: string, declarations: readonly CssDeclaration[]): string {
+/**
+ * Joins declarations into one block, refusing any property the consumer would not read back as
+ * exactly the one property it was written as. Both adapters write every block through here, which
+ * is what makes this the one place the rule is enforced rather than one copy per adapter.
+ *
+ * Two ways a name fails. It is not a {@link SOUND_NAME}, so PostCSS stops at the first space or
+ * Tailwind reads a `--` suffix as another entry's companion. Or it repeats within the block: two
+ * tokens in the set mapped onto one name, and Tailwind keeps the last theme entry and a browser the
+ * last declaration, so one token loses its utility with nothing logged. A semantic `brand-500`
+ * beside ramp step 7 is that case, both landing on `--color-brand-500`.
+ *
+ * Unique within each block is unique across the output. The namespace check in
+ * {@link prefixedProperty} and {@link semanticProperty} keeps every scheme-rule property outside
+ * Tailwind's namespaces, and every theme entry sits inside one, so the two halves cannot share a
+ * name. `:root` and `.dark` repeating each other is the design: it is how a scheme swaps values.
+ */
+export function declarationBlock(header: string, declarations: readonly CssDeclaration[]): string {
+	const seen = new Set<string>();
+
+	for (const { property } of declarations) {
+		if (!property.startsWith('--') || !SOUND_NAME.test(property.slice(2))) {
+			throw new Error(
+				`${property} is not a name every consumer reads as one property: it has to be letters, digits and underscores joined by single hyphens. Rename the token it came from`,
+			);
+		}
+		if (seen.has(property)) {
+			throw new Error(
+				`${header} would declare ${property} twice, so two tokens in this set map onto one name and the consumer keeps only the last; rename one of them`,
+			);
+		}
+		seen.add(property);
+	}
+
 	const body = declarations.map(({ property, value }) => `\t${property}: ${value};\n`).join('');
 
-	return `${selector} {\n${body}}\n`;
+	return `${header} {\n${body}}\n`;
 }
 
 function colorDeclarations(
@@ -368,9 +428,20 @@ function scalarDeclarations(tokenSet: TokenSet, naming: CssNaming): CssDeclarati
  *
  * Both the exact match and the hyphenated descendant are rejected, because Tailwind claims roots
  * in both forms: `--spacing` is a theme variable on its own and `--shadow-md` is one under
- * `shadow`. Either collision leaves the `@theme inline` entry and the property it reads sharing a
- * name, so the entry resolves to nothing and the utility it feeds has no value to paint. The
- * stylesheet still parses, which is why the collision earns a throw and not a warning.
+ * `shadow`.
+ *
+ * With the empty prefix the raw property is the theme entry's own name, so
+ * `--shadow-md: var(--shadow-md)` reads itself and the utility gets no value. The stylesheet still
+ * parses, which is why that earns a throw and not a warning.
+ *
+ * A prefix that is itself a root, such as `text`, fails differently or not yet. `--text-shadow-md`
+ * is a different name from `--shadow-md`, so nothing reads itself. What it is instead is a name
+ * inside a namespace Tailwind owns, the same position that makes a semantic `blur-sm` rebind
+ * Tailwind's own `blur-sm` utility (see {@link semanticProperty}). In 4.3.3 none of the names
+ * `text` produces is one a stock utility reads through `var()`: the stock theme does declare
+ * `--text-shadow-md`, but `text-shadow-md` compiles its value inline. So `text` is refused because
+ * the rule is about the position, not a lookup of which names the stock theme happens to read
+ * today, and a later Tailwind could start reading any of them.
  */
 function prefixedProperty(name: string, prefix: string): string {
 	const property = prefix === '' ? name : `${prefix}-${name}`;
@@ -378,7 +449,7 @@ function prefixedProperty(name: string, prefix: string): string {
 
 	if (namespace) {
 		throw new Error(
-			`--${property} falls inside Tailwind's "${namespace}" namespace, so the theme entry reading it would reference itself; prefix "${prefix}" cannot carry the token "${name}"`,
+			`--${property} falls inside Tailwind's "${namespace}" namespace, where it is either the theme entry's own name or one Tailwind's theme can claim; prefix "${prefix}" cannot carry the token "${name}"`,
 		);
 	}
 

@@ -1,18 +1,22 @@
 import type { Oklch } from '../oklch';
 
 /**
- * Decimals a CSS number rounds to unless a caller says otherwise: the precision `quantizeToSrgb`
- * (`core/oklch.ts`) already settles the sRGB round trip on.
+ * Decimals a CSS number rounds to unless a caller says otherwise. Six is the most `quantizeToSrgb`
+ * (`core/oklch.ts`) keeps on any channel, so a colour that went through it prints unchanged. See
+ * {@link OklchCssOptions.places} for the hue it rounds harder.
  */
 const DEFAULT_PLACES = 6;
 
 /** Options controlling how {@link toOklchCss} rounds a colour's channels before they print. */
 export type OklchCssOptions = {
 	/**
-	 * Decimal places each channel rounds to before it prints. Defaults to 6 — the precision
-	 * `quantizeToSrgb` (`core/oklch.ts`) already settles the sRGB round trip on, so a declaration
-	 * this module writes and the byte `quantizeToSrgb` checked against are never two different
-	 * roundings of what is supposed to be the same value.
+	 * Decimal places each channel rounds to before it prints. Defaults to 6.
+	 *
+	 * `quantizeToSrgb` (`core/oklch.ts`) rounds lightness and chroma to six places and hue to four,
+	 * so six here keeps every digit a quantized colour carries and printing one is lossless. That
+	 * is the whole of the agreement. This function does not quantize: a colour that never went
+	 * through `quantizeToSrgb` prints its hue at six places, so hue 123.456789 prints as
+	 * `123.456789` where `quantizeToSrgb` would have settled on `123.4568`.
 	 */
 	places?: number;
 };
@@ -78,6 +82,13 @@ export function toOklchCss(color: OklchCssColor, options: OklchCssOptions = {}):
  */
 export function formatCssNumber(value: number, places: number = DEFAULT_PLACES): string {
 	const rounded = roundTo(value, places);
+
+	// The schemas bound few of these numbers from above, and rounding scales by 10^places first, so
+	// a large enough value overflows here and would print `Infinity`: an identifier to CSS, which
+	// voids every declaration it lands in without a word.
+	if (!Number.isFinite(rounded)) {
+		throw new Error(`${value} is too large to print as a CSS number at ${places} decimal places`);
+	}
 
 	if (rounded === 0) return '0';
 

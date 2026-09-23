@@ -6,7 +6,7 @@ import {
 	type ShadowScale,
 	type TokenSet,
 } from '../token-set';
-import { BRAND_RAMP, type CssNaming } from './globals-css';
+import { BRAND_RAMP, type CssNaming, declarationBlock } from './globals-css';
 import { stepNumberName } from './step-numbers';
 
 /** One theme entry: the bare Tailwind name and the raw property its `var()` points at. */
@@ -21,16 +21,20 @@ type ThemeEntry = { name: string; reference: string };
  * is the half of this design that puts scheme-dependent values somewhere a `var()` can reach: under
  * `:root` and `.dark`. Which property each entry points at is not restated here: it comes from the
  * one `CssNaming` that half names its properties by, so the two shapes below describe what comes
- * out rather than a second copy of the rule that could drift from the first.
+ * out rather than a second copy of the prefixing rule. The entry names themselves are spelled in
+ * both files, category by category; the cross-adapter test in `theme-block.test.ts` is what holds
+ * those two spellings together.
  *
  * - `--<entry>: var(--<prefix>-<entry>)` for every prefixed property
  * - `--color-<semantic>: var(--<semantic>)` for the semantic colours, which stay bare
  *
  * Property names come from a `CssNaming` (`core/css/globals-css.ts`) rather than from a prefix this
  * module resolves for itself. Every name here has to be the name the other half declares, or the
- * entries point at properties nothing declares: a stylesheet that parses and paints nothing. One
- * naming object handed to both halves is what makes them agree by construction; a second copy of
- * the rule, or a second reading of the same prefix, would leave the agreement to a comment.
+ * prefixed entries point at properties nothing declares and every utility they feed goes without a
+ * value, with the parse still clean. Only the semantic entries survive a mismatch, because their
+ * references carry no prefix. One naming object handed to both halves is what makes them agree by
+ * construction; a second copy of the rule, or a second reading of the same prefix, would leave the
+ * agreement to a comment.
  *
  * The argument carries no default for the same reason. `toThemeBlock(set)` beside
  * `toGlobalsCss(set, cssNaming({ prefix }))` is exactly the mismatch above, and without a default
@@ -56,10 +60,13 @@ type ThemeEntry = { name: string; reference: string };
  *
  * Names come off the token set's own semantic layer, ramp keys and scalar keys rather than off
  * `SEMANTIC_MAP` or a hardcoded ramp list, the way `toGlobalsCss` already reads its own inputs: a
- * set short a ramp, or one carrying a semantic key `SEMANTIC_MAP` never named, still gets exported
- * exactly as it holds it. The one name that does not survive is one a Tailwind namespace already
- * claims, which `CssNaming` refuses on both halves rather than emitting an entry that would rebind
- * a utility in the consuming project.
+ * set short a ramp, or one carrying a semantic key `SEMANTIC_MAP` never named, still gets every
+ * token it holds exported under its own name. A set that cannot be exported that way is refused by
+ * name rather than exported with a token missing or shadowed. Three kinds of name get refused. One
+ * a Tailwind namespace already claims, which `CssNaming` refuses on both halves. One that is not a
+ * plain hyphenated identifier, since PostCSS or Tailwind would read it as something else. And two
+ * tokens landing on one entry, such as a semantic `brand-500` beside ramp step 7, both
+ * `--color-brand-500`; `declarationBlock` (`core/css/globals-css.ts`) refuses the last two.
  *
  * Property names only, taken from the light scheme. A theme entry does not carry a colour, so it
  * cannot itself be scheme-dependent, and reading one scheme's names is exactly right when the two
@@ -68,8 +75,9 @@ type ThemeEntry = { name: string; reference: string };
  * set the two adapters share.
  *
  * Pure in the sense `serializeDtcg` (`core/dtcg/serialize.ts`) states the contract: same token set
- * in, same bytes out. Nothing here reads the DOM, the network, storage or module state, and the
- * token set is read and never written.
+ * in, same bytes out, key order included (`toStylesheet` in `core/css/stylesheet.ts` says why).
+ * Nothing here reads the DOM, the network, storage or module state, and the token set is read and
+ * never written.
  */
 export function toThemeBlock(tokenSet: TokenSet, naming: CssNaming): string {
 	const { light } = tokenSet.schemes;
@@ -82,9 +90,10 @@ export function toThemeBlock(tokenSet: TokenSet, naming: CssNaming): string {
 		...shadowEntries(light.shadow, naming),
 	];
 
-	const body = entries.map(({ name, reference }) => `\t--${name}: var(${reference});\n`).join('');
-
-	return `@theme inline {\n${body}}\n`;
+	return declarationBlock(
+		'@theme inline',
+		entries.map(({ name, reference }) => ({ property: `--${name}`, value: `var(${reference})` })),
+	);
 }
 
 /**

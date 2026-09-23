@@ -1,8 +1,9 @@
 /**
  * Same reasoning as `globals-css.test.ts`: nothing here string-matches the emitted block. Every
- * assertion runs the output through postcss and reads the parsed declarations back off the tree,
- * because a string comparison passes on `@theme inline` text no browser would accept as well as it
- * does on text a browser would.
+ * assertion about what the block says runs it through postcss and reads the parsed declarations
+ * back off the tree, because a string comparison passes on `@theme inline` text no browser would
+ * accept as well as it does on text a browser would. The same two exceptions apply: the purity
+ * check compares returned strings byte for byte, and the refusal checks read the thrown message.
  *
  * The one check that is specific to this file is the cross-adapter one: every `var()` this module
  * writes has to name a property `toGlobalsCss` actually declares. `globals-css.test.ts` already
@@ -10,9 +11,9 @@
  * of criterion 5 has to be proved here, against the sibling adapter's real output, or it is never
  * proved anywhere.
  *
- * That cross-adapter check stops at the property names. Whether Tailwind resolves them into
- * utilities that paint is `core/css/stylesheet.test.ts`, which runs the real compiler over the two
- * halves as one file.
+ * That cross-adapter check stops at the property names. Whether Tailwind compiles them into
+ * utilities that read them is `core/css/stylesheet.test.ts`, which runs the real compiler over the
+ * two halves as one file.
  */
 import { parse } from 'postcss';
 import { describe, expect, it } from 'vitest';
@@ -188,6 +189,26 @@ describe('toThemeBlock', () => {
 		expect(() => toThemeBlock(PINNED_SET, cssNaming({ prefix: 'text' }))).toThrow(
 			/--text-color-brand-25/,
 		);
+	});
+
+	it('refuses a prefix that would put a malformed name inside a var() reference', () => {
+		// This half only ever writes a prefix inside `var()`, where PostCSS takes any token run as a
+		// custom property's value, so a space there parses. What a browser needs is one dashed
+		// identifier per `var()`, so that is what each parsed value is held to. `toStylesheet` would
+		// catch the prefix on the declaring half as well; called alone, this half has no such
+		// backstop.
+		let block = '';
+		let refusal = '';
+		try {
+			block = toThemeBlock(PINNED_SET, cssNaming({ prefix: 'bad prefix' }));
+		} catch (error) {
+			refusal = (error as Error).message;
+		}
+
+		for (const declaration of allDeclarations(block)) {
+			expect(declaration.value).toMatch(/^var\(--[\w-]+\)$/);
+		}
+		expect(refusal).toContain('bad prefix');
 	});
 
 	it('refuses a semantic token whose bare property lands inside a Tailwind namespace', () => {

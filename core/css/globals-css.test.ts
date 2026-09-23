@@ -2,8 +2,11 @@
  * Nothing here string-matches the emitted stylesheet. A browser never sees the string this adapter
  * returns; it sees whatever a CSS parser made of it, and an expected literal like
  * `':root {\n\t--background: oklch(1 0 0);\n}'` passes just as readily on output no parser accepts.
- * So every assertion runs the output through postcss and walks the tree it built, and the property
- * names, the selectors and the channel numbers are read back off that tree.
+ * So every assertion about what the output says runs it through postcss and walks the tree it
+ * built, and the property names, the selectors and the channel numbers are read back off that tree.
+ * Two kinds never parse. The purity check compares two returned strings byte for byte, because
+ * purity is a claim about bytes. The refusal checks read the thrown message, because a refused set
+ * has no output to parse.
  *
  * The expected values are settled ahead of the emitter rather than read out of it. `PINNED_SET`
  * numbers its ramp steps so that step n sits at lightness n/100, and the assertions below name the

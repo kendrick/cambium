@@ -1,11 +1,12 @@
 /**
  * `toOklchCss` never gets string-matched here: an expected literal like `'oklch(0.205 0 0)'`
  * would pass on output no browser can parse just as readily as on output that renders. Every
- * assertion below runs the emitted declaration through postcss, walks to the declaration node
- * postcss actually parsed, and checks the numbers it found against a value rounded by
+ * assertion about the value runs the emitted declaration through postcss, walks to the declaration
+ * node postcss actually parsed, and checks the numbers it found against a value rounded by
  * `toFixed`/`Number` — a decimal-string technique that shares no scale-multiply step with the
  * implementation's own `roundTo`, so a bug in one has nothing to hide behind agreement with the
- * other.
+ * other. The purity check is the exception: it compares two returned strings byte for byte,
+ * because purity is a claim about bytes.
  */
 import { parse } from 'postcss';
 import { describe, expect, it } from 'vitest';
@@ -83,6 +84,24 @@ describe('toOklchCss', () => {
 
 		expect(match?.[2]).toBe('0');
 		expect(Object.is(channels(decl.value)[1], -0)).toBe(false);
+	});
+
+	it('refuses a channel too large to print as a CSS number', () => {
+		// `OklchChannelsSchema` puts no ceiling on chroma, and past about 1e302 the rounding
+		// overflows to `Infinity`. PostCSS takes that inside a custom property, but it is an
+		// identifier, not a number, so `oklch()` goes invalid at computed-value time. The parsed
+		// channel is held to CSS's own number grammar.
+		let printed = 'oklch(0 0 0)';
+		let refusal = '';
+		try {
+			printed = toOklchCss({ l: 0.5, c: 1e303, h: 260 });
+		} catch (error) {
+			refusal = (error as Error).message;
+		}
+
+		const [, c] = OKLCH_TRIPLE.exec(parseDeclaration(printed).value)?.slice(1) ?? [];
+		expect(c).toMatch(/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i);
+		expect(refusal).toContain('1e+303');
 	});
 
 	it('never emits an alpha slot for a plain triple', () => {
