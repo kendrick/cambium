@@ -484,13 +484,46 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			);
 
 			// One version throughout, revision 3 against 2. Swap either pair into the other's place
-			// and three of these four numbers change.
+			// and all four of these numbers change.
 			expect(thrown).toMatchObject({
 				kind: 'stale-record-write',
 				recordId: record.id,
 				storedVersions: 1,
 				incomingVersions: 1,
 				storedRevision: 3,
+				incomingRevision: 2,
+			});
+		});
+
+		// The scenario above holds both version counts at 1, so it cannot tell one side's count from
+		// the other's: feeding `incomingVersions` the stored count, or `storedVersions` the incoming
+		// one, reports the same four numbers. Here the two counts differ, because the write that
+		// landed appended a version and the stale copy still carries the shorter history it read.
+		it("reports each side's version count from its own record", async () => {
+			const record = makeRecord();
+			await store.put(record);
+			const staleCopy = await read(store, record.id);
+
+			// The write that lands takes the history to two versions.
+			await store.put(appended(record));
+
+			const fromTheStaleCopy = withAddedImage(staleCopy, {
+				id: 'img-1',
+				downscaled: 'data:image/png;base64,AA==',
+				originalHash: 'sha256:a',
+			});
+			const thrown = await store.put(fromTheStaleCopy).then(
+				() => null,
+				(error: unknown) => error,
+			);
+
+			// Two stored versions against the copy's one. Swap the two counts and both change.
+			expect(thrown).toMatchObject({
+				kind: 'stale-record-write',
+				recordId: record.id,
+				storedVersions: 2,
+				incomingVersions: 1,
+				storedRevision: 2,
 				incomingRevision: 2,
 			});
 		});
@@ -530,7 +563,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		// rule keyed on `versions.length` gets most wrong: there is nothing to compare a change
 		// against, so nothing here would catch a regression that quietly brought the old limit
 		// back for a record that has never been generated yet.
-		it.each([0, 1, 2])(
+		it.each([0, 1, 2, 3])(
 			'stores a write that changes only images, appending no version (%i versions already stored)',
 			async (versionCount) => {
 				const versions = Array.from({ length: versionCount }, (_, index) =>
@@ -579,36 +612,37 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		 * A known hole, pinned here so it cannot move without someone noticing. This test asserts
 		 * what the seam does today, not what it should do.
 		 *
-		 * The hole is one shape of recreate, not recreates in general. A stale copy of a deleted
-		 * record slips through only where the recreate restarts at the revision that copy holds and
-		 * carries a history that is a byte-equal prefix of the copy's. The fixture below is that
-		 * shape, an exact replica. Then the dead copy's image-only commit is byte for byte the
-		 * commit the live record's own holder would send, and no rule reading only the two records
-		 * can part them. Closing it takes identity that survives on the record, which
-		 * `core/brand-record.ts` owns rather than `followsStoredRecord`.
+		 * The cause is that `revision` restarts when a record is deleted and recreated under the same
+		 * id. `followsStoredRecord` compares an incoming write against the record storage holds now,
+		 * and nothing in either record says which incarnation the write came from, so a copy of the
+		 * deleted one whose revision has drawn level with the live record writes as its successor.
 		 *
-		 * Anything else is refused, which is what keeps this narrow. The test directly below drives
-		 * one divergence and pins both halves of it: the stale write rejects and the live record's
-		 * own next write still lands.
+		 * No condition is stated for when that lines up. Four attempts to bound it were each wrong
+		 * against cases their author had not thought of, and #78's red-team measured sixteen. Two
+		 * tests stand here instead of a rule: an ordinary sequence that reaches it, and a verbatim
+		 * replica. They are instances, not a boundary, and the gap between them is exactly the thing
+		 * four bounds got wrong.
 		 *
 		 * #78 opened it. Before #78 an image-only write was refused whatever incarnation it came
 		 * from, because `put` demanded a strictly longer history, and accepting metadata-only writes
 		 * took that side effect away.
 		 *
 		 * Nothing in the product reaches it: `delete` has no caller outside the test suites, and every
-		 * record is created under a fresh uuid, so no id is recreated. Restoring an archive over an
-		 * id that already exists is the first flow that gets here, and `record-store.ts` assigns
-		 * restore to #15 and #29.
+		 * record is created under a fresh uuid, so no id is recreated. #20, which owns archive import,
+		 * restores as a copy under a fresh uuid rather than in place, so it does not recreate one
+		 * either. That is why this is dormant, and dormant is not closed: `delete` is still on the
+		 * interface, and the two tests above still pass, so whatever recreates an id first turns it
+		 * on.
 		 *
-		 * When that fix lands, delete this test. Its inverse is the assertion to write in its place.
+		 * When the fix lands, delete both tests. Their inverse is the assertion to write instead.
 		 */
 		it('accepts a write from an incarnation that was deleted and recreated, which is a known hole', async () => {
 			const original = makeRecord();
 			await store.put(original);
 			const copyOfTheOriginal = await read(store, original.id);
 
-			// Recreated as an exact replica: the same history, and the same starting revision the
-			// copy above holds. That is the one shape this seam cannot refuse.
+			// One instance of the cause: the recreate happens to sit at the revision the copy above
+			// holds, so the copy's next write is the stored revision's successor.
 			await store.delete(original.id);
 			const recreated = makeRecord({ id: original.id, versions: original.versions });
 			await store.put(recreated);
@@ -629,12 +663,65 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			]);
 		});
 
-		// The bound on the hole above, and the reason it stays a curiosity rather than a live risk.
-		// One divergence is enough: this recreate carries the same single version at a different
-		// instant, so it is no longer a prefix of what the dead copy holds, and the stale write is
-		// refused. Both halves are asserted, because refusing every write would satisfy the first on
-		// its own and would be a different defect: the live record's own next image still lands.
-		it('refuses a write from a deleted incarnation once the recreated record diverges at all', async () => {
+		// The same cause reached by an ordinary sequence, with nothing arranged to meet a shape. The
+		// first brand is created and given an image, so its holder's copy sits at revision 2. A
+		// second brand takes the id, starts at revision 1 as any new record does, and its owner adds
+		// one image, which brings it level at revision 2. The dead copy's next write is then the
+		// stored revision's successor, and it overwrites the live owner's image.
+		//
+		// This is the sequence that broke the fourth attempt to bound the gap: every earlier bound was
+		// drawn around the replica above, and this one sits outside all four. It is why the gap is
+		// described by its cause rather than by a region.
+		it('accepts a stale write once the recreated record has caught up to the copy revision', async () => {
+			const original = makeRecord();
+			await store.put(original);
+			const firstBrandWithImage = withAddedImage(original, {
+				id: 'img-the-first-brand-had',
+				downscaled: 'data:image/png;base64,AA==',
+				originalHash: 'sha256:first',
+			});
+			await store.put(firstBrandWithImage);
+			const staleCopy = await read(store, original.id);
+			expect(staleCopy.revision).toBe(2);
+
+			await store.delete(original.id);
+			const recreated = makeRecord({ id: original.id, versions: original.versions });
+			await store.put(recreated);
+
+			// Ordinary use by the second brand's owner, which is what brings the revisions level.
+			const ownersImage = withAddedImage(recreated, {
+				id: 'img-the-owner-added',
+				downscaled: 'data:image/png;base64,BB==',
+				originalHash: 'sha256:owner',
+			});
+			await store.put(ownersImage);
+			expect((await read(store, original.id)).revision).toBe(staleCopy.revision);
+
+			const fromTheDeadIncarnation = withAddedImage(staleCopy, {
+				id: 'img-from-a-deleted-incarnation',
+				downscaled: 'data:image/png;base64,CC==',
+				originalHash: 'sha256:ghost',
+			});
+			await expect(store.put(fromTheDeadIncarnation)).resolves.toMatchObject({
+				images: fromTheDeadIncarnation.images,
+			});
+
+			// Read back rather than trusting what `put` resolved with. Storage now holds the dead
+			// incarnation's images, because the stale write carried that copy's whole record, and
+			// the second brand owner's image is gone from it. Nothing errored.
+			const held = (await read(store, original.id)).images.map((image) => image.id);
+			expect(held).toEqual(['img-the-first-brand-had', 'img-from-a-deleted-incarnation']);
+			expect(held).not.toContain('img-the-owner-added');
+		});
+
+		// One sequence where the stale write is refused, asserted as that sequence and not as a rule
+		// about divergence: a recreate whose history differs from the dead copy's can still take a
+		// stale write, when the stale write appends the version that closes the difference. Here the
+		// recreate carries the same single version at a different instant and the stale write appends
+		// nothing, so the histories never agree and the write is refused. Both halves are asserted,
+		// because refusing every write would satisfy the first on its own and would be a different
+		// defect: the live record's own next image still lands.
+		it("refuses this stale write, where the recreated history never agrees with the copy's", async () => {
 			const original = makeRecord();
 			await store.put(original);
 			const copyOfTheOriginal = await read(store, original.id);

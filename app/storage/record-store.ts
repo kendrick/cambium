@@ -37,33 +37,48 @@ import type { BrandRecord } from '../../core/brand-record';
  * record of what was generated at one moment, so editing one rewrites history a later version may
  * cite.
  *
- * These rules read what a write carries, never which incarnation produced it, and that gap opens on
- * one shape of recreate rather than on recreates generally. A stale copy of a deleted record slips
- * through only where the recreate restarts at the revision that copy holds and carries a history
- * that is a byte-equal prefix of the copy's. On that shape the dead copy's image-only commit is
- * byte for byte the commit the live record's own holder would send, so nothing reading only the two
- * records can part them.
+ * Both rules compare an incoming write against the record as storage holds it now. Neither can say
+ * which incarnation the write came from, and `revision` cannot supply that, because it restarts at
+ * whatever a creator sets when a record is deleted and recreated under the same id. A copy of the
+ * deleted incarnation can therefore hold, or later reach, the revision the live record has since
+ * reached. Its write is then the stored revision's successor over a history the stored history
+ * continues, which is the whole of what `followsStoredRecord` checks, so the write is accepted and
+ * whatever the live record held is overwritten with no error raised.
  *
- * Every other recreate is refused, and refused without refusing the live record too: one different
- * `createdAt`, a history that is not a prefix, an extra version, or any other starting revision,
- * and the stale write rejects while the live record's own next write still lands. That bound is
- * what keeps this narrow, and `record-store-contract.ts` pins both sides of it, in
- * "accepts a write from an incarnation that was deleted and recreated, which is a known hole" and
- * in the refusal test directly below it.
+ * How often that lines up is deliberately not stated here as a condition. Four attempts to bound it
+ * have each been wrong, and each was tested against the cases its own author thought of. #78's
+ * red-team measured sixteen, and `record-store-contract.ts` pins the one an ordinary sequence of
+ * writes reaches.
  *
- * Closing the remaining shape takes identity carried on the record, which `core/brand-record.ts`
- * owns rather than this seam. #78 opened it: demanding a longer history used to refuse those writes
- * whatever incarnation they came from, and accepting metadata-only writes took that side effect
- * away. No product code calls `delete` today, and every record is created under a fresh uuid, so
- * nothing a user can do reaches it. Restore is the first flow that would, which puts it with #15
- * and #29 below.
+ * Closing it takes identity carried on the record, which `core/brand-record.ts` owns rather than
+ * this seam. #78 opened it: demanding a longer history used to refuse those writes whatever
+ * incarnation they came from, and accepting metadata-only writes took that side effect away. No
+ * product code calls `delete` today, and every record is created under a fresh uuid, so no id is
+ * ever recreated and nothing a user can do reaches it.
  *
  * Restoring an archive over a record that still exists gets no special handling here. `put` judges
  * an archive as it judges any other write, so it accepts one whose revision is the successor of the
  * stored revision and whose versions extend the stored history, storing it over what is there.
  * Nothing asks whether the two records share a past. An archive further ahead than that, or one
- * carrying a different history, rejects. Restore belongs to #15 and #29, and whether to keep that
- * behaviour or force `delete` and then `put` instead is theirs to settle.
+ * carrying a different history, rejects.
+ *
+ * #20 owns restore, not #15 or #29: those two export derived token artifacts and both exclude a
+ * record archive in their non-goals, and a `BrandRecord` cannot be rebuilt from what either emits.
+ * #20 serializes a record to a re-importable archive, and one of its acceptance criteria is "Export,
+ * clear storage, then import yields a token set identical to the original". Clearing storage and
+ * importing is delete and recreate, which is the sequence the gap above needs.
+ *
+ * #20 restores a record as a copy under a fresh uuid rather than in place under the id it was
+ * exported with, and it decided that against this gap. Restoring in place recreates an id, and
+ * closing what that opens needs incarnation identity on `BrandRecord`, which is a schema change
+ * #36's Boundary rules out for the phase: "Nothing in this phase changes an interface, a schema, or
+ * a call site established in v1."
+ *
+ * Nothing recreates an id, then. `delete` has no caller outside the test suites, every record is
+ * created under a fresh uuid, and an import mints another one. That is why the gap is dormant, and
+ * dormant is not closed: `delete` is still on this interface and `followsStoredRecord` still accepts
+ * a write against a record recreated under a deleted id. Whatever recreates one first turns the gap
+ * on and owes the schema change with it.
  *
  * `put` resolves with the record as stored, after parsing. `BrandSeedSchema` canonicalises values
  * that have two spellings — a hue committed as 360 is stored as 0 — so a caller that adopts the
@@ -120,13 +135,15 @@ export type RecordStore = {
  * yields the whole of that history back, and two JSON arrays of different lengths never serialise
  * alike, so the comparison below already refuses it.
  *
- * Compared by serialisation, which is sound only because of what `BrandRecordSchema` refuses.
- * Nothing in a parsed record is optional, so no key holds `undefined` for `JSON.stringify` to drop.
- * Zod rejects every non-finite number, checked against each unbounded field rather than assumed, so
- * nothing serialises to `null` without being null. `z.array` yields dense arrays, so no hole does
- * either. Both sides have been through that parse: the incoming record at the top of `put`, the
- * stored one when it was written. A schema change that relaxes any of those weakens this comparison
- * with nothing failing to say so, and #77 edits these very schemas.
+ * Compared by serialisation, which is sound only because of what the schema refuses. Only `versions`
+ * is serialised here, so it is `BrandVersionSchema` that has to hold: nothing in it is optional, so
+ * no key holds `undefined` for `JSON.stringify` to drop; Zod rejects every non-finite number,
+ * checked against each unbounded field rather than assumed, so nothing serialises to `null` without
+ * being null; and `z.array` yields dense arrays, so no hole does either. Both sides have been
+ * through that parse: the incoming record at the top of `put`, the stored one when it was written.
+ * A change relaxing any of those weakens this comparison with nothing failing to say so. #77 is not
+ * that change: it adds a tag to `ReferenceImageSchema` and an optional brand URL to
+ * `BrandRecordSchema`, and neither sits inside `versions`.
  *
  * `-0` is the one value the schema admits that serialises like another. It collapses to `0` here,
  * which is right rather than merely tolerated: the two are the same number, `sameJson` upstream
@@ -155,13 +172,20 @@ export function followsStoredRecord(stored: BrandRecord, incoming: BrandRecord):
 }
 
 /**
- * Thrown when `followsStoredRecord` refuses a write. Exactly one of three things is true of the
- * refused write, and the two revisions are what say which.
+ * Thrown when `followsStoredRecord` refuses a write. The two revisions sort every refusal into one
+ * of three arithmetic cases, and the message is written from whichever holds.
  *
- * `incomingRevision <= storedRevision` means another write landed while this copy was deriving its
- * own next commit. `incomingRevision > storedRevision + 1` means the copy is further ahead than one
- * commit, so it carries work storage never took, whether or not anyone else also wrote. Otherwise
- * the revision follows and the history rule is what refused the write.
+ * `incomingRevision <= storedRevision` reads as another write landing while this copy was deriving
+ * its own next commit. `incomingRevision > storedRevision + 1` reads as the copy running further
+ * ahead than one commit, carrying work storage never took. Otherwise the revision follows and the
+ * history rule is what refused the write.
+ *
+ * Those readings assume the copy and the stored record are the same record, which is true of every
+ * refusal except one. Where an id has been deleted and recreated, the arithmetic still lands in one
+ * of the three and the sentence it produces describes a record the copy never saw: a copy of the
+ * deleted incarnation is told another write landed, or that it ran ahead, when what actually happened
+ * is that its record is gone. Nothing the error carries can distinguish that, for the reason the
+ * module docblock gives, so the message is wrong in exactly the case that gap is wrong in.
  *
  * The recovery differs across those, which is why the error has to part them. A copy that was
  * overtaken re-reads and commits again, and loses nothing. A copy that ran ahead re-reads and
@@ -184,9 +208,13 @@ export function followsStoredRecord(stored: BrandRecord, incoming: BrandRecord):
  * The four numbers arrive named rather than positional. All four are numbers, and on a record whose
  * every commit appended a version the count and the revision on each side are the same number, so a
  * transposed pair reads correctly at the call site and reports values a reader cannot tell from the
- * right ones. Naming them makes that transposition unspellable; `reports the version counts and the
- * revisions as quantities that can differ` in the contract suite covers the mis-assignment that
- * naming alone still allows.
+ * right ones. Naming them makes that transposition unspellable, and naming alone still permits
+ * feeding a field the wrong value, which takes two tests in the contract suite to cover rather than
+ * one. `reports the version counts and the revisions as quantities that can differ` parts a revision
+ * from a count, by driving a record to revision 3 over a single version. `reports each side's
+ * version count from its own record` parts the two counts from each other, by refusing a write whose
+ * copy is a version behind; without it, a field given the other record's count reports a number no
+ * assertion contradicts.
  */
 export type StaleRecordWriteStanding = {
 	storedVersions: number;
