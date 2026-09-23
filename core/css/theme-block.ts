@@ -107,7 +107,7 @@ export function toThemeBlock(tokenSet: TokenSet, naming: CssNaming): string {
  * The theme block's colour and shadow entries again, redeclared under `:where(.dark)` inside
  * `@layer theme`, so that a nested `.dark` reaches an arbitrary value naming a theme entry.
  *
- * Tailwind declares each theme entry once, on `:root`. There `--color-brand-500:
+ * Tailwind declares each theme entry once, in a `:root, :host` rule. There `--color-brand-500:
  * var(--cmb-color-brand-500)` resolves against the light value, and descendants inherit the resolved
  * colour, not the `var()`. A `.dark` wrapper below the root swaps `--cmb-color-brand-500` on the
  * wrapper and leaves the inherited entry alone, so `bg-[var(--color-brand-500)]` inside it keeps
@@ -131,8 +131,8 @@ export function toThemeBlock(tokenSet: TokenSet, naming: CssNaming): string {
  * declaration beats the value it would inherit from `:root`, unlayered consumer CSS on `:root`
  * included. A consumer who overrides a Cambium entry and nests `.dark` has to override it under
  * `.dark` as well. The same holds going the other way: a light island inside dark that resets the
- * raw `--cmb-*` values has to reset these entries too, or a named utility and its arbitrary twin
- * paint different colours.
+ * raw `--cmb-*` values, or a semantic property such as `--primary`, has to reset these entries too,
+ * or a named utility and its arbitrary twin paint different colours.
  *
  * Only colour and shadow, because only they vary by scheme; radius, type and tracking are declared
  * on `:root` alone and have nothing to swap. The list comes from `schemeDependentEntries`, which
