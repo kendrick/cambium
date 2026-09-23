@@ -19,8 +19,8 @@ const DARK_VARIANT = '@custom-variant dark (&:is(.dark *));';
 /**
  * A token set as the whole stylesheet a project pastes into its `globals.css`: the dark variant,
  * the `@theme inline` block that registers Tailwind's namespaces, the `:root` and `.dark` rules
- * that hold the values, and a `.dark` rule in `@layer theme` that makes a nested `.dark` reach the
- * theme entries too.
+ * that hold the values, and a `:where(.dark)` rule in `@layer theme` that makes a nested `.dark`
+ * reach the theme entries too.
  *
  * This is the entry point. `toGlobalsCss` and `toThemeBlock` are two halves of one file and only
  * work as a pair — every entry in the theme block is a `var()` pointing at a property the scheme
@@ -36,8 +36,9 @@ const DARK_VARIANT = '@custom-variant dark (&:is(.dark *));';
  * The order is `app/globals.css`'s: variant, theme block, then the scheme rules. It is the order a
  * reader of a hand-maintained shadcn stylesheet already knows, and `@theme inline` entries resolve
  * against whatever the cascade settles on rather than against what precedes them, so the layout is
- * for the reader rather than for the compiler. The layered `.dark` rule comes last because it has
- * no counterpart in `app/globals.css`, and it's the part a reader is least likely to be looking for.
+ * for the reader rather than for the compiler. The layered `:where(.dark)` rule comes last because
+ * it has no counterpart in `app/globals.css`, and it's the part a reader is least likely to be
+ * looking for.
  *
  * That layered rule is what shadcn's own `globals.css` lacks. Without it, an arbitrary value naming
  * a theme entry, such as `bg-[var(--color-brand-500)]` or `shadow-[var(--shadow-md)]`, keeps its

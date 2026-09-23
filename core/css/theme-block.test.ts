@@ -246,7 +246,7 @@ describe('toThemeBlock', () => {
 	});
 });
 
-/** The layer's one `.dark` rule, read back off a postcss parse. */
+/** The layer's one `:where(.dark)` rule, read back off a postcss parse. */
 function darkRule(css: string) {
 	const root = parse(css);
 	expect(root.nodes).toHaveLength(1);
@@ -261,8 +261,10 @@ function darkRule(css: string) {
 }
 
 describe('toDarkThemeLayer', () => {
-	it('parses as one .dark rule inside @layer theme', () => {
-		expect(darkRule(toDarkThemeLayer(PINNED_SET, cssNaming())).selector).toBe('.dark');
+	it('parses as one :where(.dark) rule inside @layer theme', () => {
+		// Zero specificity, so a consumer's `@theme` override on `:root` beats it on
+		// `<html class="dark">`. `e2e/stylesheet-dark.spec.ts` measures that in Chromium.
+		expect(darkRule(toDarkThemeLayer(PINNED_SET, cssNaming())).selector).toBe(':where(.dark)');
 	});
 
 	it("redeclares exactly the theme block's colour and shadow entries, with the same references", () => {

@@ -48,9 +48,13 @@ const NAMED_TWIN = {
 	'arbitrary-shadow': 'named-shadow',
 } as const;
 
-async function compiledStylesheet(): Promise<string> {
-	const candidates = CASES.map(({ className }) => className).join(' ');
-	const input = `@import "tailwindcss" source(none);\n@source inline("${candidates}");\n${toStylesheet(PINNED_SET)}`;
+/** `consumerCss` stands in for whatever the project writes after the pasted stylesheet. */
+async function compiledStylesheet(
+	classNames: readonly string[] = CASES.map(({ className }) => className),
+	consumerCss = '',
+): Promise<string> {
+	const candidates = classNames.join(' ');
+	const input = `@import "tailwindcss" source(none);\n@source inline("${candidates}");\n${toStylesheet(PINNED_SET)}\n${consumerCss}`;
 	const result = await postcss([tailwindcss({ base: import.meta.dirname })]).process(input, {
 		from: undefined,
 	});
@@ -87,7 +91,13 @@ test('a nested .dark repaints arbitrary theme-entry values and named utilities a
 	);
 
 	for (const { id, property } of CASES) {
-		expect.soft(computed[`light-${id}`], `${id} outside .dark`).not.toBe(UNPAINTED[property]);
+		// Both schemes, because an invalid dark value leaves a utility and its arbitrary twin both
+		// unpainted, which differs from light and agrees with the twin, so nothing below would fail.
+		for (const scheme of ['light', 'dark']) {
+			expect
+				.soft(computed[`${scheme}-${id}`], `${id} painted (${scheme})`)
+				.not.toBe(UNPAINTED[property]);
+		}
 		expect
 			.soft(computed[`dark-${id}`], `${id} inside .dark vs outside`)
 			.not.toBe(computed[`light-${id}`]);
@@ -100,4 +110,37 @@ test('a nested .dark repaints arbitrary theme-entry values and named utilities a
 				.toBe(computed[`${scheme}-${named}`]);
 		}
 	}
+});
+
+/**
+ * A project that overrides one of Cambium's colours in its own `@theme` has to keep that colour on
+ * `<html class="dark">`, the way shadcn toggles the scheme. The layered dark rule redeclares every
+ * colour entry. Tailwind writes the consumer's entry on `:root` in the same layer, so the layered
+ * rule has to sit at zero specificity. At `.dark`'s, it would win on the root, and the named
+ * utility and the arbitrary value would both take Cambium's dark colour.
+ */
+test('a consumer\'s @theme override of a Cambium colour holds on <html class="dark">', async ({
+	page,
+}) => {
+	const override = 'oklch(0.6 0.25 29)';
+	const classNames = ['bg-primary', 'bg-[var(--color-primary)]'];
+	const css = await compiledStylesheet(classNames, `@theme { --color-primary: ${override}; }`);
+
+	await page.setContent(
+		`<!doctype html><html class="dark"><head><style>${css}</style></head><body>${classNames
+			.map((className, index) => `<div id="case-${index}" class="${className}">x</div>`)
+			.join('')}</body></html>`,
+	);
+
+	const computed = await page.evaluate(
+		(count) =>
+			Array.from({ length: count }, (_, index) => {
+				const element = document.getElementById(`case-${index}`);
+				if (!element) throw new Error(`no #case-${index}`);
+				return getComputedStyle(element).backgroundColor;
+			}),
+		classNames.length,
+	);
+
+	expect(computed).toEqual(classNames.map(() => override));
 });

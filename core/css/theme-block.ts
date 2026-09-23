@@ -9,7 +9,6 @@ import {
 import {
 	BRAND_RAMP,
 	type CssNaming,
-	DARK_SELECTOR,
 	declarationBlock,
 	requireGeneratedVocabulary,
 } from './globals-css';
@@ -17,6 +16,12 @@ import { stepNumberName } from './step-numbers';
 
 /** One theme entry: the bare Tailwind name and the raw property its `var()` points at. */
 type ThemeEntry = { name: string; reference: string };
+
+/**
+ * Zero specificity, so on the same element Tailwind's `:root` declaration of a theme entry wins.
+ * `toDarkThemeLayer` says why that matters.
+ */
+const DARK_THEME_SELECTOR = ':where(.dark)';
 
 /**
  * Writes a token set out as the Tailwind v4 `@theme inline { … }` block a shadcn project's
@@ -88,21 +93,18 @@ type ThemeEntry = { name: string; reference: string };
 export function toThemeBlock(tokenSet: TokenSet, naming: CssNaming): string {
 	requireGeneratedVocabulary(tokenSet);
 
-	const { light } = tokenSet.schemes;
-
 	const entries: ThemeEntry[] = [
-		...colorEntries(light.semantic, light.primitives, naming),
+		...schemeDependentEntries(tokenSet, naming),
 		...radiusEntries(tokenSet, naming),
 		...typographyEntries(tokenSet, naming),
 		...trackingEntries(tokenSet, naming),
-		...shadowEntries(light.shadow, naming),
 	];
 
 	return declarationBlock('@theme inline', entries.map(toDeclaration));
 }
 
 /**
- * The theme block's colour and shadow entries again, redeclared under `.dark` inside
+ * The theme block's colour and shadow entries again, redeclared under `:where(.dark)` inside
  * `@layer theme`, so that a nested `.dark` reaches an arbitrary value naming a theme entry.
  *
  * Tailwind declares each theme entry once, on `:root`. There `--color-brand-500:
@@ -113,31 +115,52 @@ export function toThemeBlock(tokenSet: TokenSet, naming: CssNaming): string {
  * property straight into them. Redeclaring the entry on `.dark` makes it resolve again there.
  * `e2e/stylesheet-dark.spec.ts` measures both in Chromium.
  *
- * Layered because these are Tailwind's own theme names. `@layer theme` is where Tailwind declares
- * them, so this rule sits beside them, and anything a consumer writes in a later layer or unlayered
- * still wins. Unlayered, it would beat every layered declaration of those names on a `.dark`
- * element, whatever the consumer's own theme says about them.
+ * Layered because these are Tailwind's own theme names, and `@layer theme` is where Tailwind
+ * declares them. Unlayered, this rule would beat every layered declaration of those names on a
+ * `.dark` element, the consumer's own theme included.
+ *
+ * `:where()` because of `<html class="dark">`, the way shadcn switches schemes. There this rule and
+ * Tailwind's `:root` rule land on the same element in the same layer, and a consumer's own `@theme`
+ * override of a Cambium entry is part of that `:root` rule. At `.dark`'s specificity this rule would
+ * beat it, and the consumer's colour would hold in light and lose in dark, named utilities
+ * included. At zero specificity `:root` wins on that element. Cambium's dark value still reaches
+ * the root through the entry's own `var()`, since that `var()` is what `:root` holds when nobody
+ * overrides it. The spec measures the override on the root.
+ *
+ * Under a nested `.dark` a root override still loses, whatever the selector. The wrapper's own
+ * declaration beats the value it would inherit from `:root`, unlayered consumer CSS on `:root`
+ * included. A consumer who overrides a Cambium entry and nests `.dark` has to override it under
+ * `.dark` as well. The same holds going the other way: a light island inside dark that resets the
+ * raw `--cmb-*` values has to reset these entries too, or a named utility and its arbitrary twin
+ * paint different colours.
  *
  * Only colour and shadow, because only they vary by scheme; radius, type and tracking are declared
- * on `:root` alone and have nothing to swap. The entries come from the same `colorEntries` and
- * `shadowEntries` the theme block calls, so a change to how an entry is named reaches both. The two
- * call sites still list those helpers separately, and a test holds this layer's declarations equal
- * to the theme block's colour and shadow entries.
+ * on `:root` alone and have nothing to swap. The list comes from `schemeDependentEntries`, which
+ * the theme block also calls, and a test holds this layer's declarations equal to the theme
+ * block's colour and shadow entries.
  */
 export function toDarkThemeLayer(tokenSet: TokenSet, naming: CssNaming): string {
 	requireGeneratedVocabulary(tokenSet);
 
-	const { light } = tokenSet.schemes;
-
-	const entries: ThemeEntry[] = [
-		...colorEntries(light.semantic, light.primitives, naming),
-		...shadowEntries(light.shadow, naming),
-	];
-
-	const rule = declarationBlock(DARK_SELECTOR, entries.map(toDeclaration));
+	const entries = schemeDependentEntries(tokenSet, naming);
+	const rule = declarationBlock(DARK_THEME_SELECTOR, entries.map(toDeclaration));
 	const indented = rule.replace(/^(?=.)/gm, '\t');
 
 	return `@layer theme {\n${indented}}\n`;
+}
+
+/**
+ * The colour and shadow entries, the ones whose values differ between schemes. Written once for
+ * both the theme block and the dark layer, since an entry missing from the layer keeps its light
+ * value under a nested `.dark` and nothing reports it.
+ */
+function schemeDependentEntries(tokenSet: TokenSet, naming: CssNaming): ThemeEntry[] {
+	const { light } = tokenSet.schemes;
+
+	return [
+		...colorEntries(light.semantic, light.primitives, naming),
+		...shadowEntries(light.shadow, naming),
+	];
 }
 
 function toDeclaration({ name, reference }: ThemeEntry): { property: string; value: string } {

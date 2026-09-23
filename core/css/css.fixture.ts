@@ -271,8 +271,9 @@ export function deepFreeze<T>(value: T): T {
 
 /**
  * The declarations postcss found under each top-level selector, keyed by the selector it parsed.
- * Top-level only, because `toStylesheet` also writes a `.dark` inside `@layer theme`, and keying
- * that one by its selector would overwrite the scheme rule of the same name.
+ * Top-level only, because `toStylesheet` also writes a `:where(.dark)` rule inside `@layer theme`,
+ * and its declarations are theme aliases rather than the scheme's own, so mixing them in would
+ * answer a question about the dark scheme with the wrong rule.
  */
 export function declarationsBySelector(css: string): Map<string, Declaration[]> {
 	const found = new Map<string, Declaration[]>();

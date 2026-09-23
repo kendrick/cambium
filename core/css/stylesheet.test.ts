@@ -140,8 +140,9 @@ function themeLayerProperties(compiled: string): string[] {
 
 /**
  * Every custom property the generated stylesheet's scheme rules declare, under `:root` or `.dark`.
- * The layered `.dark` rule redeclares Tailwind theme entries on purpose, so it is left out: it
- * names what the theme block names, and the checks that use this are about the scheme rules.
+ * The layered `:where(.dark)` rule redeclares Tailwind theme entries on purpose, so it is left
+ * out: it names what the theme block names, and the checks that use this are about the scheme
+ * rules.
  */
 function declaredBy(generated: string): Set<string> {
 	return new Set(
@@ -370,8 +371,13 @@ describe('toStylesheet', () => {
 	/*
 	 * The names #13's reviews showed breaking a consumer, each run the way the cases above run:
 	 * whatever the adapter hands back is compiled first, and the utility the name would have broken
-	 * has to come out reading Cambium's property. So with the whitelist gone, each case fails on
-	 * what Tailwind made of the stylesheet, not only on a missing refusal.
+	 * has to come out reading Cambium's property. So with the whitelist gone, the first five cases
+	 * fail on what Tailwind made of the stylesheet, not only on a missing refusal.
+	 *
+	 * `tw-shadow` is the exception. `.shadow-md` compiles to the same bytes either way, because the
+	 * damage is a cascade collision on the element, which only a browser resolves. Its `intact`
+	 * passes unconditionally, and the case fails on the adapter's own output declaring
+	 * `--tw-shadow`.
 	 */
 	it.each<{
 		category: VocabularyCategory;

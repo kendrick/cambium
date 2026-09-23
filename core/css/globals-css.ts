@@ -26,7 +26,7 @@ import { stepNumberName } from './step-numbers';
  * against that class, and a media query would paint a page the reader had switched to light.
  */
 const LIGHT_SELECTOR = ':root';
-export const DARK_SELECTOR = '.dark';
+const DARK_SELECTOR = '.dark';
 
 const DEFAULT_PREFIX = 'cmb';
 
@@ -48,9 +48,11 @@ const SOUND_PREFIX = /^[A-Za-z0-9_]+(?:-+[A-Za-z0-9_]+)*$/;
 
 /**
  * Tailwind's own custom-property namespace. Its utilities compose through `--tw-*` properties they
- * declare themselves, such as `--tw-shadow` and `--tw-gradient-from`, and a declaration of ours
- * under that name overwrites that state for everything below it. #13's red-team review showed a
- * semantic `tw-shadow` leaving `<div class="dark shadow-md">` at `box-shadow: none` in Chromium.
+ * declare themselves, such as `--tw-shadow` and `--tw-gradient-from`. Tailwind registers those with
+ * `@property … { inherits: false }`, so a declaration of ours under that name reaches no
+ * descendant; it collides with the utility on the element both land on. #13's red-team review
+ * showed a semantic `tw-shadow` leaving `<div class="dark shadow-md">` at `box-shadow: none` in
+ * Chromium.
  */
 const TAILWIND_INTERNAL = 'tw';
 
@@ -371,12 +373,12 @@ export function toGlobalsCss(tokenSet: TokenSet, naming: CssNaming): string {
  * block is built, and the prefix is checked when `cssNaming` resolves it.
  *
  * A property can repeat across blocks by design, in two places. `:root` and `.dark` repeat each
- * other, which is how a scheme swaps values. The layered `.dark` rule `toDarkThemeLayer`
- * (`core/css/theme-block.ts`) writes repeats the `@theme inline` block's colour and shadow entries,
- * which is how a nested `.dark` reaches them. The scheme rules and the theme entries never share a
- * name: {@link prefixedProperty} keeps every prefixed property outside Tailwind's namespaces, no
- * semantic name the vocabulary admits starts with a namespace root, and every theme entry sits
- * inside one.
+ * other, which is how a scheme swaps values. The layered `:where(.dark)` rule that
+ * `toDarkThemeLayer` (`core/css/theme-block.ts`) writes repeats the `@theme inline` block's colour
+ * and shadow entries, which is how a nested `.dark` reaches them. The scheme rules and the theme
+ * entries never share a name: {@link prefixedProperty} keeps every prefixed property outside
+ * Tailwind's namespaces, no semantic name the vocabulary admits starts with a namespace root, and
+ * every theme entry sits inside one.
  */
 export function declarationBlock(header: string, declarations: readonly CssDeclaration[]): string {
 	const seen = new Set<string>();
