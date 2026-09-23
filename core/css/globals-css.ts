@@ -1,0 +1,667 @@
+import { BALANCED } from '../interpretation';
+import type { Oklch } from '../oklch';
+import { radiusScale } from '../radius-scale';
+import { resolveScheme } from '../resolve-scheme';
+import { RAMP_NAMES } from '../scale-engine';
+import { SEMANTIC_MAP } from '../semantic-map';
+import { shadowScale } from '../shadow-scale';
+import { BRAND_STEP } from '../step-roles';
+import { trackingScale } from '../tracking-scale';
+import { typeScale } from '../type-scale';
+import {
+	type DimensionValue,
+	declaredRamp,
+	type Ramp,
+	type Shadow,
+	type ShadowScale,
+	type SignedDimensionValue,
+	type TokenSet,
+	TokenSetSchema,
+} from '../token-set';
+import { formatCssNumber, toOklchCss } from './oklch-css';
+import { stepNumberName } from './step-numbers';
+
+/**
+ * Dark is a class rather than a `prefers-color-scheme` query. `app/globals.css` declares
+ * `@custom-variant dark (&:is(.dark *))`, so every `dark:` utility Tailwind generates resolves
+ * against that class, and a media query would paint a page the reader had switched to light.
+ */
+const LIGHT_SELECTOR = ':root';
+const DARK_SELECTOR = '.dark';
+
+const DEFAULT_PREFIX = 'cmb';
+
+/**
+ * What a prefix has to look like: ASCII letters, digits and underscores, joined by hyphens, with
+ * none leading or trailing.
+ *
+ * Tailwind can read a `--` inside a theme key as a companion: `--text-base--line-height` is
+ * `text-base`'s line height, not a size. A prefix never lands in a theme key, only in the raw
+ * properties `:root` and `.dark` declare and in the `var()` references pointing at them, so a run of
+ * hyphens inside one is allowed. `stylesheet.test.ts` compiles `foo--bar` and checks that
+ * `.shadow-md` reads `var(--foo--bar-shadow-md)`.
+ *
+ * Anything else is refused because nothing here has shown it safe. A space or a colon ends the
+ * property name early for any CSS parser. A leading or trailing hyphen, or non-ASCII, would
+ * probably parse, and nothing Cambium generates needs either.
+ */
+const SOUND_PREFIX = /^[A-Za-z0-9_]+(?:-+[A-Za-z0-9_]+)*$/;
+
+/**
+ * Tailwind's own custom-property namespace. Its utilities compose through `--tw-*` properties they
+ * declare themselves, such as `--tw-shadow` and `--tw-gradient-from`. Tailwind registers those with
+ * `@property … { inherits: false }`, so a declaration of ours under that name reaches no
+ * descendant; it collides with the utility on the element both land on. #13's red-team review
+ * showed a semantic `tw-shadow` leaving `<div class="dark shadow-md">` at `box-shadow: none` in
+ * Chromium.
+ */
+const TAILWIND_INTERNAL = 'tw';
+
+/**
+ * A page surface with nothing to tint, so {@link GENERATED_VOCABULARY} can call `shadowScale` for
+ * the step names it produces. Only the keys of the result are read.
+ */
+const UNTINTED_SURFACE = {
+	color: { l: 1, c: 0, h: 0 },
+	provenance: {
+		provenance: 'invented' as const,
+		rationale: 'reads the shadow step names, not a shadow',
+		seedField: null,
+	},
+};
+
+const FALLBACK_TYPOGRAPHY = typeScale(null).values;
+
+/**
+ * Every name the CSS adapters accept, by category: the generator's own vocabulary and nothing else.
+ *
+ * Each list is read off the code that produces it. `SEMANTIC_MAP` and `RAMP_NAMES` are exported
+ * constants. The scalar and shadow modules keep their step lists private, so those lists come from
+ * calling each module with no seed input and reading the keys back. The keys don't depend on the
+ * input, so the fallback call names every step a seeded call would.
+ *
+ * A whitelist because the thing that breaks a name is Tailwind's utility resolution, and a check on
+ * a name's shape can't see that. #13's reviews found names that pass any reasonable shape check
+ * and still break the consumer, in six ways: a semantic `base` turns `.text-base` into a colour and drops
+ * the size, a weight `mono` loses to `font-mono`'s font family, a semantic `sm` does the same to
+ * `.text-sm`, `inherit` and `transparent` compile `bg-*` to the CSS keyword, `center` and `fixed`
+ * hand `bg-*` a background position or attachment as well as a colour, and `tw-shadow` overwrites
+ * Tailwind's own shadow state. Checking the name against the list the generator emits is the only
+ * test short of compiling every utility Tailwind might ever add.
+ *
+ * Today this costs the product nothing. The generator only emits these names, and `deserializeDtcg`
+ * has no caller in `app/` or `components/`, so nothing foreign reaches either adapter. Whichever
+ * change first feeds in names from elsewhere, DTCG import most likely, has to widen this on
+ * purpose. Widening it means re-proving for each new name what `stylesheet.test.ts` proves for these:
+ * every utility compiles onto the property this adapter declares, no declared property is one
+ * Tailwind's theme declares, none begins `--tw-`, and no two tokens share a property.
+ */
+export const GENERATED_VOCABULARY = {
+	'semantic token': Object.keys(SEMANTIC_MAP),
+	ramp: [...RAMP_NAMES],
+	'shadow step': Object.keys(shadowScale(UNTINTED_SURFACE, null, BALANCED).values),
+	'radius step': Object.keys(radiusScale(null).values),
+	'type size': Object.keys(FALLBACK_TYPOGRAPHY.size),
+	'font weight': Object.keys(FALLBACK_TYPOGRAPHY.weight),
+	'line height': Object.keys(FALLBACK_TYPOGRAPHY.lineHeight),
+	'tracking step': Object.keys(trackingScale(null).values),
+} as const satisfies Record<string, readonly string[]>;
+
+export type VocabularyCategory = keyof typeof GENERATED_VOCABULARY;
+
+/**
+ * Refuses a token set carrying any name outside {@link GENERATED_VOCABULARY}, naming each one and
+ * its category. `toGlobalsCss`, `toThemeBlock` and `toDarkThemeLayer` each call it on the parsed
+ * set before building anything, so no half can emit a name another would refuse.
+ *
+ * Both schemes are read, because a name only one of them carries would otherwise reach the mirror
+ * check and be reported as a mismatch instead of as the foreign name it is.
+ */
+export function requireGeneratedVocabulary(tokenSet: TokenSet): void {
+	const { light, dark } = tokenSet.schemes;
+	const { size, weight, lineHeight } = tokenSet.typography.values;
+
+	const held: Record<VocabularyCategory, string[]> = {
+		'semantic token': [...Object.keys(light.semantic), ...Object.keys(dark.semantic)],
+		ramp: [...Object.keys(light.primitives), ...Object.keys(dark.primitives)],
+		'shadow step': [...Object.keys(light.shadow.values), ...Object.keys(dark.shadow.values)],
+		'radius step': Object.keys(tokenSet.radius.values),
+		'type size': Object.keys(size),
+		'font weight': Object.keys(weight),
+		'line height': Object.keys(lineHeight),
+		'tracking step': Object.keys(tokenSet.tracking.values),
+	};
+
+	const foreign = Object.entries(held).flatMap(([category, names]) => {
+		const accepted: readonly string[] = GENERATED_VOCABULARY[category as VocabularyCategory];
+		return [...new Set(names)]
+			.filter((name) => !accepted.includes(name))
+			.map((name) => `${category} "${name}"`);
+	});
+
+	if (foreign.length === 0) return;
+
+	throw new Error(
+		`the CSS adapters export only the names Cambium generates, and this set carries ${foreign.join(', ')}; rename it to one the generator emits, or widen GENERATED_VOCABULARY deliberately`,
+	);
+}
+
+/** The one ramp that also gets an unnumbered name. See {@link rampDeclarations}. */
+export const BRAND_RAMP = 'brand';
+
+/**
+ * Every theme namespace root Tailwind v4 claims, read off the installed `tailwindcss/theme.css` at
+ * 4.3.3 rather than from memory. A custom property whose name is one of these, or begins with one
+ * followed by a hyphen, is a theme entry as far as Tailwind is concerned, so it cannot also be the
+ * raw property an `@theme inline` entry reads from.
+ *
+ * `spacing` is the one whose stock theme declares no `--spacing-*` entries at all, only the bare
+ * base variable `--spacing`. Both halves of the check still bite: a `--spacing` of ours would
+ * rescale every spacing utility in the consuming project, and 4.3.3 looks a `--spacing-md` up as a
+ * theme variable before falling back to its `--spacing()` function, so one of ours would answer
+ * that lookup.
+ */
+const TAILWIND_NAMESPACES = [
+	'animate',
+	'aspect',
+	'blur',
+	'breakpoint',
+	'color',
+	'container',
+	'default',
+	'drop',
+	'ease',
+	'font',
+	'inset',
+	'leading',
+	'max',
+	'perspective',
+	'radius',
+	'shadow',
+	'spacing',
+	'text',
+	'tracking',
+] as const;
+
+/**
+ * Parses a token set before an adapter reads it, and returns the parsed copy.
+ *
+ * `TokenSet` is Zod's output type, so the compiler accepting an argument doesn't mean the schema
+ * would. The bounds a type can't carry are the ones that matter here: a radius of `-4` prints as
+ * `-4rem`, a declaration that parses and then leaves `rounded-lg` invalid at computed-value time, and
+ * a line height of 0 draws every line of text on top of the one before. `buildTokenSet` never
+ * parses, and `resolveScheme` checks aliases and no scalar bound, so nothing upstream stands in for
+ * this.
+ *
+ * The three public adapters each call this on their own argument and read only the copy it returns.
+ * The schema folds a hue of 360 to 0, and reading the parsed copy is what makes the CSS print the 0
+ * the DTCG export prints. `toStylesheet` calls those three adapters, so it parses the set three
+ * times, and `core/css/stylesheet.ts` says why.
+ *
+ * The copy isn't frozen. `TokenExtensionsSchema` is a loose object, so a foreign `$extensions`
+ * payload comes through the parse as the caller's own object, and freezing the copy would freeze
+ * theirs too.
+ */
+export function parseTokenSet(tokenSet: TokenSet): TokenSet {
+	return TokenSetSchema.parse(tokenSet);
+}
+
+/** Options controlling how {@link cssNaming} names the properties an adapter writes. */
+export type CssNamingOptions = {
+	/**
+	 * Namespace carried by every property except the semantic colours, without the leading `--` and
+	 * without the trailing hyphen. Defaults to `cmb`.
+	 */
+	prefix?: string;
+};
+
+/**
+ * The one naming rule both adapters write properties through.
+ *
+ * A token set exports as two halves: the scheme rules `toGlobalsCss` writes, and the `@theme
+ * inline` block `toThemeBlock` (`core/css/theme-block.ts`) writes, in which every entry is a
+ * `var()` pointing at a property the first half declares. Two copies of the rule would put that
+ * agreement one careless edit away from a stylesheet that parses and leaves every prefixed utility
+ * without a value, so there is one copy and both halves take it as an argument rather than each
+ * building its own from a prefix.
+ *
+ * Taking it as an argument is also what makes a mismatched pair cost a deliberate act. Neither half
+ * defaults the naming, so `toThemeBlock(set)` beside `toGlobalsCss(set, cssNaming({ prefix }))`
+ * does not compile; producing halves that disagree takes two `cssNaming` calls with two different
+ * prefixes, written out. `toStylesheet` (`core/css/stylesheet.ts`) is the entry point that hands
+ * one naming to both and is what a caller wanting a working stylesheet should reach for.
+ */
+export type CssNaming = {
+	/** `--cmb-shadow-md` for the Tailwind entry name `shadow-md`. */
+	prefixedProperty(entry: string): string;
+	/** `--background` for the semantic token `background`. */
+	semanticProperty(token: string): string;
+};
+
+/** Resolves {@link CssNamingOptions} into the {@link CssNaming} both adapters name properties by. */
+export function cssNaming(options: CssNamingOptions = {}): CssNaming {
+	const prefix = options.prefix ?? DEFAULT_PREFIX;
+
+	// Checked here, once, because a prefix reaches the output in two places: the properties the
+	// scheme rules declare and the theme block's `var()` references. The empty prefix passes the
+	// shape check and is refused by the namespace check in `prefixedProperty` instead.
+	if (prefix !== '' && !SOUND_PREFIX.test(prefix)) {
+		throw new Error(
+			`prefix "${prefix}" is not letters, digits and underscores joined by hyphens, so the properties it names would not reach a consumer intact`,
+		);
+	}
+	if (prefix === TAILWIND_INTERNAL || prefix.startsWith(`${TAILWIND_INTERNAL}-`)) {
+		throw new Error(
+			`prefix "${prefix}" would name properties under --${TAILWIND_INTERNAL}-, which is where Tailwind's utilities keep their own state; pick another prefix`,
+		);
+	}
+
+	return {
+		prefixedProperty: (entry: string) => prefixedProperty(entry, prefix),
+		semanticProperty,
+	};
+}
+
+/** One custom-property declaration, before it is joined into a block. */
+export type CssDeclaration = { property: string; value: string };
+
+/**
+ * Writes a token set out as the custom-property blocks a shadcn project drops into its
+ * `globals.css`: the two colour schemes, their ramps and shadows, and the scalars that hold still
+ * across both.
+ *
+ * Every declaration carries a value, because CSS has nowhere to put an alias. `ramp.step` is how
+ * the semantic layer is authored and how it stays honest when a ramp moves, so `resolveScheme`
+ * flattens each token to the three OKLCH channels it names and `toOklchCss` prints them.
+ * Flattening there rather than here keeps a dangling alias a thrown error instead of a declaration
+ * the browser drops.
+ *
+ * Every value lives here; `core/css/theme-block.ts` emits nothing but `var()` references. An
+ * `@theme inline` entry holding a literal is frozen at one value for the whole stylesheet, and half
+ * of what this set holds is scheme-dependent: a shadow's colour put there would fix the dark page's
+ * shadow to the light page's tint. Splitting the two at the category level, rather than deciding it
+ * token by token, keeps the theme block uniform enough to read.
+ *
+ * Semantic colours are bare: `--background`, `--foreground`, and so on, exactly as shadcn writes
+ * them, which keeps this output drop-in for a project whose components already read those names.
+ * Bare works for those names because none of them starts with a Tailwind namespace root, so
+ * `--color-background: var(--background)` names two different properties. That is a fact about the
+ * names rather than about the category, and `SemanticLayerSchema` keys on any non-empty string, so
+ * it holds only because {@link requireGeneratedVocabulary} admits no semantic name but
+ * `SEMANTIC_MAP`'s keys. `stylesheet.test.ts` compiles every one of those keys to prove it.
+ *
+ * Everything else carries `prefix`, because bare would not survive the move. Bare, `--shadow-md`
+ * is already Tailwind's shadow namespace, so the theme entry `--shadow-md: var(--shadow-md)` reads
+ * itself and resolves to nothing: a stylesheet that parses and paints no shadow. A ramp step is a
+ * colour and still lands in that group, because its theme entry is `--color-brand-500`, which sits
+ * inside the colour namespace that a semantic name has to stay out of to be emitted at all. Strip
+ * the prefix from what this emits and what is left is the Tailwind v4 theme entry the property maps
+ * onto.
+ *
+ * - `--cmb-color-brand-500` → `--color-brand-500` (a ramp step; see {@link rampDeclarations})
+ * - `--cmb-shadow-md` → `--shadow-md`
+ * - `--cmb-radius-lg` → `--radius-lg`
+ * - `--cmb-text-base` → `--text-base` (a typography size)
+ * - `--cmb-font-weight-regular` → `--font-weight-regular`
+ * - `--cmb-leading-normal` → `--leading-normal` (a line height)
+ * - `--cmb-tracking-normal` → `--tracking-normal`
+ *
+ * So the theme block writes `--<entry>: var(--<prefix>-<entry>)` and needs no table mapping an
+ * entry onto its property. It does spell each category's entry name again (`font-weight-${name}`
+ * and the rest are written out in both files), so a root renamed on one side only is not prevented
+ * here. `theme-block.test.ts` catches it: every `var()` the theme block writes has to name a
+ * property this adapter declares.
+ *
+ * A name this can't export safely is refused by name rather than skipped, the same call
+ * `resolveScheme` and `stepNumberName` make: the alternative is an export that is short a token and
+ * says so nowhere. A token name outside the generator's vocabulary is refused by
+ * {@link requireGeneratedVocabulary}, and a prefix that walks a property back inside a namespace by
+ * {@link prefixedProperty}. An empty prefix therefore always throws: `PrimitiveLayerSchema` requires
+ * at least one ramp and `TokenSetSchema` requires radius, typography and tracking, so every set
+ * reaching this carries something that would land bare inside a namespace.
+ *
+ * The shadows come from `schemes.light.shadow` and `schemes.dark.shadow`, never from the top-level
+ * `tokenSet.shadow`. `checkMirroredLayers` pins that top-level copy to the light scheme's, so
+ * reading it would cast the light page's shadow under `.dark`. That substitution renders cleanly
+ * and looks like a shadow that simply failed to darken.
+ *
+ * Pure in the sense the acceptance criterion asks for: same token set in, same bytes out, key order
+ * included (`toStylesheet` in `core/css/stylesheet.ts` says why). Nothing reads the DOM, the
+ * network, storage, or module state, and the token set is read and never written. That is the
+ * contract `serializeDtcg` (`core/dtcg/serialize.ts`) states for the `DtcgDocumentPair` it
+ * returns. This adapter needs no counterpart to that file's defensive clone, because it hands back
+ * a string it built rather than any part of the token set.
+ *
+ * The set goes through {@link parseTokenSet} before anything reads it, the same parse
+ * `serializeDtcg` opens with, so a negative radius or blur is a `ZodError` naming its path rather
+ * than a length the consumer drops. Everything below reads the parsed copy, never the argument.
+ *
+ * Scope is the two scheme blocks. The `@theme inline` block that maps these properties onto
+ * Tailwind's namespaces is `core/css/theme-block.ts`, and the `@custom-variant dark` line that
+ * makes `.dark` mean anything belongs to `toStylesheet` (`core/css/stylesheet.ts`), which assembles
+ * the whole file from the two halves and is what a caller should reach for.
+ */
+export function toGlobalsCss(argument: TokenSet, naming: CssNaming): string {
+	const tokenSet = parseTokenSet(argument);
+	requireGeneratedVocabulary(tokenSet);
+
+	const light = resolveScheme(tokenSet.schemes.light);
+	const dark = resolveScheme(tokenSet.schemes.dark);
+
+	requireMirroredNames('semantic tokens', Object.keys(light), Object.keys(dark));
+	requireMirroredNames(
+		'shadow steps',
+		Object.keys(tokenSet.schemes.light.shadow.values),
+		Object.keys(tokenSet.schemes.dark.shadow.values),
+	);
+	requireMirroredNames(
+		'ramp steps',
+		rampStepNames(tokenSet.schemes.light.primitives),
+		rampStepNames(tokenSet.schemes.dark.primitives),
+	);
+
+	// Both blocks run in the light scheme's order, so a reader comparing them is looking at values
+	// instead of at a reordering. The two token sets are equal by the check above, so taking the
+	// order from one of them loses nothing.
+	const tokens = Object.keys(light);
+
+	// The ramps trail the shadow rather than joining the semantic colours above it. Eighty-five of
+	// them land at once for a seven-ramp set, and a reader editing a pasted stylesheet is looking for
+	// the semantic names they recognise.
+	const rootBody = [
+		...colorDeclarations(tokens, light, naming),
+		...shadowDeclarations(tokenSet.schemes.light.shadow, naming),
+		...rampDeclarations(tokenSet.schemes.light.primitives, naming),
+		...scalarDeclarations(tokenSet, naming),
+	];
+
+	const darkBody = [
+		...colorDeclarations(tokens, dark, naming),
+		...shadowDeclarations(tokenSet.schemes.dark.shadow, naming),
+		...rampDeclarations(tokenSet.schemes.dark.primitives, naming),
+	];
+
+	return `${declarationBlock(LIGHT_SELECTOR, rootBody)}\n${declarationBlock(DARK_SELECTOR, darkBody)}`;
+}
+
+/**
+ * Joins declarations into one block, refusing a property declared twice in it. Every block either
+ * adapter writes goes through here.
+ *
+ * Tailwind keeps the last of two same-named theme entries and a browser the last of two same-named
+ * declarations, so a repeat means one token loses its utility with nothing logged. The generator's
+ * vocabulary can't produce one today: {@link requireGeneratedVocabulary} admits no semantic name
+ * like `brand-500` that would land beside ramp step 7 on `--color-brand-500`. A repeat can still
+ * arrive without the vocabulary changing, from a code change such as a second unnumbered ramp
+ * alias beside `BRAND_RAMP`, and this is what catches it.
+ *
+ * Names aren't checked here. Token names are checked against the generator's vocabulary before any
+ * block is built, and the prefix is checked when `cssNaming` resolves it.
+ *
+ * A property can repeat across blocks by design, in two places. `:root` and `.dark` repeat each
+ * other, which is how a scheme swaps values. The layered `:where(.dark)` rule that
+ * `toDarkThemeLayer` (`core/css/theme-block.ts`) writes repeats the `@theme inline` block's colour
+ * and shadow entries, which is how a nested `.dark` reaches them. The scheme rules and the theme
+ * entries never share a name: {@link prefixedProperty} keeps every prefixed property outside
+ * Tailwind's namespaces, no semantic name the vocabulary admits starts with a namespace root, and
+ * every theme entry sits inside one.
+ */
+export function declarationBlock(header: string, declarations: readonly CssDeclaration[]): string {
+	const seen = new Set<string>();
+
+	for (const { property } of declarations) {
+		if (seen.has(property)) {
+			throw new Error(
+				`${header} would declare ${property} twice, so two tokens in this set map onto one name and the consumer keeps only the last; rename one of them`,
+			);
+		}
+		seen.add(property);
+	}
+
+	const body = declarations.map(({ property, value }) => `\t${property}: ${value};\n`).join('');
+
+	return `${header} {\n${body}}\n`;
+}
+
+function colorDeclarations(
+	tokens: readonly string[],
+	colors: Record<string, Oklch>,
+	naming: CssNaming,
+): CssDeclaration[] {
+	return tokens.map((token) => ({
+		property: naming.semanticProperty(token),
+		value: toOklchCss(colors[token]!),
+	}));
+}
+
+function shadowDeclarations(scale: ShadowScale, naming: CssNaming): CssDeclaration[] {
+	return Object.entries(scale.values).map(([step, shadow]) => ({
+		property: naming.prefixedProperty(`shadow-${step}`),
+		value: boxShadow(shadow),
+	}));
+}
+
+/**
+ * Every ramp step under its conventional number, plus the unnumbered brand alias.
+ *
+ * Cambium's ramps run 1 through 12 and the ecosystem this exports into runs 25 through 950, so a
+ * step emitted under its own index would hand a consumer `bg-brand-9` where every Tailwind habit
+ * says `bg-brand-500`. `stepNumberName` is the table that mapping lives in, and it argues there why
+ * it is a lookup rather than a formatter.
+ *
+ * The ramp names come off the token set instead of `RAMP_NAMES`, the way the semantic layer is
+ * already read, so a set holding fewer than the seven exports the ramps it holds. A ramp name
+ * outside `RAMP_NAMES` never gets this far: {@link requireGeneratedVocabulary} refuses it.
+ *
+ * Declared per scheme, because `primitives` sits inside `ColorSchemeSchema` and light and dark hold
+ * different ramps. Same reasoning that put the shadows under both selectors: an `@theme` entry
+ * holding a literal is frozen at one value, so a scheme-dependent colour cannot be one.
+ *
+ * `--<prefix>-color-brand` carries no number, and only brand gets it. `BRAND_STEP` is 9 and step
+ * 9's conventional name is 700, so the brand colour answers to `brand-700`, while `bg-brand-500`
+ * lands on step 7. That is the name most consumers would reach for first, so the unnumbered alias
+ * gives the brand colour one that holds still if the numbering ever moves.
+ *
+ * `SEMANTIC_MAP` already aliases `primary` to `brand.9`, so `bg-primary` is the brand colour under
+ * shadcn's own contract. `--<prefix>-color-brand` is the ramp-side spelling of the same colour, for
+ * a consumer thinking in ramps rather than in roles.
+ *
+ * The other six ramps get no such alias. `accent` is the one that would collide: it is a key of
+ * `SEMANTIC_MAP` too, so `--color-accent` is taken, and the semantic `accent` aliases `neutral.4`.
+ * The two names would carry different colours and the semantic one has to win. Handing the
+ * remaining five an alias each would leave six ramps out of seven following a rule, which is the
+ * shape a consumer trips over, so brand stays the one exception.
+ */
+function rampDeclarations(primitives: Record<string, Ramp>, naming: CssNaming): CssDeclaration[] {
+	const steps = Object.entries(primitives).flatMap(([name, ramp]) =>
+		ramp.map((step) => ({
+			property: naming.prefixedProperty(`color-${rampStepName(name, step.step)}`),
+			value: toOklchCss(step),
+		})),
+	);
+
+	const brand = declaredRamp(primitives, BRAND_RAMP)?.find((step) => step.step === BRAND_STEP);
+
+	if (!brand) return steps;
+
+	return [
+		...steps,
+		{ property: naming.prefixedProperty(`color-${BRAND_RAMP}`), value: toOklchCss(brand) },
+	];
+}
+
+/**
+ * One ramp step's entry name, `brand-500`, which prefixes into the property the theme block reads
+ * and un-prefixes back into Tailwind's own `--color-brand-500`.
+ */
+function rampStepName(ramp: string, step: number): string {
+	return `${ramp}-${stepNumberName(step)}`;
+}
+
+/**
+ * Every entry name one scheme's ramps produce, for the mirror check.
+ *
+ * Compared as step names rather than as ramp names, because the properties are what has to line up
+ * across the two selectors. `RampSchema` fixes every ramp at steps 1 through 12 today, so the two
+ * comparisons agree; naming the steps keeps that a coincidence instead of a dependency.
+ */
+function rampStepNames(primitives: Record<string, Ramp>): string[] {
+	return Object.entries(primitives).flatMap(([name, ramp]) =>
+		ramp.map((step) => rampStepName(name, step.step)),
+	);
+}
+
+/**
+ * A shadow token's five parts as one `box-shadow` value.
+ *
+ * The order is CSS's, not the token's: `<offset-x> <offset-y> <blur> <spread>` and then the colour.
+ * A compositor reads the four lengths by position, so a spread emitted where the blur belongs
+ * renders as a shadow, wrongly and with nothing logged.
+ *
+ * The colour goes through `toOklchCss` carrying its alpha. A shadow is the one colour in the set
+ * whose whole job is to be partly transparent, and `ShadowColorSchema` requires the channel for
+ * exactly that reason; dropping it would paint an opaque slab.
+ */
+function boxShadow(shadow: Shadow): string {
+	const geometry = [shadow.offsetX, shadow.offsetY, shadow.blur, shadow.spread]
+		.map((dimension) => length(dimension))
+		.join(' ');
+
+	return `${geometry} ${toOklchCss(shadow.color)}`;
+}
+
+/**
+ * The categories that sit at the top level because none of them varies by scheme, flattened onto
+ * their Tailwind entry names. Typography is the one category that fans out: Tailwind has no
+ * `typography` root, and its sizes, weights and line heights land under `text`, `font-weight` and
+ * `leading` respectively.
+ */
+function scalarDeclarations(tokenSet: TokenSet, naming: CssNaming): CssDeclaration[] {
+	const { size, weight, lineHeight } = tokenSet.typography.values;
+
+	return [
+		...Object.entries(tokenSet.radius.values).map(([name, dimension]) => ({
+			property: naming.prefixedProperty(`radius-${name}`),
+			value: length(dimension),
+		})),
+		...Object.entries(size).map(([name, dimension]) => ({
+			property: naming.prefixedProperty(`text-${name}`),
+			value: length(dimension),
+		})),
+		...Object.entries(weight).map(([name, token]) => ({
+			property: naming.prefixedProperty(`font-weight-${name}`),
+			value: formatCssNumber(token.value),
+		})),
+		...Object.entries(lineHeight).map(([name, token]) => ({
+			property: naming.prefixedProperty(`leading-${name}`),
+			value: formatCssNumber(token.value),
+		})),
+		...Object.entries(tokenSet.tracking.values).map(([name, dimension]) => ({
+			property: naming.prefixedProperty(`tracking-${name}`),
+			value: length(dimension),
+		})),
+	];
+}
+
+/**
+ * Prefixes a Tailwind entry name into the raw custom property that holds its value, refusing the
+ * result if it landed back inside a namespace.
+ *
+ * Both the exact match and the hyphenated descendant are rejected, because Tailwind claims roots
+ * in both forms: `--spacing` is a theme variable on its own and `--shadow-md` is one under
+ * `shadow`.
+ *
+ * With the empty prefix the raw property is the theme entry's own name, so
+ * `--shadow-md: var(--shadow-md)` reads itself and the utility gets no value. The stylesheet still
+ * parses, which is why that earns a throw and not a warning.
+ *
+ * A prefix that is itself a root, such as `text`, fails differently or not yet. `--text-shadow-md`
+ * is a different name from `--shadow-md`, so nothing reads itself. What it is instead is a name
+ * inside a namespace Tailwind owns, the same position that would make a semantic `blur-sm` rebind
+ * Tailwind's own `blur-sm` utility. In 4.3.3 none of the names
+ * `text` produces is one a stock utility reads through `var()`: the stock theme does declare
+ * `--text-shadow-md`, but `text-shadow-md` compiles its value inline. So `text` is refused because
+ * the rule is about the position, not a lookup of which names the stock theme happens to read
+ * today, and a later Tailwind could start reading any of them.
+ */
+function prefixedProperty(name: string, prefix: string): string {
+	const property = prefix === '' ? name : `${prefix}-${name}`;
+	const namespace = claimedNamespace(property);
+
+	if (namespace) {
+		throw new Error(
+			`--${property} falls inside Tailwind's "${namespace}" namespace, where it is either the theme entry's own name or one Tailwind's theme can claim; prefix "${prefix}" cannot carry the token "${name}"`,
+		);
+	}
+
+	return `--${property}`;
+}
+
+/**
+ * A semantic token's property, left bare. Bare is what makes this output drop-in: a shadcn
+ * project's components read `--background` by that name.
+ *
+ * Nothing is checked here, because {@link requireGeneratedVocabulary} has already limited the token
+ * to `SEMANTIC_MAP`'s keys, and none of those starts with a namespace root. That matters: a token
+ * named `blur-sm` would go out bare as `--blur-sm`, the property Tailwind's own `blur-sm` utility
+ * reads for its radius, and a pasted `:root` rule is unlayered, so it would beat the stock theme's
+ * `@layer theme` value and hand a blur an `oklch()` colour. `stylesheet.test.ts` compiles every
+ * semantic key to hold that line. A widened vocabulary has to bring a check back here.
+ */
+function semanticProperty(token: string): string {
+	return `--${token}`;
+}
+
+/** The Tailwind namespace root a property name falls under, exactly or as a descendant. */
+function claimedNamespace(property: string): string | undefined {
+	return TAILWIND_NAMESPACES.find((root) => property === root || property.startsWith(`${root}-`));
+}
+
+/**
+ * Refuses a set whose two schemes name different per-scheme tokens instead of emitting the union.
+ *
+ * A property declared under `:root` and missing under `.dark` falls back to the light scheme's
+ * value rather than to nothing, so a dark page paints that token in a colour meant for a white
+ * background and renders with no error anywhere. Both directions are checked, because a token only
+ * the dark scheme declares is the same failure with the schemes swapped.
+ *
+ * Nothing upstream catches it. `checkMirroredLayers` compares the unprefixed layers against
+ * `schemes.light` and never puts the two schemes beside each other, and `SemanticLayerSchema` and
+ * `ShadowScaleSchema` each accept any non-empty record. So the guarantee has to be made where the
+ * two schemes first meet.
+ *
+ * Scoped to the per-scheme categories on purpose. Radius, typography and tracking are declared
+ * under `:root` alone and have no dark counterpart to mirror, so widening this to compare whole
+ * property sets would reject every set that reaches it.
+ */
+function requireMirroredNames(
+	label: string,
+	light: readonly string[],
+	dark: readonly string[],
+): void {
+	const missingFromDark = absentFrom(dark, light);
+	const missingFromLight = absentFrom(light, dark);
+
+	if (missingFromDark.length === 0 && missingFromLight.length === 0) return;
+
+	const complaints = [
+		missingFromDark.length > 0 && `the dark scheme declares no ${missingFromDark.join(', ')}`,
+		missingFromLight.length > 0 && `the light scheme declares no ${missingFromLight.join(', ')}`,
+	].filter(Boolean);
+
+	throw new Error(`the two schemes must name the same ${label}: ${complaints.join('; ')}`);
+}
+
+function absentFrom(from: readonly string[], present: readonly string[]): string[] {
+	const held = new Set(from);
+
+	return present.filter((name) => !held.has(name));
+}
+
+/**
+ * A dimension as a CSS length. The unit always prints, `0px` included, so the token's own unit
+ * survives the export.
+ */
+function length(dimension: DimensionValue | SignedDimensionValue): string {
+	return `${formatCssNumber(dimension.value)}${dimension.unit}`;
+}
