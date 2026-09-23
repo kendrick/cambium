@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
 	type BrandRecord,
 	type BrandVersion,
+	FIRST_REVISION,
 	type ReferenceImage,
 	SCHEMA_VERSION,
 } from '../../core/brand-record';
@@ -97,15 +98,15 @@ async function read(store: RecordStore, id: string): Promise<BrandRecord> {
 }
 
 /**
- * The commit a caller makes from whatever copy of a record it is holding. `revision` moves with
- * it: it counts commits of the whole record, not just ones that grow `versions`, so every commit
- * this fixture produces has to carry it forward for the record it builds to describe a write a
- * correct store would actually accept.
+ * The commit a caller makes from whatever copy of a record it is holding. `revision` rides along
+ * untouched, because it says which revision this copy was read at and a commit does not change
+ * that. Storage stamps the next one. A fixture that advanced it here would be answering the
+ * question `put` exists to ask, and every test built on it would agree with a store that never
+ * checked anything.
  */
 function appended(record: BrandRecord, overrides: Partial<BrandVersion> = {}): BrandRecord {
 	return {
 		...record,
-		revision: record.revision + 1,
 		versions: [
 			...record.versions,
 			makeVersion({
@@ -118,15 +119,14 @@ function appended(record: BrandRecord, overrides: Partial<BrandVersion> = {}): B
 }
 
 /**
- * The commit a caller makes that changes only `images`, appending no version — the write #78
- * exists to accept. `revision` is what makes it a well-formed commit rather than a no-op: unlike
- * `versions.length`, it moves on every commit to the record, images-only ones included, which is
- * the whole reason the field exists.
+ * The commit a caller makes that changes only `images`, appending no version — the write #78 exists
+ * to accept. Nothing here moves a counter: `versions` does not grow and `revision` still names the
+ * revision this copy was read at, so what makes the write well formed is the base it carries, not
+ * anything the caller increments.
  */
 function withAddedImage(record: BrandRecord, image: ReferenceImage): BrandRecord {
 	return {
 		...record,
-		revision: record.revision + 1,
 		images: [...record.images, image],
 	};
 }
@@ -193,17 +193,36 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			expect(await store.get(withSmuggledKey.id)).toBeNull();
 		});
 
+		// Storage decides the revision, not the caller. An insert starts at `FIRST_REVISION` whatever
+		// number the record arrived carrying, and each accepted commit moves it by one. A store that
+		// took the caller's number instead would let a record land at 7 in an empty store, and every
+		// later write would then be compared against a revision no commit of this record produced.
+		it('stamps the revision itself, starting a new record at the first one', async () => {
+			const arriving = makeRecord({ revision: 7 });
+
+			const inserted = await store.put(arriving);
+			expect(inserted.revision).toBe(FIRST_REVISION);
+			expect((await read(store, arriving.id)).revision).toBe(FIRST_REVISION);
+
+			// A commit built on what storage handed back moves it by exactly one.
+			const committed = await store.put(appended(inserted));
+			expect(committed.revision).toBe(FIRST_REVISION + 1);
+			expect((await read(store, arriving.id)).revision).toBe(FIRST_REVISION + 1);
+		});
+
 		// A second write under an id already taken replaces that record rather than filing a second
-		// one beside it. The history has to grow for the write to be accepted at all, so this says
-		// it with an append; what a write on an unchanged history does is the staleness rule below.
+		// one beside it. An append is one way to say that and not the only one: a write that grows
+		// nothing but `images` is accepted too, which the images-only cases below cover. What decides
+		// acceptance is the base the write was built on, not whether anything grew.
 		it('replaces the record already stored under the same id rather than storing a second', async () => {
 			const record = makeRecord();
 			await store.put(record);
 
-			const committed = appended(record, { interpretation: 'expressive' });
-			await store.put(committed);
+			// Compared against what `put` resolved with rather than against the object passed in,
+			// because storage stamps the revision and the caller's copy still carries the base.
+			const stored = await store.put(appended(record, { interpretation: 'expressive' }));
 
-			expect(await store.get(record.id)).toEqual(committed);
+			expect(await store.get(record.id)).toEqual(stored);
 			expect(await store.list()).toHaveLength(1);
 		});
 
@@ -227,6 +246,100 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			expect((await read(store, record.id)).versions).toEqual(landed.versions);
 		});
 
+		// The property criterion 2 states. Both tabs read the same copy, B commits once and storage
+		// moves on, and A then writes after accumulating local work. A is refused however much of it
+		// there is, because every one of those changes was built on a copy that is no longer current.
+		//
+		// The parameter varies the size of A's write, not the base it carries: `withAddedImage` leaves
+		// `revision` alone, so all three cases present the revision A read. That is what a caller
+		// following this seam's contract sends, and the case where a caller does not is pinned below.
+		it.each([1, 2, 3])(
+			'refuses a write built on a copy another write has already passed (%i local commits)',
+			async (localCommits) => {
+				const record = makeRecord();
+				await store.put(record);
+
+				const readByA = await read(store, record.id);
+				const readByB = await read(store, record.id);
+
+				await store.put(
+					withAddedImage(readByB, {
+						id: 'img-from-b',
+						downscaled: 'data:image/png;base64,BB==',
+						originalHash: 'sha256:b',
+					}),
+				);
+
+				let fromA = readByA;
+				for (let commit = 1; commit <= localCommits; commit += 1) {
+					fromA = withAddedImage(fromA, {
+						id: `img-from-a-${commit}`,
+						downscaled: 'data:image/png;base64,AA==',
+						originalHash: `sha256:a${commit}`,
+					});
+				}
+
+				await expect(store.put(fromA)).rejects.toBeInstanceOf(StaleRecordWriteError);
+
+				// B's commit is what storage holds, and nothing of A's reached it.
+				expect((await read(store, record.id)).images.map((image) => image.id)).toEqual([
+					'img-from-b',
+				]);
+			},
+		);
+
+		/**
+		 * A limit of this rule rather than a guarantee, pinned so it cannot move unnoticed.
+		 *
+		 * The base a write carries is a small integer the caller supplies, so a caller that computes
+		 * one instead of carrying the revision it read can land on the number storage happens to
+		 * hold, and nothing in the two records tells that apart from a copy genuinely read at it.
+		 * Here the loser reads revision 1, advances its own revision once, and arrives at 2 against a
+		 * record another writer has already moved to 2. The write is taken and the winner's image is
+		 * replaced.
+		 *
+		 * Advancing twice or not at all is refused, so this is not a bound on the limit and no bound
+		 * is stated: it is one reachable instance of `revision` counting commits rather than
+		 * identifying a lineage, which is the same reason the delete-and-recreate gap is open.
+		 * Closing it needs a base a caller cannot fabricate, which this field is not.
+		 *
+		 * `app/state/workspace-store.ts` computed its own revision until #78 and is the caller this
+		 * would have bitten. It now carries what `put` resolved with. Delete this test if a base
+		 * arrives that a caller cannot forge, and assert the refusal in its place.
+		 */
+		it('takes a write whose caller computed a revision that lands on the stored one', async () => {
+			const record = makeRecord();
+			await store.put(record);
+
+			const readByLoser = await read(store, record.id);
+			const readByWinner = await read(store, record.id);
+
+			await store.put(
+				withAddedImage(readByWinner, {
+					id: 'img-from-the-winner',
+					downscaled: 'data:image/png;base64,BB==',
+					originalHash: 'sha256:b',
+				}),
+			);
+
+			// The loser advances its own revision, which is what a caller of the pre-#78 seam did.
+			const fabricated = {
+				...withAddedImage(readByLoser, {
+					id: 'img-from-the-loser',
+					downscaled: 'data:image/png;base64,AA==',
+					originalHash: 'sha256:a',
+				}),
+				revision: readByLoser.revision + 1,
+			};
+
+			await expect(store.put(fabricated)).resolves.toMatchObject({
+				images: fabricated.images,
+			});
+			expect((await read(store, record.id)).images.map((image) => image.id)).toEqual([
+				'img-from-the-loser',
+			]);
+		});
+
 		// One reader is enough, which is what the two-tab framing misses. `get` hands back a fresh
 		// object graph every read, so a re-read copy is a different object holding the same old
 		// history: every check above this seam that keys on object identity misses it, and every
@@ -245,11 +358,10 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			).rejects.toBeInstanceOf(StaleRecordWriteError);
 		});
 
-		// The successor rule, in the one shape that tells `=== stored.revision + 1` apart from
-		// `> stored.revision`: a copy running more than one ahead. This writer read revision 1 and
-		// committed twice without writing back, so it arrives holding 3 against a stored 1 while its
-		// history extends the stored history cleanly. The history rule has nothing to refuse there,
-		// which leaves the revision arithmetic as the only thing that can. A store that checks only
+		// A copy that fabricates a revision rather than carrying the one it read. It arrives holding a
+		// number storage has never issued for this record, over a history that extends the stored one
+		// cleanly, so the history rule has nothing to refuse and the base check is the only thing that
+		// can. A store that checks only
 		// that the revision is ahead accepts the write and files two commits storage never saw.
 		it('rejects a write whose revision runs ahead of the stored one instead of following it', async () => {
 			const first = makeVersion({ ordinal: 1, createdAt: '2026-01-01T00:00:00.000Z' });
@@ -336,21 +448,23 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		// still derived from a copy that never saw the version that landed. The ordinals are
 		// well formed either way, which is exactly why a count cannot tell the two apart.
 		//
-		// The revision this write carries is the stored one's successor, so the revision rule
-		// passes it and #67's history rule is what has to refuse it. A fixture arriving a revision
-		// behind would reject before the two histories were compared at all, and could not tell a
-		// store that dropped the comparison from one that kept it.
+		// This write is built on the revision storage currently holds, so the base check passes it and
+		// #67's history rule is what has to refuse it. A fixture carrying a stale base would reject
+		// before the two histories were compared at all, and could not tell a store that dropped the
+		// comparison from one that kept it.
 		it('rejects a longer history that diverges from the stored one', async () => {
 			const first = makeVersion({ ordinal: 1, createdAt: '2026-01-01T00:00:00.000Z' });
 			const record = makeRecord({ versions: [first] });
 			await store.put(record);
 
 			const landed = makeVersion({ ordinal: 2, createdAt: '2026-01-02T00:00:00.000Z' });
-			await store.put({ ...record, revision: record.revision + 1, versions: [first, landed] });
+			await store.put({ ...record, versions: [first, landed] });
 
+			// Built on the revision storage currently holds, so the base check passes it through and
+			// #67's history rule is the only thing left that can refuse it. A write carrying a stale
+			// base would be refused before the two histories were compared at all.
 			const divergent: BrandRecord = {
-				...record,
-				revision: record.revision + 2,
+				...(await read(store, record.id)),
 				versions: [
 					first,
 					makeVersion({
@@ -374,16 +488,21 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		// The shorter-history half. A write that drops a version is as lossy as one that recounts an
 		// ordinal, and losing a version refuses it whatever else the write gets right.
 		//
-		// The revision is the stored one's successor here for the reason the divergent case above
-		// gives: a caller still holding the old number rejects on arithmetic alone, which leaves
-		// #67's rule unmeasured. The write below is a well-formed next commit that lost a version.
+		// Built on the revision storage currently holds, for the reason the divergent case above
+		// gives: a write carrying a stale base rejects on the base alone, which leaves #67's rule
+		// unmeasured. The write below is a well-formed commit that lost a version.
 		it('rejects a write whose history is shorter than the stored one', async () => {
 			const record = makeRecord();
 			await store.put(record);
 			const committed = appended(record);
 			await store.put(committed);
 
-			const shortened: BrandRecord = { ...record, revision: committed.revision + 1 };
+			// Read back rather than computed: the base has to be what storage reports, or this fixture
+			// is asserting against a number the producer made up.
+			const shortened: BrandRecord = {
+				...record,
+				revision: (await read(store, record.id)).revision,
+			};
 
 			await expect(store.put(shortened)).rejects.toBeInstanceOf(StaleRecordWriteError);
 
@@ -407,136 +526,50 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			});
 		});
 
-		// A caller catching this has two different recoveries to choose between, and the documented
-		// one is wrong for half the cases. A copy another writer overtook should re-read and commit
-		// again. A copy that ran ahead holds commits storage never took, and re-reading discards
-		// them. The revisions are what part the two, so the error carries both and a caller branches
-		// on a field rather than on the wording of a message.
-		it('reports both revisions, so a caller can tell a copy that ran ahead from one another writer overtook', async () => {
-			const overtakenRecord = makeRecord();
-			await store.put(overtakenRecord);
-			await store.put(appended(overtakenRecord));
-
-			const overtaken = await store
-				.put(appended(overtakenRecord, { interpretation: 'expressive' }))
-				.then(
-					() => null,
-					(thrown: unknown) => thrown,
-				);
-
-			// Storage moved to 2 while this copy was still deriving its own 2 from revision 1.
-			expect(overtaken).toMatchObject({
-				kind: 'stale-record-write',
-				recordId: overtakenRecord.id,
-				storedRevision: 2,
-				incomingRevision: 2,
-			});
-
-			const aheadRecord = makeRecord();
-			await store.put(aheadRecord);
-
-			const ahead = await store.put(appended(appended(aheadRecord))).then(
-				() => null,
-				(thrown: unknown) => thrown,
-			);
-
-			// Nobody else wrote. This copy committed twice without writing back, so it arrives at 3
-			// against a stored 1, and a caller can see that from the two fields alone.
-			expect(ahead).toMatchObject({
-				kind: 'stale-record-write',
-				recordId: aheadRecord.id,
-				storedRevision: 1,
-				incomingRevision: 3,
-			});
-		});
-
-		// Every other scenario here gives a record as many revisions as versions, so the two pairs
-		// the error carries hold the same two numbers and a construction site that swapped them
-		// would report the same four values. This one parts them: two image-only commits move the
-		// revision twice while the history stays at one version, so the refusal carries counts and
-		// revisions that cannot stand in for each other.
-		it('reports the version counts and the revisions as quantities that can differ', async () => {
+		// What a caller needs from a refusal is where the record stands and what its own write was
+		// built on. It cannot read the first off its own copy, which is the whole reason the write
+		// was refused, so the error carries both and a caller branches on a field rather than on the
+		// wording of a message.
+		it('reports where the record stands and the revision the refused write was built on', async () => {
 			const record = makeRecord();
 			await store.put(record);
 			const staleCopy = await read(store, record.id);
 
-			const withOne = withAddedImage(record, {
-				id: 'img-1',
-				downscaled: 'data:image/png;base64,AA==',
-				originalHash: 'sha256:a',
-			});
-			await store.put(withOne);
-			const withTwo = withAddedImage(withOne, {
-				id: 'img-2',
-				downscaled: 'data:image/png;base64,BB==',
-				originalHash: 'sha256:b',
-			});
-			await store.put(withTwo);
-
-			const fromTheStaleCopy = withAddedImage(staleCopy, {
-				id: 'img-3',
-				downscaled: 'data:image/png;base64,CC==',
-				originalHash: 'sha256:c',
-			});
-			const thrown = await store.put(fromTheStaleCopy).then(
-				() => null,
-				(error: unknown) => error,
-			);
-
-			// One version throughout, revision 3 against 2. Swap either pair into the other's place
-			// and all four of these numbers change.
-			expect(thrown).toMatchObject({
-				kind: 'stale-record-write',
-				recordId: record.id,
-				storedVersions: 1,
-				incomingVersions: 1,
-				storedRevision: 3,
-				incomingRevision: 2,
-			});
-		});
-
-		// The scenario above holds both version counts at 1, so it cannot tell one side's count from
-		// the other's: feeding `incomingVersions` the stored count, or `storedVersions` the incoming
-		// one, reports the same four numbers. Here the two counts differ, because the write that
-		// landed appended a version and the stale copy still carries the shorter history it read.
-		it("reports each side's version count from its own record", async () => {
-			const record = makeRecord();
-			await store.put(record);
-			const staleCopy = await read(store, record.id);
-
-			// The write that lands takes the history to two versions.
+			// Someone else commits, so storage moves to revision 2 while this copy still reads 1.
 			await store.put(appended(record));
 
-			const fromTheStaleCopy = withAddedImage(staleCopy, {
-				id: 'img-1',
-				downscaled: 'data:image/png;base64,AA==',
-				originalHash: 'sha256:a',
-			});
-			const thrown = await store.put(fromTheStaleCopy).then(
+			const thrown = await store.put(appended(staleCopy, { interpretation: 'expressive' })).then(
 				() => null,
 				(error: unknown) => error,
 			);
 
-			// Two stored versions against the copy's one. Swap the two counts and both change.
 			expect(thrown).toMatchObject({
 				kind: 'stale-record-write',
 				recordId: record.id,
-				storedVersions: 2,
-				incomingVersions: 1,
 				storedRevision: 2,
-				incomingRevision: 2,
+				incomingRevision: 1,
 			});
 		});
 
-		// The message is the other half of the same problem, and the half a person reads. For a copy
-		// that ran ahead, nothing landed in between, so a message saying something did names an
-		// event that never happened and prescribes a recovery that throws the copy's own commits
-		// away.
-		it('does not tell a copy that ran ahead that another write landed in between', async () => {
+		// A write that landed and lost its response is the input most likely to be told a falsehood.
+		// The caller sends the identical payload again; storage refuses it, because the base it was
+		// built on is no longer current, and the refusal has to say that rather than blame a second
+		// writer. Refusing rather than accepting it as a duplicate is the choice here: re-reading
+		// shows the caller its own commit already in place, so nothing is lost by making it look.
+		it('does not tell a retried write that another write landed in between', async () => {
 			const record = makeRecord();
 			await store.put(record);
+			const held = await read(store, record.id);
 
-			const thrown = await store.put(appended(appended(record))).then(
+			const commit = withAddedImage(held, {
+				id: 'img-1',
+				downscaled: 'data:image/png;base64,AA==',
+				originalHash: 'sha256:a',
+			});
+			await store.put(commit);
+
+			// The same payload a second time, as a caller that never saw the first response sends it.
+			const thrown = await store.put(commit).then(
 				() => null,
 				(error: unknown) => error,
 			);
@@ -544,14 +577,101 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			expect(thrown).toBeInstanceOf(StaleRecordWriteError);
 			const { message } = thrown as StaleRecordWriteError;
 
-			expect(message).not.toContain('has been written since this copy was read');
-			// Says what is actually true instead: where storage stands, and where this copy stands.
-			expect(message).toContain('revision 1');
-			expect(message).toContain('revision 3');
-			// Only the ran-ahead sentence says this. Without it the assertions above pass against the
-			// diverged-history sentence too, which names neither the right cause nor the right
-			// recovery, so the test would reach this branch without being able to fail on it.
-			expect(message).toContain('more than one commit ahead');
+			// Nothing landed in between, and no second writer exists in this test to have landed it.
+			expect(message).not.toContain('has been written since');
+			expect(message).not.toContain('landed in between');
+			// What is true instead: where the record stands, and what this write was built on.
+			expect(message).toContain('is at revision 2');
+			expect(message).toContain('built on revision 1');
+
+			// The commit that did land is still there, which is what makes re-reading the recovery.
+			expect((await read(store, record.id)).images.map((image) => image.id)).toEqual(['img-1']);
+		});
+
+		// The error carries two pairs of numbers and all four are numbers, so a construction site that
+		// fed one field from another's source would report something a reader cannot tell from the
+		// truth. Two tests part them, because no single scenario separates all four at once.
+		//
+		// This one parts a revision from a count: two image-only commits take the record to revision
+		// 3 while its history stays at one version.
+		it('reports the version counts and the revisions as quantities that can differ', async () => {
+			const record = makeRecord();
+			await store.put(record);
+			const staleCopy = await read(store, record.id);
+
+			await store.put(
+				withAddedImage(await read(store, record.id), {
+					id: 'img-1',
+					downscaled: 'data:image/png;base64,AA==',
+					originalHash: 'sha256:a',
+				}),
+			);
+			await store.put(
+				withAddedImage(await read(store, record.id), {
+					id: 'img-2',
+					downscaled: 'data:image/png;base64,BB==',
+					originalHash: 'sha256:b',
+				}),
+			);
+
+			const thrown = await store
+				.put(
+					withAddedImage(staleCopy, {
+						id: 'img-3',
+						downscaled: 'data:image/png;base64,CC==',
+						originalHash: 'sha256:c',
+					}),
+				)
+				.then(
+					() => null,
+					(error: unknown) => error,
+				);
+
+			// One version throughout, against a record that has reached revision 3. Feed either
+			// revision field from a count, or either count from a revision, and one of these moves.
+			expect(thrown).toMatchObject({
+				kind: 'stale-record-write',
+				recordId: record.id,
+				storedVersions: 1,
+				incomingVersions: 1,
+				storedRevision: 3,
+				incomingRevision: 1,
+			});
+		});
+
+		// And this one parts the two counts from each other, which the scenario above cannot: it
+		// holds both at 1, so a field given the other record's count reports the same number. Here
+		// the write that landed appended a version and the stale copy still carries the shorter
+		// history it read.
+		it("reports each side's version count from its own record", async () => {
+			const record = makeRecord();
+			await store.put(record);
+			const staleCopy = await read(store, record.id);
+
+			await store.put(appended(record));
+
+			const thrown = await store
+				.put(
+					withAddedImage(staleCopy, {
+						id: 'img-1',
+						downscaled: 'data:image/png;base64,AA==',
+						originalHash: 'sha256:a',
+					}),
+				)
+				.then(
+					() => null,
+					(error: unknown) => error,
+				);
+
+			// Two stored versions against the copy's one.
+			expect(thrown).toMatchObject({
+				kind: 'stale-record-write',
+				recordId: record.id,
+				storedVersions: 2,
+				incomingVersions: 1,
+				storedRevision: 2,
+				incomingRevision: 1,
+			});
 		});
 
 		// #67 pinned the old rule's limit here: a write that changed only `images` read as stale,
@@ -613,9 +733,9 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		 * what the seam does today, not what it should do.
 		 *
 		 * The cause is that `revision` restarts when a record is deleted and recreated under the same
-		 * id. `followsStoredRecord` compares an incoming write against the record storage holds now,
+		 * id. `wasBuiltOnStored` compares an incoming write against the record storage holds now,
 		 * and nothing in either record says which incarnation the write came from, so a copy of the
-		 * deleted one whose revision has drawn level with the live record writes as its successor.
+		 * deleted one whose revision has drawn level with the live record writes as a current copy.
 		 *
 		 * No condition is stated for when that lines up. Four attempts to bound it were each wrong
 		 * against cases their author had not thought of, and #78's red-team measured sixteen. Two
@@ -641,8 +761,8 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			await store.put(original);
 			const copyOfTheOriginal = await read(store, original.id);
 
-			// One instance of the cause: the recreate happens to sit at the revision the copy above
-			// holds, so the copy's next write is the stored revision's successor.
+			// One instance of the cause: the recreate happens to sit at the revision the copy above was
+			// read at, so that copy's write carries the base storage holds.
 			await store.delete(original.id);
 			const recreated = makeRecord({ id: original.id, versions: original.versions });
 			await store.put(recreated);
@@ -666,8 +786,8 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		// The same cause reached by an ordinary sequence, with nothing arranged to meet a shape. The
 		// first brand is created and given an image, so its holder's copy sits at revision 2. A
 		// second brand takes the id, starts at revision 1 as any new record does, and its owner adds
-		// one image, which brings it level at revision 2. The dead copy's next write is then the
-		// stored revision's successor, and it overwrites the live owner's image.
+		// one image, which brings it level at revision 2. The dead copy's write then carries the base
+		// storage holds, and it overwrites the live owner's image.
 		//
 		// This is the sequence that broke the fourth attempt to bound the gap: every earlier bound was
 		// drawn around the replica above, and this one sits outside all four. It is why the gap is
@@ -855,7 +975,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 				createdAt: '2026-01-02T00:00:00.000Z',
 				interpretation: 'expressive',
 			});
-			await store.put({ ...record, revision: record.revision + 1, versions: [first, second] });
+			await store.put({ ...record, versions: [first, second] });
 
 			expect((await store.get(record.id))?.versions).toEqual([first, second]);
 		});

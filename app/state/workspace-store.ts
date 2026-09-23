@@ -431,12 +431,11 @@ export function createWorkspaceStore({
 
 			// Append, never touch what is already there: a version is the record of what was generated
 			// at a moment, and editing one rewrites history that a later version may cite. `revision`
-			// counts commits of the record, not versions, so it has to advance here too, even on the
-			// images-only path this function doesn't take today: leaving it where it was reads to
-			// `RecordStore.put` as a second write off the same stale copy, and it refuses the write.
-			const next: BrandRecord = {
+			// rides along untouched, because it names the revision this copy was read at and `put`
+			// compares the write against that. Advancing it here would claim to have been read at a
+			// revision this workspace never saw, and `put` would refuse the write.
+			const proposed: BrandRecord = {
 				...record,
-				revision: record.revision + 1,
 				versions: [...record.versions, version],
 			};
 
@@ -444,7 +443,11 @@ export function createWorkspaceStore({
 			// #39 can only offer to free room if it can tell that apart from a schema rejection,
 			// which it cannot if this swallows either one. State is adopted only after the write
 			// lands, so a rejected commit leaves the workspace showing what storage actually holds.
-			await recordStore.put(next);
+			//
+			// The resolved record rather than the proposed one from here on: storage stamps the
+			// revision, so `proposed` still carries the base it was built from, and a workspace that
+			// kept it would commit from that same base again and be refused.
+			const next = await recordStore.put(proposed);
 
 			// Recorded whether or not the workspace adopts it below, because what storage holds does not
 			// depend on where the workspace wandered off to while the write was in flight. This record

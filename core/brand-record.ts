@@ -30,13 +30,25 @@ import { TokenSetSchema } from './token-set';
  * 7 is #78's `revision` on `BrandRecordSchema`, required. The change is one key on the record
  * rather than a change inside every token. Without this bump a version-6 archive fails on that
  * one missing key, which reads like any malformed record; with it the archive fails on the
- * version and says why. Backfilling a revision would parse, and none is offered because no brand
- * is stored anywhere yet. No user holds data, so there is nothing to migrate and a shim would be
- * written for no record at all. The archive is no way around that either. `get` and `list` both
- * parse through `BrandRecordSchema`, so a record that fails the version check throws on the way out
- * and can never be exported in the first place. #77 bumps for its own shape change and takes 8.
+ * version and says why.
+ *
+ * No migration is written, and what the code does with a version-6 record is throw. Such a record
+ * carries no `revision`, so `BrandRecordSchema.parse` rejects it, and because `get` and `list` both
+ * parse on the way out it is unreadable rather than silently wrong: `components/landing/landing-route.tsx`
+ * catches that rejection and reports the record as unreadable. It cannot be exported around the
+ * problem either, since an export reads through the same parse. The reason no shim was written is a
+ * fact about deployments rather than about this file: no deployed copy of Cambium held a saved brand
+ * when this shipped, confirmed by the project owner on 2026-09-23. #77 bumps for its own shape
+ * change and takes 8.
  */
 export const SCHEMA_VERSION = 7;
+
+/**
+ * What storage stamps on a record's first commit. It lives here rather than in `app/storage/`
+ * because `revision` is declared here: `z.number().int().positive()` sets the floor, and this names
+ * the value a store is expected to start from so the number and the bound cannot drift apart.
+ */
+export const FIRST_REVISION = 1;
 
 /**
  * Only the downscaled image actually sent to the model is stored, plus a hash of the
@@ -96,18 +108,24 @@ export const BrandVersionSchema = z.strictObject({
  * current value. The order is enforced because callers read the last entry as current, and an
  * archive that arrives newest-first would hand them an older result without erroring.
  *
- * `revision` counts commits of the whole record. `versions.length` cannot do that job: a write
- * that adds a reference image appends no version, so the count stands still while the record
- * changes, and storage reads an unchanged count as a write from a stale copy. #78 is where that
- * bites: a saved brand that can never gain a second reference image. Two writers editing the
- * same copy read the same revision, so the second to commit arrives holding a number storage has
- * already moved past.
+ * `revision` counts commits of the whole record, and it is storage that sets it. On a record read
+ * out of a store it is the revision that record stands at; on a record handed to `RecordStore.put`
+ * it is the revision the copy was read at, which is what lets storage tell a write built on what it
+ * holds from one built on something else. `versions.length` cannot do either job: a write that adds
+ * a reference image appends no version, so the count stands still while the record changes. #78 is
+ * where that bit: a saved brand that could never gain a second reference image.
  *
- * `revision` starts at 1, matching `ordinal` above rather than counting from 0, so the third
- * commit is revision 3. Nothing here ties it to `versions.length`, because a record can gain
- * commits and no version at all. The schema bounds it to a positive integer and no further.
- * Whether an incoming revision follows the last committed one is a question only storage can
- * answer, and `RecordStore.put` holds that check.
+ * Two writers editing the same copy read the same revision. The first to commit moves storage past
+ * it, and the second is refused because the base it carries is no longer the one storage holds. That
+ * holds for a writer that carries the revision it read, which is what this field asks of a caller.
+ * A caller that computes a revision instead can land on the number storage happens to hold, and
+ * `RecordStore.put` cannot tell that from a copy read at it.
+ *
+ * `revision` starts at `FIRST_REVISION`, matching `ordinal` above rather than counting from 0, so
+ * the third commit is revision 3. Nothing here ties it to `versions.length`, because a record can
+ * gain commits and no version at all. The schema bounds it to a positive integer and no further:
+ * whether a given revision is the one a write may be built on is a question only storage can answer,
+ * and `RecordStore.put` holds that check.
  *
  * Seed provenance is checked against the images the record actually holds. An id pointing at
  * no image is provenance that cannot be followed, which is worse than none, because it still

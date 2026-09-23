@@ -1,6 +1,6 @@
 import { type BrandRecord, BrandRecordSchema } from '../../core/brand-record';
 
-import { type RecordStore, StaleRecordWriteError, followsStoredRecord } from './record-store';
+import { type RecordStore, nextCommit } from './record-store';
 
 /**
  * Backed by a `Map` keyed on record id. Every record entering or leaving it round-trips through
@@ -30,21 +30,16 @@ export function createInMemoryRecordStore(): RecordStore {
 			const validated = BrandRecordSchema.parse(record);
 			const stored = records.get(validated.id);
 
-			if (stored && !followsStoredRecord(stored, validated)) {
-				throw new StaleRecordWriteError(validated.id, {
-					storedVersions: stored.versions.length,
-					incomingVersions: validated.versions.length,
-					storedRevision: stored.revision,
-					incomingRevision: validated.revision,
-				});
-			}
+			// Throws where the write was not built on what is stored, and stamps the revision where it
+			// was. Everything from the read to the set runs synchronously, so nothing can write
+			// between them.
+			const committed = nextCommit(stored, validated);
 
-			records.set(validated.id, validated);
+			records.set(validated.id, committed);
 
 			// A second parse rather than the object just stored. `put` hands a record back now, and
 			// the map must be no more reachable through that than through the caller's own input.
-			// Everything above runs synchronously, so nothing can write between the check and the set.
-			return BrandRecordSchema.parse(validated);
+			return BrandRecordSchema.parse(committed);
 		},
 
 		async delete(id) {

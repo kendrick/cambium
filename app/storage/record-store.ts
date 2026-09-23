@@ -1,4 +1,4 @@
-import type { BrandRecord } from '../../core/brand-record';
+import { type BrandRecord, FIRST_REVISION } from '../../core/brand-record';
 
 /**
  * Storage is deliberately not part of the pure core. This phase keeps records in memory, the
@@ -10,11 +10,15 @@ import type { BrandRecord } from '../../core/brand-record';
  * even if a caller tries to smuggle one in alongside a record — the schema is where that
  * guarantee actually lives, not a check inside this seam.
  *
- * `put` refuses a write that did not come from the record as storage currently holds it. A write
- * has to follow the stored record on both counts: its `revision` is the one after the stored
- * record's, and its `versions` carry every stored version unchanged and in place. Anything else
- * rejects with `StaleRecordWriteError`. See `followsStoredRecord`, where the rule is written down
- * once for every implementation to share.
+ * `put` refuses a write that was not built on the record as storage currently holds it. A write has
+ * to match the stored record on both counts: its `revision` is the one storage holds, naming the
+ * revision this copy was read at, and its `versions` carry every stored version unchanged and in
+ * place. Anything else rejects with `StaleRecordWriteError`. Storage stamps the next revision
+ * itself: on an insert it writes `FIRST_REVISION` over whatever the record arrived carrying, and on
+ * a commit it writes one past what it holds. A caller is meant to carry the revision it read rather
+ * than compute one, and `wasBuiltOnStored` says what this seam can and cannot do about a caller that
+ * computes one anyway. See `nextCommit`, where the rule and the stamp are written down once for
+ * every implementation to share.
  *
  * The check lives here because nothing above it can make it. Keying on record id plus version count
  * refuses a record deleted and recreated under the same id, forever; keying on object identity is
@@ -27,9 +31,11 @@ import type { BrandRecord } from '../../core/brand-record';
  * the revision, so `put` stores it. That covers `images` today, and an image tag and a brand URL
  * once #77 lands.
  *
- * A caller has to carry `revision` forward on every commit, images-only ones included. A commit
- * that leaves the revision where it was reads exactly like a second write off the same copy, and
- * `put` refuses it as one.
+ * A caller carries `revision` through a commit unchanged, images-only ones included, because it
+ * says which revision the copy was read at and committing does not change that. The record `put`
+ * resolves with carries the revision storage stamped, so a caller that adopts it is holding the base
+ * for its next write; one that keeps its own object instead is holding a base storage has left, and
+ * its next write is refused.
  *
  * `versions` keeps a second rule on top of that one, which is #67's. The stored history has to
  * arrive unchanged and in place: a write may append to that history or leave it alone, and may
@@ -38,11 +44,11 @@ import type { BrandRecord } from '../../core/brand-record';
  * cite.
  *
  * Both rules compare an incoming write against the record as storage holds it now. Neither can say
- * which incarnation the write came from, and `revision` cannot supply that, because it restarts at
- * whatever a creator sets when a record is deleted and recreated under the same id. A copy of the
+ * which incarnation the write came from, and `revision` cannot supply that, because it restarts
+ * at `FIRST_REVISION` when a record is deleted and recreated under the same id. A copy of the
  * deleted incarnation can therefore hold, or later reach, the revision the live record has since
- * reached. Its write is then the stored revision's successor over a history the stored history
- * continues, which is the whole of what `followsStoredRecord` checks, so the write is accepted and
+ * reached. Its write then carries the revision storage holds over a history the stored history
+ * continues, which is the whole of what `wasBuiltOnStored` checks, so the write is accepted and
  * whatever the live record held is overwritten with no error raised.
  *
  * How often that lines up is deliberately not stated here as a condition. Four attempts to bound it
@@ -57,10 +63,10 @@ import type { BrandRecord } from '../../core/brand-record';
  * ever recreated and nothing a user can do reaches it.
  *
  * Restoring an archive over a record that still exists gets no special handling here. `put` judges
- * an archive as it judges any other write, so it accepts one whose revision is the successor of the
- * stored revision and whose versions extend the stored history, storing it over what is there.
- * Nothing asks whether the two records share a past. An archive further ahead than that, or one
- * carrying a different history, rejects.
+ * an archive as it judges any other write, so it accepts one carrying the revision storage holds
+ * over versions that continue the stored history, storing it over what is there. Nothing asks
+ * whether the two records share a past. An archive carrying any other revision, or a different
+ * history, rejects.
  *
  * #20 owns restore, not #15 or #29: those two export derived token artifacts and both exclude a
  * record archive in their non-goals, and a `BrandRecord` cannot be rebuilt from what either emits.
@@ -76,8 +82,8 @@ import type { BrandRecord } from '../../core/brand-record';
  *
  * Nothing recreates an id, then. `delete` has no caller outside the test suites, every record is
  * created under a fresh uuid, and an import mints another one. That is why the gap is dormant, and
- * dormant is not closed: `delete` is still on this interface and `followsStoredRecord` still accepts
- * a write against a record recreated under a deleted id. Whatever recreates one first turns the gap
+ * dormant is not closed: `delete` is still on this interface and `wasBuiltOnStored` still accepts a
+ * write against a record recreated under a deleted id. Whatever recreates one first turns the gap
  * on and owes the schema change with it.
  *
  * `put` resolves with the record as stored, after parsing. `BrandSeedSchema` canonicalises values
@@ -103,24 +109,23 @@ export type RecordStore = {
 };
 
 /**
- * Whether `incoming` follows `stored`, which is what "derived from the record as it stands" means,
- * and the only thing `put` accepts.
+ * Whether `incoming` was built on `stored`, which is what "derived from the record as it stands"
+ * means, and the only thing `put` accepts.
  *
- * The revision has to be the stored one's successor rather than merely ahead of it. The successor
- * test and a bare `> stored.revision` part company over a copy that runs more than one ahead: a
- * writer that read revision 1 and committed twice without writing back arrives holding 3 while
- * storage still holds 1. That copy's history can extend the stored history cleanly, so the history
- * rule below has nothing to say about it and `>` takes the write. Storage is the only authority on
- * what the next revision is, and every write it accepts moves the number by one. A copy that jumps
- * the count files commits storage never took, and `revision` stops counting the writes the record
- * actually holds. The recovery is the one every stale copy gets: re-read and commit again.
+ * The revision has to equal the stored one, not follow it. Comparing against `stored.revision + 1`
+ * asks what number the writer wants to write, which a writer can reach by more than one route: a
+ * copy read at revision 1 that commits twice locally arrives holding 3, and against a record another
+ * writer has already moved to 2 that reads as the legitimate next commit while the history it brings
+ * extends the stored one cleanly. Comparing the revision the writer read asks the question that
+ * actually decides the write, and there is one answer to it.
  *
- * Equal revisions are the case worth spelling out, because accepting them looks harmless while the
- * history check is still in place. Two writers read revision 1. One adds an image and commits 2,
- * which leaves the stored history untouched. The other appends a version and commits its own 2.
- * The stored history is still a prefix of what that second write brings, so the revision is the
- * only thing standing between it and an image dropped in silence. That is this seam's own defect
- * wearing the field #78 filed it for.
+ * What this cannot check is whether a revision the writer presents is one it really read. The
+ * number is small and a caller can compute one, so a caller that increments its own revision can
+ * land on the value storage holds and be accepted. Nothing in the two records distinguishes that
+ * from a copy read at that revision. It is the same limit the module docblock describes for an id
+ * that was deleted and recreated, reached by a different route: `revision` counts commits and does
+ * not identify a lineage. A caller carries the revision it read and does not compute one; that is a
+ * contract this function cannot enforce.
  *
  * The history comparison does a job the revision cannot, which is why #67's rule stays on top of
  * it. A revision that agrees says nothing about whether the incoming history is well formed, and
@@ -163,35 +168,63 @@ export type RecordStore = {
  * The walk costs one pass over the stored history. `put` already serialises the whole record,
  * reference images included, so this is cheaper than the write it guards.
  */
-export function followsStoredRecord(stored: BrandRecord, incoming: BrandRecord): boolean {
+export function wasBuiltOnStored(stored: BrandRecord, incoming: BrandRecord): boolean {
 	return (
-		incoming.revision === stored.revision + 1 &&
+		incoming.revision === stored.revision &&
 		JSON.stringify(stored.versions) ===
 			JSON.stringify(incoming.versions.slice(0, stored.versions.length))
 	);
 }
 
 /**
- * Thrown when `followsStoredRecord` refuses a write. The two revisions sort every refusal into one
- * of three arithmetic cases, and the message is written from whichever holds.
+ * The record an implementation should write, or a throw where the write is refused. Both stores call
+ * this so the rule and the number it stamps stay in one place: an implementation that checked the
+ * base itself and then stamped its own revision could get either half wrong on its own.
  *
- * `incomingRevision <= storedRevision` reads as another write landing while this copy was deriving
- * its own next commit. `incomingRevision > storedRevision + 1` reads as the copy running further
- * ahead than one commit, carrying work storage never took. Otherwise the revision follows and the
- * history rule is what refused the write.
+ * `stored` is `undefined` for an id nothing holds, which is an insert rather than a commit, so there
+ * is no base to check and the record starts at `FIRST_REVISION`. A caller's own `revision` is
+ * discarded there rather than trusted, which is what keeps a record that arrives at revision 7 from
+ * being stored at 7 and making every later write compare against a number no commit produced.
+ */
+export function nextCommit(stored: BrandRecord | undefined, incoming: BrandRecord): BrandRecord {
+	if (stored === undefined) {
+		return { ...incoming, revision: FIRST_REVISION };
+	}
+
+	if (!wasBuiltOnStored(stored, incoming)) {
+		throw new StaleRecordWriteError(incoming.id, {
+			storedVersions: stored.versions.length,
+			incomingVersions: incoming.versions.length,
+			storedRevision: stored.revision,
+			incomingRevision: incoming.revision,
+		});
+	}
+
+	return { ...incoming, revision: stored.revision + 1 };
+}
+
+/**
+ * Where the record stands and what the refused write was built on, named rather than positional so
+ * the two pairs cannot be handed over in each other's place.
+ */
+export type StaleRecordWriteStanding = {
+	storedVersions: number;
+	incomingVersions: number;
+	storedRevision: number;
+	incomingRevision: number;
+};
+
+/**
+ * Thrown when `wasBuiltOnStored` refuses a write. Two things can fail: the base the write was built
+ * on is not the revision storage holds, or it is and the versions do not continue the stored
+ * history. `storedRevision` is where the record stands, `incomingRevision` is the base the refused
+ * write carried, and a caller reads which failed off those two without parsing the message.
  *
- * Those readings assume the copy and the stored record are the same record, which is true of every
- * refusal except one. Where an id has been deleted and recreated, the arithmetic still lands in one
- * of the three and the sentence it produces describes a record the copy never saw: a copy of the
- * deleted incarnation is told another write landed, or that it ran ahead, when what actually happened
- * is that its record is gone. Nothing the error carries can distinguish that, for the reason the
- * module docblock gives, so the message is wrong in exactly the case that gap is wrong in.
- *
- * The recovery differs across those, which is why the error has to part them. A copy that was
- * overtaken re-reads and commits again, and loses nothing. A copy that ran ahead re-reads and
- * loses the commits storage never took, so re-reading is the wrong move and telling it otherwise
- * costs it work it cannot get back. The message says which case this is, and
- * `storedRevision` and `incomingRevision` let a caller decide without reading the message at all.
+ * The recovery is the same either way, which is why there is one error and not two: re-read the
+ * record and commit again from what comes back. That holds for a copy another writer overtook, for a
+ * write whose own response was lost and was sent a second time, and for a copy of an id that was
+ * deleted and recreated. Only the first of those has a second writer in it, so no wording here says
+ * one landed.
  *
  * The version counts are context rather than the test the write failed, and they measure neither
  * that test nor how far behind the losing copy is. Two writers that each added only an image
@@ -216,13 +249,6 @@ export function followsStoredRecord(stored: BrandRecord, incoming: BrandRecord):
  * copy is a version behind; without it, a field given the other record's count reports a number no
  * assertion contradicts.
  */
-export type StaleRecordWriteStanding = {
-	storedVersions: number;
-	incomingVersions: number;
-	storedRevision: number;
-	incomingRevision: number;
-};
-
 export class StaleRecordWriteError extends Error {
 	readonly kind = 'stale-record-write';
 	readonly recordId: string;
@@ -243,23 +269,24 @@ export class StaleRecordWriteError extends Error {
 }
 
 /**
- * The sentence for whichever of the three refusals happened, told apart by the revisions alone.
+ * The sentence for whichever of the two refusals happened, told apart by the revisions alone.
  * Version counts stay out of it: they are the same number in the case two writers race on images,
  * and they run the wrong way for a copy that ran ahead, so a message built on them describes the
  * write rather than the reason it was refused.
  */
-function staleWriteMessage(recordId: string, stored: number, incoming: number): string {
-	if (incoming > stored + 1) {
-		// No number of unseen commits is stated, because this cannot tell how far back the copy
-		// read. Storage at 2 and a copy at 4 is a copy that read 1 and committed three times as
-		// easily as one that read 2 and committed twice, and the difference of the two revisions
-		// counts the second while undercounting the first.
-		return `record ${recordId} is stored at revision ${stored} and this copy is at revision ${incoming}, so the copy is more than one commit ahead and holds work storage never took; re-reading the record would discard that work`;
+function staleWriteMessage(recordId: string, stored: number, builtOn: number): string {
+	// Two branches rather than the three the old rule needed. That rule compared the revision a
+	// writer wanted to write, so it could tell a copy that had been overtaken from one that had run
+	// ahead, and the two wanted different recoveries. A base that does not match is one thing however
+	// it came to differ, and re-reading is the answer to all of it, so a wording that sorted the
+	// mismatch further would be drawing a distinction the rule no longer makes.
+	//
+	// Neither sentence says another write landed. A base can miss because one did, because this write
+	// already landed and its response was lost, or because the id was deleted and recreated under it,
+	// and only the first of those had a second writer in it.
+	if (builtOn !== stored) {
+		return `record ${recordId} is at revision ${stored} and this write was built on revision ${builtOn}; a write has to be built on the revision the record currently holds, so re-read it and commit again`;
 	}
 
-	if (incoming <= stored) {
-		return `record ${recordId} has been written since this copy was read, so writing it back would drop what landed in between; storage is at revision ${stored} and this copy is at revision ${incoming}`;
-	}
-
-	return `record ${recordId} is stored at revision ${stored} and this copy follows at revision ${incoming}, but the history it brings is not the stored history continued`;
+	return `record ${recordId} is at revision ${stored} and this write was built on it, but the versions it brings are not the stored history continued`;
 }
