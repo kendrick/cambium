@@ -1,8 +1,21 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+	appendFile,
+	copyFile,
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	realpath,
+	rm,
+	stat,
+	symlink,
+	utimes,
+	writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { extname, join, relative } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 
@@ -23,8 +36,8 @@ const FILE_COUNT = /Finished in .+ on (\d+) files/;
 const TIMEOUT = 30_000;
 
 // The marker rides along so a file left behind by a killed run explains itself, and the sweep below
-// matches on this sentence rather than on a filename, because a fixture keeps its comment even after
-// something has formatted it.
+// checks for it before deleting, because a fixture keeps its comment even after something has
+// formatted it.
 const NOTE = 'Temporary fixture from package-scripts.test.ts. Safe to delete.';
 
 const CODE = `// ${NOTE}\nconst   x   =   {a:1,  b:2};\nexport { x };\n`;
@@ -88,10 +101,9 @@ const EXTENSIONS = Object.keys(MESSY);
 // counterpart. It goes to a temp directory outside the repo and is what the scoped run is handed.
 const TIDY = `// ${NOTE}\nconst x = { a: 1, b: 2 };\nexport { x };\n`;
 
-// The shape of a canary filename, and the only shape the sweep will touch. Nobody names a file this
-// way by hand, which is the point: content alone is too loose a test, and a sweep that trusted it
-// deleted a copy of this very suite that a mutation run was using as its control. The same
-// predictability is escape 1 in the list further down, and the two cannot both be fixed.
+// The shape of a canary filename. The manifest decides what the sweep deletes, and this is a second
+// filter on top of it, cheap enough to keep: a manifest line that somehow names a file of any other
+// shape is left alone. Nobody names a file this way by hand, so the filter costs nothing real.
 //
 // Digits belong in the extension class. Without them this read `[a-z]+`, which matches `.jsonc` and
 // not `.json5`, so every `.json5` stray was invisible to the sweep at any age and survived every
@@ -101,11 +113,11 @@ const TIDY = `// ${NOTE}\nconst x = { a: 1, b: 2 };\nexport { x };\n`;
 // they came apart in the first place.
 const CANARY_NAME = /^[0-9a-f]{12}\.[a-z0-9]+$/;
 
-async function runScript(script: string, target?: string): Promise<string> {
+async function runScript(root: string, script: string, target?: string): Promise<string> {
 	const args = target ? [script, target] : [script];
 
 	try {
-		const { stdout } = await run('pnpm', args, { cwd: ROOT });
+		const { stdout } = await run('pnpm', args, { cwd: root });
 
 		return stdout;
 	} catch (error) {
@@ -120,8 +132,8 @@ async function runScript(script: string, target?: string): Promise<string> {
 	}
 }
 
-async function git(args: string[]): Promise<string> {
-	const { stdout } = await run('git', args, { cwd: ROOT });
+async function git(root: string, args: string[]): Promise<string> {
+	const { stdout } = await run('git', args, { cwd: root });
 
 	return stdout;
 }
@@ -138,154 +150,6 @@ function filesTouched(stdout: string): number {
 }
 
 /**
- * Directories git ignores, which is the set oxfmt declines to walk. Asked rather than hardcoded:
- * a list in this file goes stale the moment `.gitignore` grows an entry, and the failure that
- * follows is a canary nothing can reach.
- *
- * `core.excludesFile` is switched off for the question, because git and oxfmt disagree about it. Git
- * consults the user's global excludes and oxfmt reads only the ignore files inside the tree, so left
- * on, somebody's personal rule prunes a directory from this walk that oxfmt still rewrites, and the
- * hole belongs to one machine and is invisible on every other. Not hypothetical: the global file on
- * the machine this was written on ignores `tmp`, and `pnpm format:check` reports `tmp/probe.ts` all
- * the same. `.git/info/exclude` is the same divergence with no equivalent switch, so it stays open.
- */
-async function ignoredDirectories(candidates: string[]): Promise<Set<string>> {
-	try {
-		const stdout = await git(['-c', 'core.excludesFile=/dev/null', 'check-ignore', ...candidates]);
-
-		return new Set(stdout.split('\n').filter(Boolean));
-	} catch (error) {
-		// `git check-ignore` exits 1 when it matched nothing, which is an answer, not a failure.
-		const failure = error as { code?: number; stdout?: string };
-		if (failure.code !== 1 || typeof failure.stdout !== 'string') throw error;
-
-		return new Set(failure.stdout.split('\n').filter(Boolean));
-	}
-}
-
-/**
- * The subdirectories of `parent`, minus `.git`. Dot-prefixed names stay in otherwise, because oxfmt
- * walks them: a mis-formatted file under `.github` is reported like any other. `.git` has to be
- * named here because `git check-ignore` does not report git's own directory as ignored.
- */
-async function childDirectories(parent: string): Promise<string[]> {
-	const entries = await readdir(parent, { withFileTypes: true });
-
-	return entries
-		.filter((entry) => entry.isDirectory() && entry.name !== '.git')
-		.map((entry) => join(parent, entry.name));
-}
-
-/**
- * Every place inside the repo a tree-wide write can land: the root, and every directory under it at
- * any depth. A write scoped to a nested path, `oxfmt --write app/readers` say, rewrites everything
- * a peer owns there and walks past anything parked at the root or one level down. Nearly half of
- * this repo's TypeScript files sit two or more levels below the root, so depth is where the cover
- * has to reach.
- *
- * Pruned on the way down rather than collected and filtered afterwards. `node_modules` alone holds
- * thousands of directories, so a walk that reads them before asking git costs more than the rest of
- * this suite put together. Breadth-first for the same reason the pruning exists: it asks
- * `git check-ignore` once per level of depth instead of once per directory. That spends argv
- * length to save process spawns, which is the right way round while a level stays tens of
- * directories wide.
- *
- * What comes back is a snapshot rather than a lock. A directory created after its parent was read
- * gets no canary on this run. That is inherent to sampling a live tree, and the next run covers it.
- */
-async function walkedDirectories(): Promise<string[]> {
-	const walked = [ROOT];
-	let frontier = [ROOT];
-
-	while (frontier.length > 0) {
-		const children = (await Promise.all(frontier.map(childDirectories))).flat();
-
-		// `git check-ignore` with no paths is a usage error rather than an empty answer.
-		if (children.length === 0) break;
-
-		const ignored = await ignoredDirectories(children);
-
-		frontier = children.filter((directory) => !ignored.has(directory));
-		walked.push(...frontier);
-	}
-
-	return walked;
-}
-
-/**
- * Clears fixtures an earlier run left behind, before this run plants its own.
- *
- * A stray is not reliably loud. A run killed after a broken tree-wide write had already tidied the
- * canaries leaves *formatted* files, and `format:check` passes over those without a word, so they
- * pile up unseen. Content is what distinguishes the two states, because formatting a fixture keeps
- * its `NOTE`, so both tests have to pass before anything is removed: the name has the shape this
- * suite generates, and the contents carry the marker.
- *
- * Deleting on either test alone goes badly, and both failures are on the record. Content alone
- * deleted this file, which defines `NOTE` as a literal and so carries the marker itself, and then a
- * scratch copy of the suite that a mutation run was using as its control. A name alone would delete
- * whatever happened to match. Committed files are exempt on top of that, since no canary is ever
- * committed and the rule costs nothing.
- *
- * `MESSY` is deliberately not one of the gates. A stray is litter from some earlier version of this
- * file, which may have planted extensions the current one does not, and a sweep that consulted the
- * live set would walk straight past exactly those. The name shape and the marker already say what a
- * file is without asking what this run happens to plant.
- *
- * Age is the fourth gate, and it is what makes two of these runs able to share a checkout. A peer's
- * canaries are live files that look exactly like strays, so anything younger than `TIMEOUT` is left
- * alone: Vitest has already failed any run that has been going longer than that, so nothing newer
- * can belong to a dead one. A stray dropped seconds ago survives this sweep and is caught by a later
- * one, which is the right way round.
- *
- * Index entries need clearing too, and a killed run can leave one whose file is already gone. Shape
- * and absence from HEAD are the only evidence left in that case, so that branch runs on two gates
- * rather than four. A live peer never appears in it, because a peer's files still exist.
- */
-async function sweepStrays(directories: string[]): Promise<void> {
-	const committed = new Set(
-		(await git(['ls-tree', '-r', '--name-only', '-z', 'HEAD'])).split('\0').filter(Boolean),
-	);
-	const uncommitted = (path: string) => !committed.has(relative(ROOT, path));
-	const cutoff = Date.now() - TIMEOUT;
-
-	const marked = await Promise.all(
-		directories.map(async (directory) => {
-			const entries = await readdir(directory, { withFileTypes: true });
-			const suspects = entries
-				.filter((entry) => entry.isFile() && CANARY_NAME.test(entry.name))
-				.map((entry) => join(directory, entry.name))
-				.filter(uncommitted);
-
-			const hits = await Promise.all(
-				suspects.map(async (path) => {
-					if ((await stat(path)).mtimeMs > cutoff) return '';
-
-					return (await readFile(path, 'utf8')).includes(NOTE) ? path : '';
-				}),
-			);
-
-			return hits.filter(Boolean);
-		}),
-	);
-
-	const orphaned = (await git(['ls-files', '--deleted', '-z']))
-		.split('\0')
-		.filter((file) => file && CANARY_NAME.test(file.split('/').at(-1) ?? ''))
-		.map((file) => join(ROOT, file))
-		.filter(uncommitted);
-
-	const strays = [...marked.flat(), ...orphaned];
-
-	if (strays.length === 0) return;
-
-	// Cached entry first. Dropping the file while git still holds an entry for it only trades one
-	// kind of stray for another.
-	await git(['rm', '--cached', '--quiet', '--ignore-unmatch', '--', ...strays]);
-	await Promise.all(strays.map((stray) => rm(stray, { force: true })));
-}
-
-/**
  * Plants one canary of `extension` in `directory` and hands back its path. The name is random
  * because a fixed one can be excluded: `oxfmt --write . '!**\/format-canary-*\/**'` rewrites the
  * tree and steps around any canary whose path a script can predict. A plain file rather than a
@@ -295,12 +159,405 @@ function canaryName(extension: string): string {
 	return `${randomUUID().replaceAll('-', '').slice(0, 12)}${extension}`;
 }
 
-async function plantCanary(directory: string, extension: string): Promise<string> {
-	const canary = join(directory, canaryName(extension));
+/**
+ * One run's record of every file it creates inside the repo, canaries and walk probes alike.
+ *
+ * It lives under the git directory, which neither `git status` nor oxfmt's tree walk reads, and it
+ * is located with `--git-path` because in a linked worktree `.git` is a file rather than a
+ * directory. Each checkout gets its own, so a sweep in one worktree never reads another's paths.
+ */
+interface Run {
+	root: string;
+	manifest: string;
+	planted: string[];
+}
 
-	await writeFile(canary, MESSY[extension]);
+async function manifestDirectory(root: string): Promise<string> {
+	const path = (await git(root, ['rev-parse', '--git-path', 'package-scripts-canaries'])).trim();
 
-	return canary;
+	return resolve(root, path);
+}
+
+async function startRun(root: string): Promise<Run> {
+	const directory = await manifestDirectory(root);
+
+	await mkdir(directory, { recursive: true });
+
+	return { root, manifest: join(directory, randomUUID()), planted: [] };
+}
+
+// Written before the files exist, never after. A run killed between the two leaves a manifest
+// naming a file that was never written, which the sweep shrugs off; the other order leaves a file
+// no manifest names, which the sweep may never touch.
+async function plant(owner: Run, directories: string[], extensions: string[]): Promise<string[]> {
+	const paths = directories.flatMap((directory) =>
+		extensions.map((extension) => join(directory, canaryName(extension))),
+	);
+
+	// NUL-separated, since a directory name can hold a newline and cannot hold a NUL.
+	await appendFile(owner.manifest, paths.map((path) => `${path}\0`).join(''));
+	owner.planted.push(...paths);
+	await Promise.all(paths.map((path) => writeFile(path, MESSY[extname(path)])));
+
+	return paths;
+}
+
+/**
+ * The subdirectories of `parent`, minus `.git` and `node_modules`. `.git` is git's own and never
+ * formatted. oxfmt skips `node_modules` unless told otherwise, so a probe there would only be a
+ * write into somebody's install. Dot-prefixed names stay in otherwise, because oxfmt walks them: a
+ * mis-formatted file under `.github` is reported like any other.
+ */
+async function childDirectories(parent: string): Promise<string[]> {
+	const entries = await readdir(parent, { withFileTypes: true });
+
+	return entries
+		.filter(
+			(entry) => entry.isDirectory() && entry.name !== '.git' && entry.name !== 'node_modules',
+		)
+		.map((entry) => join(parent, entry.name));
+}
+
+// The walk reads oxfmt directly rather than through a script, because the script is the thing under
+// test and this is only asking where oxfmt goes. Any exit is read for its listing: a peer's
+// half-written file that will not parse exits 2 and still lists everything else.
+async function listDifferent(root: string): Promise<Set<string>> {
+	const oxfmt = join(root, 'node_modules', '.bin', 'oxfmt');
+
+	try {
+		const { stdout } = await run(oxfmt, ['--list-different'], { cwd: root });
+
+		return new Set(stdout.split('\n').filter(Boolean));
+	} catch (error) {
+		const failure = error as { stdout?: string };
+		if (typeof failure.stdout !== 'string') throw error;
+
+		return new Set(failure.stdout.split('\n').filter(Boolean));
+	}
+}
+
+/**
+ * Every place inside the repo a tree-wide write can land, as oxfmt itself sees the tree: the root,
+ * and every directory under it at any depth that oxfmt's own walk enters. A write scoped to a
+ * nested path, `oxfmt --write app/readers` say, rewrites everything a peer owns there and walks past
+ * anything parked at the root or one level down. Nearly half of this repo's TypeScript files sit
+ * two or more levels below the root, so depth is where the cover has to reach.
+ *
+ * Asked of oxfmt rather than of git, because git's ignore model is not oxfmt's. A walk pruned by
+ * `git check-ignore` lost a directory to a personal `core.excludesFile` that oxfmt never reads, on
+ * one machine only. Switching that off still left `core.ignorecase`, which git init turns on for
+ * macOS: a `hidden/` rule prunes `Hidden/` for git, while oxfmt matches case-sensitively and
+ * formats it. Asking oxfmt covers every divergence of that kind, including ones nobody has found.
+ *
+ * Breadth-first, one probe per child directory of the current frontier, one bare
+ * `oxfmt --list-different` per level of depth. A probe oxfmt lists is a directory it walks; a probe
+ * it does not list prunes that directory and everything under it. The root gets a probe too, as the
+ * control: oxfmt always walks the root, so a listing without it means the listing broke, and an
+ * empty frontier from a broken listing would otherwise shrink the guard to the root without a word.
+ *
+ * The residue is a directory oxfmt skips for `.ts` but enters for something else. A file-level rule
+ * such as `foo/*.ts`, or any ignore pattern aimed at the probe's extension, drops `foo/` and its
+ * whole subtree from this walk even though oxfmt formats `foo/bar/x.ts` and `foo/x.json`. Nothing in
+ * this repo's ignore files has that shape today.
+ *
+ * What comes back is a snapshot rather than a lock. A directory created after its parent was read
+ * gets no canary on this run. That is inherent to sampling a live tree, and the next run covers it.
+ */
+async function walkedDirectories(walk: Run): Promise<string[]> {
+	const walked = [walk.root];
+	let frontier = [walk.root];
+
+	while (frontier.length > 0) {
+		const children = (await Promise.all(frontier.map(childDirectories))).flat();
+
+		if (children.length === 0) break;
+
+		const [control, ...probes] = await plant(walk, [walk.root, ...children], ['.ts']);
+
+		try {
+			const listed = await listDifferent(walk.root);
+
+			if (!listed.has(relative(walk.root, control))) {
+				throw new Error(`oxfmt --list-different did not list the root probe ${control}`);
+			}
+
+			frontier = children.filter((_, index) => listed.has(relative(walk.root, probes[index])));
+		} finally {
+			await Promise.all([control, ...probes].map((probe) => rm(probe, { force: true })));
+		}
+
+		walked.push(...frontier);
+	}
+
+	return walked;
+}
+
+/**
+ * Clears what earlier runs left behind, before this run plants its own.
+ *
+ * A stray is not reliably loud. A run killed after a broken tree-wide write had already tidied the
+ * canaries leaves *formatted* files, and `format:check` passes over those without a word, so they
+ * pile up unseen.
+ *
+ * Only a path some run's manifest lists can be deleted. Guessing from the file itself goes wrong:
+ * matching on content alone once deleted this very file, which defines `NOTE` as a literal, and
+ * then a scratch copy of the suite a mutation run was using as its control. Name shape, marker,
+ * absence from HEAD and age together still match a file somebody staged and has not committed yet.
+ * A manifest records what a run created, so nothing it does not list is touched, whatever its
+ * name, contents or age.
+ *
+ * The old gates stay on as a second filter because they are cheap: the name has the canary shape,
+ * the path sits inside this repo, it is not committed, and a file still on disk carries the marker.
+ * A listed path whose file is already gone keeps only its index entry to clear.
+ *
+ * Age is read off the manifest, and it is what lets two runs share a checkout. A peer's manifest is
+ * younger than `TIMEOUT` for as long as the peer can still be running, since Vitest has failed any
+ * run older than that, so a live peer's canaries are never swept. A stray dropped seconds ago
+ * survives this sweep and is caught by a later one, which is the right way round.
+ */
+async function sweepStrays(root: string): Promise<void> {
+	const directory = await manifestDirectory(root);
+	const manifests = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+		if (error.code === 'ENOENT') return [];
+		throw error;
+	});
+
+	const cutoff = Date.now() - TIMEOUT;
+	const stale = (
+		await Promise.all(
+			manifests.map(async (name) => {
+				const manifest = join(directory, name);
+
+				return (await stat(manifest)).mtimeMs <= cutoff ? manifest : '';
+			}),
+		)
+	).filter(Boolean);
+
+	if (stale.length === 0) return;
+
+	const committed = new Set(
+		(await git(root, ['ls-tree', '-r', '--name-only', '-z', 'HEAD'])).split('\0').filter(Boolean),
+	);
+	const listed = (await Promise.all(stale.map((manifest) => readFile(manifest, 'utf8'))))
+		.flatMap((contents) => contents.split('\0'))
+		.filter(Boolean)
+		.filter((path) => {
+			const inside = relative(root, path);
+
+			return (
+				CANARY_NAME.test(basename(path)) &&
+				!inside.startsWith('..') &&
+				!isAbsolute(inside) &&
+				!committed.has(inside)
+			);
+		});
+
+	const doomed = (
+		await Promise.all(
+			listed.map(async (path) => {
+				const contents = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
+					if (error.code === 'ENOENT') return undefined;
+					throw error;
+				});
+
+				return contents === undefined || contents.includes(NOTE) ? path : '';
+			}),
+		)
+	).filter(Boolean);
+
+	// Cached entry first. Dropping the file while git still holds an entry for it only trades one
+	// kind of stray for another. `-f` because the fully staged canary may have been tidied after it
+	// was added, and git refuses to unstage content that differs from both the file and HEAD.
+	if (doomed.length > 0) {
+		await git(root, ['rm', '--cached', '-f', '--quiet', '--ignore-unmatch', '--', ...doomed]);
+		await Promise.all(doomed.map((path) => rm(path, { force: true })));
+	}
+
+	await Promise.all(stale.map((manifest) => rm(manifest, { force: true })));
+}
+
+/**
+ * Plants a canary in every directory oxfmt walks, runs `pnpm format` on one file outside the repo,
+ * and reports every way the script reached further than that file. An empty list is a pass.
+ *
+ * It reports rather than asserting so the same guard can run against a scratch repo whose `format`
+ * script is an exploit, where the expected answer is a failure and the test needs to say which one.
+ */
+async function formatGuard(root: string, extensions: string[]): Promise<string[]> {
+	await sweepStrays(root);
+
+	const failures: string[] = [];
+	const guard = await startRun(root);
+	const outside = await mkdtemp(join(tmpdir(), 'cambium-format-'));
+	let canaries: string[] = [];
+
+	try {
+		const target = join(outside, 'messy.ts');
+
+		await writeFile(target, MESSY['.ts']);
+		canaries = await plant(guard, await walkedDirectories(guard), extensions);
+
+		// Each canary counts only if oxfmt's own tree walk reaches it. Naming a path on the command
+		// line proves nothing, because oxfmt formats a file it is handed even when `.gitignore`
+		// covers it, so an ignored canary would sit unformatted and pass for the wrong reason.
+		// `format:check` runs that walk. It is a separate script string from `format`, so it settles
+		// reachability and nothing else: an unreachable canary passes every check below for free,
+		// and that is the vacuous pass being ruled out here.
+		const bareCheck = await runScript(root, 'format:check');
+
+		for (const canary of canaries) {
+			if (!bareCheck.includes(relative(root, canary))) {
+				failures.push(`unreachable ${relative(root, canary)}`);
+			}
+		}
+
+		// Two ways into the index, because git's enumerations disagree about what is in it.
+		// `--intent-to-add` puts a path where `git ls-files` reads and writes no blob; a script
+		// enumerated as `git ls-files -z | xargs -0 oxfmt --write` rewrote every tracked file in the
+		// repo and passed this guard until those entries existed. `git diff --cached` cannot see an
+		// intent-to-add entry at all, so one canary is added in full. One is enough to catch a script
+		// driven by the cached diff, and the rest stay intent-to-add so the blobs stay out of the
+		// object store.
+		//
+		// It happens here rather than before the walk, and comes out in the `finally`, because an
+		// index entry is committable. Anyone committing in this checkout while these exist takes the
+		// canaries with them: `git commit -a` all of them, a plain `git commit` the one fully added.
+		// The window is held to the one command that needs it.
+		//
+		// `-f` because the walk now plants wherever oxfmt goes, and that includes directories git
+		// ignores. Without it `git add` refuses the whole batch over one such path.
+		const [added, ...intended] = canaries;
+
+		if (intended.length > 0) await git(root, ['add', '-f', '--intent-to-add', '--', ...intended]);
+		await git(root, ['add', '-f', '--', added]);
+
+		const touched = filesTouched(await runScript(root, 'format', target));
+
+		if (touched !== 1) failures.push(`touched ${touched} files`);
+		if ((await readFile(target, 'utf8')) !== TIDY) failures.push('left its target unformatted');
+
+		for (const canary of canaries) {
+			if ((await readFile(canary, 'utf8')) !== MESSY[extname(canary)]) {
+				failures.push(`rewrote ${relative(root, canary)}`);
+			}
+		}
+
+		return failures;
+	} finally {
+		// Only what this run planted. A leftover is still mis-formatted in every case except one, so
+		// it fails `pnpm format:check` on the next call rather than lurking. The exception is a run
+		// killed after a tree-wide write already tidied the canaries, and the sweep at the top of
+		// the next run clears those.
+		//
+		// Files first, index second, and the index call cannot take the run down with it. A
+		// concurrent `git add` holding `index.lock` is enough to make it throw, and a throw here
+		// would both strand hundreds of files in the tree and replace the failure this guard exists
+		// to report. The manifest goes only once the index is clear, so entries a failed call left
+		// behind are still listed, and the next sweep clears them once the manifest ages out.
+		await Promise.all([
+			rm(outside, { recursive: true, force: true }),
+			...guard.planted.map((path) => rm(path, { force: true })),
+		]);
+
+		const cleared =
+			canaries.length === 0 ||
+			(await git(root, [
+				'rm',
+				'--cached',
+				'-f',
+				'--quiet',
+				'--ignore-unmatch',
+				'--',
+				...canaries,
+			]).then(
+				() => true,
+				() => false,
+			));
+
+		if (cleared) await rm(guard.manifest, { force: true });
+	}
+}
+
+// Already what oxfmt would write, so a scratch repo's committed files never show up as work.
+const FORMATTED = 'export const x = 1;\n';
+
+/**
+ * A throwaway repo outside this one, whose `format` script is `formatScript`, so the guard can be
+ * run against an exploit. An exploit never runs against this checkout: its whole purpose is a write
+ * across the tree, and here that write lands on a peer's in-flight edits.
+ *
+ * `Hidden/` is the divergence escape 3 was about. `.gitignore` says `hidden/`, and with
+ * `core.ignorecase` on, which git init sets by default on macOS and this sets everywhere, git
+ * matches it and oxfmt, which matches case-sensitively, does not. It stays untracked, the way a
+ * peer's brand-new directory is, because `git check-ignore` never reports a directory holding a
+ * tracked file, so a walk pruned by it would enter `Hidden/` anyway. Only `.ts` gets planted here, and
+ * `node_modules` is a link to this checkout's, so oxfmt and its config resolve without an install.
+ */
+async function scratchRepo(formatScript: string): Promise<string> {
+	const root = await realpath(await mkdtemp(join(tmpdir(), 'cambium-scratch-')));
+	const files: Record<string, string> = {
+		'package.json': JSON.stringify({
+			name: 'scratch',
+			private: true,
+			scripts: { format: formatScript, 'format:check': 'oxfmt --check' },
+		}),
+		'.gitignore': 'hidden/\n',
+		'a/one.ts': FORMATTED,
+		'a/b/two.ts': FORMATTED,
+	};
+
+	try {
+		await git(root, ['init', '--quiet']);
+		await git(root, ['config', 'core.ignorecase', 'true']);
+		await copyFile(join(ROOT, '.oxfmtrc.json'), join(root, '.oxfmtrc.json'));
+		await symlink(join(ROOT, 'node_modules'), join(root, 'node_modules'));
+
+		await Promise.all(
+			Object.entries({ ...files, 'Hidden/three.ts': FORMATTED }).map(async ([path, contents]) => {
+				await mkdir(dirname(join(root, path)), { recursive: true });
+				await writeFile(join(root, path), contents);
+			}),
+		);
+
+		// The identity, hook and signing flags keep a developer's global git config from failing a
+		// commit nobody reads.
+		await git(root, ['add', '--', '.oxfmtrc.json', ...Object.keys(files)]);
+		await git(root, [
+			'-c',
+			'user.name=scratch',
+			'-c',
+			'user.email=scratch@example.invalid',
+			'-c',
+			'commit.gpgsign=false',
+			'commit',
+			'--quiet',
+			'--no-verify',
+			'--message',
+			'scratch',
+		]);
+
+		return root;
+	} catch (error) {
+		await rm(root, { recursive: true, force: true });
+		throw error;
+	}
+}
+
+async function inScratch(formatScript: string, body: (root: string) => Promise<void>) {
+	const root = await scratchRepo(formatScript);
+
+	try {
+		await body(root);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+}
+
+async function indexed(root: string): Promise<string[]> {
+	// `toSorted` is ES2023 and tsconfig targets ES2022. The array is fresh, so `sort` mutates
+	// nothing a caller holds.
+	// oxlint-disable-next-line unicorn/no-array-sort
+	return (await git(root, ['ls-files', '-z'])).split('\0').filter(Boolean).sort();
 }
 
 // The value under test is a script string in package.json, but what reads it next is pnpm's runner
@@ -318,32 +575,36 @@ describe('pnpm format', () => {
 	// There is nothing left to measure. Only a file that is wrong on purpose has to change.
 	//
 	// So this guard samples. It catches evasions that have been demonstrated against it, one at a
-	// time, and it says nothing about the ones nobody has thought of yet. What it does catch, each
-	// one failing in the mutation matrix:
+	// time, and it says nothing about the ones nobody has thought of yet. What it has been shown to
+	// catch, by mutating `package.json` and watching this test fail:
 	//
 	//   a tree-wide write, with or without its summary sent to /dev/null
 	//   a write that enumerates source directories, and one scoped to a nested path at any depth
 	//   a write that excludes an extension
 	//   a write enumerated from `git ls-files` rather than from a tree walk
 	//
-	// And one verified directly rather than through the matrix: a walk pruned by a personal
-	// `core.excludesFile`, which git reads and oxfmt does not.
+	// And three more held by arms in the describe block below, each run against an exploit in a
+	// scratch repo and each paired with the correct script passing in the same repo shape:
 	//
-	// Four escapes are known. They are written down so the next reader inherits them instead of
+	//   a write aimed at a directory git prunes and oxfmt still walks
+	//   a write enumerated from `git diff --cached --name-only`
+	//   a sweep deleting a staged file this suite never created
+	//
+	// Two escapes stay open. They are written down so the next reader inherits them instead of
 	// finding them the hard way:
 	//
 	//   1. A glob that excludes the canary name shape. The names are random, the shape is not, so
-	//      `oxfmt --write . '!**/????????????.*'` rewrites the tree and passes every test here.
-	//   2. An enumeration that cannot see an intent-to-add entry. `git diff --cached --name-only` and
-	//      `git ls-tree -r HEAD` both report nothing for a canary. Mis-formatting a committed file
-	//      would cover both, and it is not safe here, because Vitest runs test files in parallel.
-	//      Holding `core/provenance.ts` wrong for 1.2s failed 18 of the 43 files in the unit project,
-	//      three times out of three.
-	//   3. `.git/info/exclude`. `ignoredDirectories` switches `core.excludesFile` off, and git offers
-	//      no equivalent switch for this one, so its ignore model can still diverge from oxfmt's and
-	//      prune a directory the formatter walks.
-	//   4. `sweepStrays` reads absence from HEAD as permission to delete, so it removes a staged but
-	//      uncommitted file that matches the canary shape, carries the marker, and is old enough.
+	//      `oxfmt --write . '!**/????????????.*'` rewrites the tree and passes every test here. The
+	//      sweep does not need the shape, since the manifest decides what it deletes. It stays open
+	//      because no name generator fixes it: whatever makes the names, they share some property a
+	//      selector can exclude, and randomising the shape moves the glob without closing the hole.
+	//   2. An enumeration from `git ls-tree -r HEAD`. Only a committed file appears there, and
+	//      mis-formatting a committed file is not safe, because Vitest runs test files in parallel.
+	//      Holding `core/provenance.ts` wrong for 1.2s failed 18 of the 43 files in the unit
+	//      project, three times out of three.
+	//
+	// The walk has a narrower gap of its own, a file-level ignore rule aimed at the probe's
+	// extension, which `walkedDirectories` describes.
 	//
 	// The list is open, and a fifth axis would not close it. A canary has to be tellable from a real
 	// file to work at all, which is exactly what a selector needs in order to skip one. More canaries
@@ -357,79 +618,7 @@ describe('pnpm format', () => {
 	it(
 		'writes only the file it was handed',
 		async () => {
-			// Collected as they are created, so a throw part way through still cleans up the rest.
-			const scratch: string[] = [];
-			const canaries: string[] = [];
-
-			try {
-				const directories = await walkedDirectories();
-
-				await sweepStrays(directories);
-
-				const outside = await mkdtemp(join(tmpdir(), 'cambium-format-'));
-				const target = join(outside, 'messy.ts');
-
-				scratch.push(outside);
-				await writeFile(target, MESSY['.ts']);
-
-				for (const directory of directories) {
-					for (const extension of EXTENSIONS) {
-						canaries.push(await plantCanary(directory, extension));
-					}
-				}
-
-				// Each canary counts only if oxfmt's own tree walk reaches it. Naming a path on the
-				// command line proves nothing, because oxfmt formats a file it is handed even when
-				// `.gitignore` covers it, so an ignored canary would sit unformatted and pass for
-				// the wrong reason. `format:check` runs that walk. It is a separate script string
-				// from `format`, so it settles reachability and nothing else: an unreachable canary
-				// satisfies every assertion below for free, and that is the vacuous pass being
-				// ruled out here.
-				const bareCheck = await runScript('format:check');
-
-				for (const canary of canaries) {
-					expect(bareCheck).toContain(relative(ROOT, canary));
-				}
-
-				// `--intent-to-add` rather than a full add: it puts each path where `git ls-files`
-				// reads, which is all the tracked axis needs, and writes no blob to the object
-				// store. A script enumerated as `git ls-files -z | xargs -0 oxfmt --write` rewrote
-				// every tracked file in the repo and passed this guard until these entries existed.
-				//
-				// It happens here rather than before the walk above, and comes out in the `finally`,
-				// because an index entry is committable. Anyone running `git commit -a` in this
-				// checkout while these exist takes the canaries with them, so the window is held to
-				// the one command that needs it.
-				await git(['add', '--intent-to-add', '--', ...canaries]);
-
-				expect(filesTouched(await runScript('format', target))).toBe(1);
-				expect(await readFile(target, 'utf8')).toBe(TIDY);
-
-				for (const canary of canaries) {
-					expect(await readFile(canary, 'utf8')).toBe(MESSY[extname(canary)]);
-				}
-			} finally {
-				// Only what this test planted. A leftover is still mis-formatted in every case
-				// except one, so it fails `pnpm format:check` on the next call rather than lurking.
-				// The exception is a run killed after a tree-wide write already tidied the
-				// canaries, and the sweep at the top of the next run clears those.
-				//
-				// Files first, index second, and the index call cannot take the run down with it.
-				// A concurrent `git add` holding `index.lock` is enough to make it throw, and a
-				// throw here would both strand two hundred files in the tree and replace the
-				// assertion failure this test exists to report. What it leaves instead is index
-				// entries naming files that are already gone, which the next sweep clears.
-				await Promise.all([
-					...scratch.map((dir) => rm(dir, { recursive: true, force: true })),
-					...canaries.map((canary) => rm(canary, { force: true })),
-				]);
-
-				if (canaries.length > 0) {
-					await git(['rm', '--cached', '--quiet', '--ignore-unmatch', '--', ...canaries]).catch(
-						() => undefined,
-					);
-				}
-			}
+			expect(await formatGuard(ROOT, EXTENSIONS)).toEqual([]);
 		},
 		TIMEOUT,
 	);
@@ -440,7 +629,7 @@ describe('pnpm format', () => {
 	it(
 		'has a fixture for every extension in the tree',
 		async () => {
-			const tracked = (await git(['ls-files', '-z'])).split('\0').filter(Boolean);
+			const tracked = (await git(ROOT, ['ls-files', '-z'])).split('\0').filter(Boolean);
 			const extensions = new Set(tracked.map((file) => extname(file)).filter(Boolean));
 			const uncovered = [...extensions].filter(
 				(extension) => !EXTENSIONS.includes(extension) && !UNFORMATTED.includes(extension),
@@ -454,8 +643,10 @@ describe('pnpm format', () => {
 	// Planting and sweeping read two different descriptions of the same filename, and they drifted:
 	// the sweep's pattern spelled its extension `[a-z]+`, which has no digits, so `.json5` canaries
 	// were planted and then never swept. Nothing compared the two, because a human reading them saw
-	// `.ts` and `.jsonc` match and stopped there. This compares them for every extension, and it
-	// calls the real generator rather than a copy of it, so a change to either side has to face it.
+	// `.ts` and `.jsonc` match and stopped there. The manifest now decides what gets swept, and the
+	// shape is still a filter on it, so a name the shape rejects is still a canary nothing clears.
+	// This compares them for every extension, and it calls the real generator rather than a copy of
+	// it, so a change to either side has to face it.
 	it('can sweep every name it plants', () => {
 		for (const extension of EXTENSIONS) {
 			const name = canaryName(extension);
@@ -470,13 +661,165 @@ describe('pnpm format', () => {
 	});
 });
 
+// The escapes the guard used to let through, each run against a scratch repo so an exploit never
+// touches this checkout. An exploit arm asserts the specific failure its escape produces, not just
+// that the guard failed, since a guard that fails for an unrelated reason proves nothing about the
+// hole. Each exploit arm has been checked by mutation: put back the behaviour its escape relied on
+// (a walk pruned by `git check-ignore`, intent-to-add only, a sweep gated on shape, marker, HEAD
+// and age) and that arm fails.
+describe('pnpm format guard, against scripts built to evade it', () => {
+	it(
+		'walks a directory git prunes and oxfmt formats',
+		async () => {
+			await inScratch('oxfmt --write', async (root) => {
+				// The premise, checked rather than trusted: git really does prune `Hidden/` under the
+				// exact question the old walk asked, and oxfmt really does format what is in it.
+				expect(
+					await git(root, ['-c', 'core.excludesFile=/dev/null', 'check-ignore', 'Hidden']),
+				).toBe('Hidden\n');
+
+				const walk = await startRun(root);
+
+				try {
+					expect(await walkedDirectories(walk)).toContain(join(root, 'Hidden'));
+				} finally {
+					await rm(walk.manifest, { force: true });
+				}
+			});
+		},
+		TIMEOUT,
+	);
+
+	it(
+		'passes the correct script',
+		async () => {
+			await inScratch('oxfmt --write', async (root) => {
+				const committed = await indexed(root);
+
+				expect(await formatGuard(root, ['.ts'])).toEqual([]);
+				expect(await indexed(root)).toEqual(committed);
+			});
+		},
+		TIMEOUT,
+	);
+
+	it(
+		'fails a write aimed at a directory git prunes',
+		async () => {
+			await inScratch('oxfmt --write Hidden && oxfmt --write', async (root) => {
+				const failures = await formatGuard(root, ['.ts']);
+
+				expect(failures).toContainEqual(
+					expect.stringMatching(/^rewrote Hidden\/[0-9a-f]{12}\.ts$/),
+				);
+				expect(failures.filter((failure) => failure.startsWith('unreachable'))).toEqual([]);
+			});
+		},
+		TIMEOUT,
+	);
+
+	// `$(...)` rather than a pipe into xargs: GNU xargs runs its command once on empty input, so
+	// against a guard that stages nothing in full the pipe would degrade into a bare tree-wide write
+	// and fail for the wrong reason. This form degrades into exactly the correct script.
+	it(
+		'fails a write enumerated from the cached diff',
+		async () => {
+			await inScratch('oxfmt --write $(git diff --cached --name-only)', async (root) => {
+				const committed = await indexed(root);
+				const failures = await formatGuard(root, ['.ts']);
+
+				expect(failures.filter((failure) => failure.startsWith('rewrote'))).toHaveLength(1);
+				expect(failures.filter((failure) => failure.startsWith('unreachable'))).toEqual([]);
+
+				// The fully added canary was tidied after staging, which is the case `git rm --cached`
+				// refuses without `-f`. Nothing may be left in the index either way.
+				expect(await indexed(root)).toEqual(committed);
+			});
+		},
+		TIMEOUT,
+	);
+
+	it(
+		'leaves a staged file no manifest lists, whatever it looks like',
+		async () => {
+			await inScratch('oxfmt --write', async (root) => {
+				const long = new Date(Date.now() - 2 * TIMEOUT);
+
+				// Canary shape, the marker, absent from HEAD, and older than `TIMEOUT`: everything a
+				// sweep guessing from the file would take. Staged, so losing it costs somebody work.
+				const bystander = join(root, 'a', canaryName('.ts'));
+
+				await writeFile(bystander, MESSY['.ts']);
+				await git(root, ['add', '--', bystander]);
+				await utimes(bystander, long, long);
+
+				// A stale manifest in the same sweep, so the deleting branch runs rather than
+				// returning early with nothing to do.
+				const earlier = await startRun(root);
+				const [stray] = await plant(earlier, [join(root, 'a')], ['.ts']);
+
+				await utimes(earlier.manifest, long, long);
+				await sweepStrays(root);
+
+				expect(await readFile(stray, 'utf8').catch(() => 'gone')).toBe('gone');
+				expect(await readFile(bystander, 'utf8')).toBe(MESSY['.ts']);
+				expect(await git(root, ['ls-files', '--', bystander])).toBe(
+					`${relative(root, bystander)}\n`,
+				);
+			});
+		},
+		TIMEOUT,
+	);
+
+	it(
+		'clears what a stale manifest lists and leaves a live one alone',
+		async () => {
+			await inScratch('oxfmt --write', async (root) => {
+				const committed = await indexed(root);
+				const long = new Date(Date.now() - 2 * TIMEOUT);
+
+				// The three states a killed run can leave: an intent-to-add entry, a full entry whose
+				// file was tidied after staging, and an entry whose file is already gone.
+				const dead = await startRun(root);
+				const [intended, added, orphaned] = await plant(
+					dead,
+					[join(root, 'a')],
+					['.ts', '.ts', '.ts'],
+				);
+
+				await git(root, ['add', '--intent-to-add', '--', intended]);
+				await git(root, ['add', '--', added, orphaned]);
+				await writeFile(added, TIDY);
+				await rm(orphaned);
+				await utimes(dead.manifest, long, long);
+
+				const live = await startRun(root);
+				const [peer] = await plant(live, [join(root, 'a', 'b')], ['.ts']);
+
+				await sweepStrays(root);
+
+				for (const path of [intended, added, orphaned, dead.manifest]) {
+					const contents = await readFile(path, 'utf8').catch(() => 'gone');
+
+					expect({ path, contents }).toEqual({ path, contents: 'gone' });
+				}
+
+				expect(await indexed(root)).toEqual(committed);
+				expect(await readFile(peer, 'utf8')).toBe(MESSY['.ts']);
+				expect(await readFile(live.manifest, 'utf8')).toBe(`${peer}\0`);
+			});
+		},
+		TIMEOUT,
+	);
+});
+
 describe('pnpm format:check', () => {
 	// This file is its own fixture. It is a root-level `.ts`, which is what oxfmt formats, and it
 	// cannot go missing while the test naming it still exists.
 	it(
 		'checks only the file it was handed',
 		async () => {
-			expect(filesTouched(await runScript('format:check', import.meta.filename))).toBe(1);
+			expect(filesTouched(await runScript(ROOT, 'format:check', import.meta.filename))).toBe(1);
 		},
 		TIMEOUT,
 	);
@@ -490,7 +833,7 @@ describe('pnpm format:check', () => {
 	it(
 		'still covers the tree when called bare',
 		async () => {
-			expect(filesTouched(await runScript('format:check'))).toBeGreaterThan(100);
+			expect(filesTouched(await runScript(ROOT, 'format:check'))).toBeGreaterThan(100);
 		},
 		TIMEOUT,
 	);
