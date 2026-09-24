@@ -595,6 +595,38 @@ describe('createAnthropicBrandReader cancellation', () => {
 		expect(error.kind).toBe('cancelled');
 	});
 
+	// A cancel that lands after the headers still leaves a request Anthropic answered and may have
+	// billed. The status and request id are what a person quotes to support about that request, so
+	// the cancel must not throw them away just because the body never finished.
+	it.each([200, 529])(
+		'keeps the status and request id when a %i was already answered before the cancel',
+		async (status) => {
+			const controller = new AbortController();
+			const fetchStub = vi.fn<typeof globalThis.fetch>(async () => {
+				const body = new ReadableStream<Uint8Array>({
+					start(stream) {
+						controller.signal.addEventListener('abort', () =>
+							stream.error(controller.signal.reason),
+						);
+					},
+				});
+				queueMicrotask(() => controller.abort());
+				return new Response(body, { status, headers: { 'request-id': 'req_after_headers' } });
+			});
+
+			const error = await rejection(
+				readerWith(fetchStub).read(IMAGES, {
+					auth: anthropicAuth(API_KEY),
+					signal: controller.signal,
+				}),
+			);
+
+			expect(error.kind).toBe('cancelled');
+			expect(error.status).toBe(status);
+			expect(error.requestId).toBe('req_after_headers');
+		},
+	);
+
 	it('still calls a plain rejected fetch network when a signal was passed and never aborted', async () => {
 		const controller = new AbortController();
 		const fetchStub = vi.fn<typeof globalThis.fetch>(async () => {

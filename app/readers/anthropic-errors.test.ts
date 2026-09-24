@@ -68,8 +68,8 @@ describe('errorKindForStatus', () => {
 
 	// This runs on the failure path, where a throw has nowhere to go.
 	it('returns a kind for every status without throwing', () => {
-		// `network` and `cancelled` have no response behind them. `malformed`, `refusal` and `truncated`
-		// all come from a 200's body.
+		// No status maps to `network` or `cancelled`: neither is chosen from a status, though a late
+		// `cancelled` carries one. `malformed`, `refusal` and `truncated` all come from a 200's body.
 		const bodyOrNoResponse = new Set<AnthropicReaderErrorKind>([
 			'network',
 			'cancelled',

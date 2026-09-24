@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { PNG } from 'pngjs';
 
 import { ANTHROPIC_MESSAGES_URL } from '../app/readers/anthropic-reader';
 // `with { type: 'json' }` isn't decoration here: Playwright runs this file as native Node ESM
@@ -194,8 +195,8 @@ async function readRecord(page: Page, recordId: string): Promise<StoredRecord | 
 	return (await readRecords(page)).find((record) => record.id === recordId);
 }
 
-function pngFile(name: string) {
-	return { name, mimeType: 'image/png', buffer: Buffer.from(makePng(2, 2)) };
+function pngFile(name: string, width = 2, height = 2) {
+	return { name, mimeType: 'image/png', buffer: Buffer.from(makePng(width, height)) };
 }
 
 /**
@@ -203,11 +204,11 @@ function pngFile(name: string) {
  * the id the "Saved." outcome put in the URL, which is the one every scenario below needs to reach
  * `GeneratePanel` and to read the record back afterward.
  */
-async function saveOneRecord(page: Page): Promise<string> {
+async function saveOneRecord(page: Page, file = pngFile(PNG_NAME)): Promise<string> {
 	await page.goto('/');
 
-	await page.getByLabel('Reference images').setInputFiles(pngFile(PNG_NAME));
-	await expect(page.getByText(PNG_NAME, { exact: true })).toBeVisible();
+	await page.getByLabel('Reference images').setInputFiles(file);
+	await expect(page.getByText(file.name, { exact: true })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Save these references' }).click();
 	await expect(page.getByText(/^Saved\./)).toBeVisible();
@@ -229,13 +230,21 @@ function keyDialog(page: Page) {
 	return page.getByRole('dialog');
 }
 
+/**
+ * By role and name rather than `type="submit"`: the dialog deliberately has no form to submit,
+ * because Chrome's password manager watches form submissions (see the password-manager scenario).
+ */
+function useKeyButton(page: Page) {
+	return keyDialog(page).getByRole('button', { name: 'Use this key' });
+}
+
 async function submitKeyDialog(page: Page, key: string): Promise<void> {
 	const dialog = keyDialog(page);
 	await expect(dialog).toBeVisible();
 	// The field is uncontrolled (`key-dialog.tsx`'s own doc comment says why), so `fill` is the only
 	// way in: there is no prop or state this harness could set instead.
 	await dialog.getByLabel(/api key/i).fill(key);
-	await dialog.locator('button[type="submit"]').click();
+	await useKeyButton(page).click();
 }
 
 /** Opens the dialog from Generate and submits a key in one motion, for the common first-run case. */
@@ -283,8 +292,8 @@ function collectConsoleMessages(page: Page): string[] {
 }
 
 /**
- * The serialized DOM, which is what an extension, a saved page, or a screenshot tool reads. A
- * password input's typed value lives in the element's property and never reaches this, but a
+ * The serialized DOM, which is what an extension, a saved page, or a screenshot tool reads. An
+ * input's typed value lives in the element's property and never reaches this, but a
  * `value` attribute (a prefilled `defaultValue`) does, so this is what catches the key being
  * rendered back into the page.
  */
@@ -333,13 +342,121 @@ test('the key dialog links to the Anthropic console, and a cost estimate is show
 	const dialog = keyDialog(page);
 	await expect(dialog).toBeVisible();
 	await expect(dialog.getByLabel(/api key/i)).toBeVisible();
-	await expect(dialog.locator('button[type="submit"]')).toBeVisible();
+	await expect(useKeyButton(page)).toBeVisible();
 	// The one control criterion 5 needs, per the plan's own Task 6 mapping: the console link, not
 	// the spend-limit sentence's wording.
 	await expect(dialog.getByRole('link', { name: /anthropic console/i })).toHaveAttribute(
 		'href',
 		'https://console.anthropic.com',
 	);
+});
+
+/**
+ * Parses the input-token count out of the estimate as it renders, which is the figure a person
+ * reads. `Intl.NumberFormat('en-US')` groups thousands with commas.
+ */
+async function renderedInputTokens(page: Page): Promise<number> {
+	const text = (await page.locator('[data-estimate]').first().textContent()) ?? '';
+	const match = /about ([\d,]+) input tokens/.exec(text);
+	if (!match) throw new Error(`no input-token count in "${text}"`);
+	return Number(match[1].replaceAll(',', ''));
+}
+
+// Every other fixture here is 2x2 px, which is 1 image token, so a measure() that read dimensions
+// wrong by orders of magnitude still rendered the same dollar figure and passed. At 1568x1176 the
+// image term is 2459 tokens, so a wrong measure() moves the rendered count.
+test('the estimate grows by the image term of a large reference, worked out by hand', async ({
+	page,
+}) => {
+	await saveOneRecord(page);
+	await waitForGenerateReady(page);
+	const smallTokens = await renderedInputTokens(page);
+
+	// 1568x1176 is exactly intake's 1568 px long-edge cap, so it is stored at that size.
+	await saveOneRecord(page, pngFile('large.png', 1568, 1176));
+	await waitForGenerateReady(page);
+	const largeTokens = await renderedInputTokens(page);
+
+	// Anthropic's vision rule, one token per 750 px², rounded up per image:
+	//   large: 1568 x 1176 = 1,843,968 px; / 750 = 2458.624 -> 2459 tokens
+	//   small: 2 x 2 = 4 px; / 750 = 0.005 -> 1 token
+	// Both records hold one image under the same prompt, so the rendered counts differ by the image
+	// term alone: 2459 - 1 = 2458.
+	expect(largeTokens - smallTokens).toBe(2458);
+});
+
+/**
+ * The same field filled with two different keys of the same length, rasterized. A masked field
+ * draws identical discs for both; a field showing the key draws different glyphs. Blurred first so
+ * a blinking caret can't make two masked shots differ, and captured with animations finished, since
+ * the dialog's open transition otherwise lands mid-frame in a busy run.
+ */
+async function keyFieldPixels(page: Page, key: string): Promise<Buffer> {
+	const field = keyDialog(page).getByLabel(/api key/i);
+	await field.fill(key);
+	await field.evaluate((element) => (element as HTMLInputElement).blur());
+	return field.screenshot({ animations: 'disabled' });
+}
+
+/**
+ * Two masked shots still differ by 1 in a channel along the rounded border's antialiasing, from run
+ * to run. Glyphs a field shows in the clear differ by most of the 0-255 range, so 8 separates the
+ * two cases with room on both sides.
+ */
+const MASKED_PIXEL_TOLERANCE = 8;
+
+function largestChannelDifference(first: Buffer, second: Buffer): number {
+	const a = PNG.sync.read(first);
+	const b = PNG.sync.read(second);
+	if (a.width !== b.width || a.height !== b.height) return 255;
+
+	let largest = 0;
+	for (let index = 0; index < a.data.length; index += 1) {
+		largest = Math.max(largest, Math.abs(a.data[index] - b.data[index]));
+	}
+	return largest;
+}
+
+// A `type="password"` field inside a submitted form reads to Chrome's password manager as a login,
+// and it offers to save the key into the person's synced passwords.
+test('the key field is masked without reading as a password to a password manager, and Enter submits it', async ({
+	page,
+}) => {
+	const recordId = await saveOneRecord(page);
+	await mockAnthropic(page, (body) => ({
+		status: 200,
+		body: successResponseBody(imageIdFromRequest(body)),
+	}));
+	await waitForGenerateReady(page);
+	await generateButton(page).click();
+
+	const dialog = keyDialog(page);
+	const field = dialog.getByLabel(/api key/i);
+	await expect(field).toBeVisible();
+
+	expect(await field.getAttribute('type')).not.toBe('password');
+	await expect(field).toHaveAttribute('autocomplete', 'off');
+	await expect(field).toHaveAttribute('data-1p-ignore', '');
+	await expect(field).toHaveAttribute('data-lpignore', 'true');
+	await expect(field).toHaveAttribute('data-bwignore', '');
+	await expect(field).toHaveAttribute('data-form-type', 'other');
+	// No form means no native submission for the password manager to watch.
+	await expect(dialog.locator('form')).toHaveCount(0);
+
+	const sameLength = 'x'.repeat(TEST_KEY.length);
+	expect(
+		largestChannelDifference(
+			await keyFieldPixels(page, sameLength),
+			await keyFieldPixels(page, TEST_KEY),
+		),
+	).toBeLessThanOrEqual(MASKED_PIXEL_TOLERANCE);
+
+	await field.fill(TEST_KEY);
+	await expect(page.locator('input[type="password"]')).toHaveCount(0);
+
+	await field.press('Enter');
+	await expect(page).toHaveURL(new RegExp(`/workspace\\?record=${recordId}$`));
+	await expect(page.locator('input[type="password"]')).toHaveCount(0);
 });
 
 test('the key indicator appears once a key is in session, and Clear empties it', async ({
@@ -384,7 +501,7 @@ test('a successful generation reaches the workspace, and the key touches nothing
 	const dialog = keyDialog(page);
 	await dialog.getByLabel(/api key/i).fill(TEST_KEY);
 	await expectKeyNotInPage(page);
-	await dialog.locator('button[type="submit"]').click();
+	await useKeyButton(page).click();
 
 	await expect(page).toHaveURL(new RegExp(`/workspace\\?record=${recordId}$`));
 	await expectKeyNotInPage(page);
@@ -461,7 +578,7 @@ test('a rejected key (401) reopens the key dialog by itself with the key still i
 
 	// Submitting the empty field keeps the loaded key and sends nothing, since #23 forbids a retry
 	// the person didn't ask for.
-	await dialog.locator('button[type="submit"]').click();
+	await useKeyButton(page).click();
 	await expect(dialog).toHaveCount(0);
 	const keptValue = await page.evaluate(
 		(storageKey) => sessionStorage.getItem(storageKey),

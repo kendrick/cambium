@@ -236,6 +236,20 @@ const ROWS: Row[] = [
 		},
 	},
 	{
+		// Cancelled after Anthropic answered: the id is the one thing a person can take to support
+		// about a request they may be billed for.
+		name: 'a cancel after the response arrived shows its request id',
+		failure: readerFailure('cancelled', { status: 200 }),
+		repairUsed: false,
+		expected: {
+			kind: 'cancelled',
+			message:
+				"Generation cancelled, and nothing was saved. Anthropic may still bill for a request it had already started. Try again when you're ready.",
+			recovery: 'manual-retry',
+			requestId: REQUEST_ID,
+		},
+	},
+	{
 		name: 'a refusal offers no retry',
 		failure: readerFailure('refusal', { status: 200, refusalCategory: 'cyber' }),
 		repairUsed: false,

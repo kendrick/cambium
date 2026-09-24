@@ -246,12 +246,14 @@ function describeReaderFailure({ kind, error }: ReaderFailure): FailureDescripto
 			};
 		case 'cancelled':
 			// Anthropic may have started work, and billing, before the abort reached it. Saying nothing
-			// was charged would be a promise Cambium can't keep.
+			// was charged would be a promise Cambium can't keep. A cancel after the response arrived
+			// carries its request id, which is what support needs to look that charge up.
 			return {
 				kind,
 				message:
 					"Generation cancelled, and nothing was saved. Anthropic may still bill for a request it had already started. Try again when you're ready.",
 				recovery: 'manual-retry',
+				...requestId,
 			};
 		case 'refusal':
 			return {

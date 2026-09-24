@@ -6,10 +6,11 @@
  * because 401 and 403 mean the same thing to a person holding a key, and 500 and 529 both mean
  * try later.
  *
- * `network` and `cancelled` have no status behind them: fetch rejected before a response existed,
- * on its own for `network` and because the caller aborted for `cancelled`. They're apart because
- * only one of them is the connection's fault, and telling somebody who pressed Cancel to check
- * their connection would be wrong. The last three all arrive as a 200, and only the body tells
+ * `network` never has a status behind it: fetch rejected before a response existed. `cancelled`
+ * has one only when the abort landed after the headers arrived, and then it carries that status
+ * and request id; an abort before that leaves both null. They're apart because only one of them is
+ * the connection's fault, and telling somebody who pressed Cancel to check their connection would
+ * be wrong. The last three all arrive as a 200, and only the body tells
  * them apart. `malformed` holds no usable content block. `refusal` and `truncated` come from
  * `stop_reason`, and they need kinds of their own because their recoveries differ from a parse
  * failure's: a repair retry can't talk a safety classifier round, and a truncated seed hit

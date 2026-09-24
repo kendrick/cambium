@@ -1,6 +1,6 @@
 'use client';
 
-import { useId } from 'react';
+import { useId, useRef } from 'react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -33,28 +33,32 @@ const CONSOLE_URL = 'https://console.anthropic.com';
  *
  * The field is uncontrolled and always starts empty. After a credentials failure the stored key is
  * still there (#23: a rejected key doesn't clear it), and the dialog says so rather than show it.
- * A prefilled password input writes the whole key into the DOM as a `value` attribute, where an
- * extension or a saved page can read it. Controlled state would keep the key in React's memory for
- * as long as the panel lives.
+ * A prefilled input writes the whole key into the DOM as a `value` attribute, where an extension or
+ * a saved page can read it. Controlled state would keep the key in React's memory for as long as
+ * the panel lives.
+ *
+ * Masked with CSS instead of `type="password"`, and never inside a `<form>`. Chrome's password
+ * manager reads a password field in a submitted form as a login and offers to save the key into the
+ * person's synced passwords. The `data-*` attributes are the opt-outs 1Password, LastPass,
+ * Bitwarden and Dashlane each look for, because `autocomplete="off"` alone doesn't stop them.
  */
 export default function KeyDialog({ open, onOpenChange, onSubmit, notice }: KeyDialogProps) {
 	const inputId = useId();
+	const inputRef = useRef<HTMLInputElement>(null);
 	// Only whether one exists, read on render so the key itself never travels through a prop or state.
 	const loaded = getSessionKey() !== null;
+
+	const submit = () => {
+		const typed = inputRef.current?.value.trim() ?? '';
+		const key = typed || getSessionKey();
+		if (key) onSubmit(key);
+		else inputRef.current?.focus();
+	};
 
 	return (
 		<Dialog onOpenChange={onOpenChange} open={open}>
 			<DialogPopup>
-				<form
-					className="flex flex-col gap-4"
-					onSubmit={(event) => {
-						event.preventDefault();
-						const value = new FormData(event.currentTarget).get('api-key');
-						const typed = typeof value === 'string' ? value.trim() : '';
-						const key = typed || getSessionKey();
-						if (key) onSubmit(key);
-					}}
-				>
+				<div className="flex flex-col gap-4">
 					<DialogTitle>Your Anthropic API key</DialogTitle>
 					{notice && (
 						<p className="text-destructive text-sm" data-key-notice role="alert">
@@ -63,20 +67,33 @@ export default function KeyDialog({ open, onOpenChange, onSubmit, notice }: KeyD
 					)}
 					<DialogDescription>
 						Cambium sends your reference images to Anthropic with this key, from this browser. The
-						key stays in this tab and is cleared when you close it.
+						key stays for this tab's session, and a tab opened from this one can carry a copy. Use
+						Clear key when you're done with it.
 					</DialogDescription>
 					<div className="flex flex-col gap-2">
 						<label className="text-sm font-medium" htmlFor={inputId}>
 							Anthropic API key
 						</label>
 						<input
+							aria-required={!loaded}
+							autoCapitalize="off"
 							autoComplete="off"
-							className="border-border bg-background focus-visible:border-ring focus-visible:ring-ring/50 h-9 rounded-md border px-3 font-mono text-sm outline-none focus-visible:ring-3"
+							autoCorrect="off"
+							className="border-border bg-background focus-visible:border-ring focus-visible:ring-ring/50 h-9 rounded-md border px-3 font-mono text-sm outline-none [-webkit-text-security:disc] focus-visible:ring-3"
+							data-1p-ignore=""
+							data-bwignore=""
+							data-form-type="other"
+							data-lpignore="true"
 							id={inputId}
-							name="api-key"
-							required={!loaded}
+							onKeyDown={(event) => {
+								if (event.key === 'Enter') {
+									event.preventDefault();
+									submit();
+								}
+							}}
+							ref={inputRef}
 							spellCheck={false}
-							type="password"
+							type="text"
 						/>
 						{loaded && (
 							<p className="text-muted-foreground text-sm" data-key-loaded>
@@ -102,9 +119,11 @@ export default function KeyDialog({ open, onOpenChange, onSubmit, notice }: KeyD
 					</p>
 					<div className="flex justify-end gap-2">
 						<DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
-						<Button type="submit">Use this key</Button>
+						<Button onClick={submit} type="button">
+							Use this key
+						</Button>
 					</div>
-				</form>
+				</div>
 			</DialogPopup>
 		</Dialog>
 	);

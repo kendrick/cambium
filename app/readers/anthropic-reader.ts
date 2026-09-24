@@ -168,11 +168,20 @@ async function readBodyText(response: Response): Promise<string | null> {
  * An abort can land while the body is still streaming, and `readBodyText` swallows that rejection
  * as a missing body. Checking the signal afterward is what stops a cancelled read from arriving as
  * `malformed`, or as a success built from a body read before the abort.
+ *
+ * Callers pass `response` once one exists. By then Anthropic has answered, and billed a 200, so
+ * its status and request id are what a person quotes to support about that request, cancelled or
+ * not.
  */
-function throwIfCancelled(signal: AbortSignal | undefined, cause?: unknown): void {
+function throwIfCancelled(
+	signal: AbortSignal | undefined,
+	{ cause, response }: { cause?: unknown; response?: Response } = {},
+): void {
 	if (signal?.aborted) {
 		throw new AnthropicReaderError('cancelled', 'The read was cancelled before it finished.', {
 			cause: cause ?? signal.reason,
+			status: response?.status ?? null,
+			requestId: response?.headers.get('request-id') ?? null,
 		});
 	}
 }
@@ -248,7 +257,7 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Anthr
 					signal,
 				});
 			} catch (cause) {
-				throwIfCancelled(signal, cause);
+				throwIfCancelled(signal, { cause });
 
 				throw new AnthropicReaderError(
 					'network',
@@ -263,7 +272,7 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Anthr
 				const kind = errorKindForStatus(response.status);
 				const body = await readBodyText(response);
 
-				throwIfCancelled(signal);
+				throwIfCancelled(signal, { response });
 
 				// No automatic retry lives here. Issue #1 rules it out because retrying "spends the
 				// user's money without consent", so a rate limit comes back as a number to show rather
@@ -279,7 +288,7 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Anthr
 
 			const payload = await readBodyText(response);
 
-			throwIfCancelled(signal);
+			throwIfCancelled(signal, { response });
 			let body: unknown = null;
 
 			try {
