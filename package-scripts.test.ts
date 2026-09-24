@@ -474,11 +474,12 @@ async function formatGuard(root: string, extensions: string[]): Promise<string[]
 		if (touched !== 1) failures.push(`touched ${touched} files`);
 		if ((await readFile(target, 'utf8')) !== TIDY) failures.push('left its target unformatted');
 
-		for (const canary of canaries) {
-			if ((await readFile(canary, 'utf8')) !== MESSY[extname(canary)]) {
+		const after = await Promise.all(canaries.map((canary) => readFile(canary, 'utf8')));
+
+		canaries.forEach((canary, index) => {
+			if (after[index] !== MESSY[extname(canary)])
 				failures.push(`rewrote ${relative(root, canary)}`);
-			}
-		}
+		});
 
 		return failures;
 	} finally {
@@ -837,11 +838,15 @@ describe('pnpm format guard, against scripts built to evade it', () => {
 
 				await sweepStrays(root);
 
-				for (const path of [intended, added, orphaned, dead.manifest]) {
-					const contents = await readFile(path, 'utf8').catch(() => 'gone');
+				const cleared = [intended, added, orphaned, dead.manifest];
+				const remains = await Promise.all(
+					cleared.map(async (path) => ({
+						path,
+						contents: await readFile(path, 'utf8').catch(() => 'gone'),
+					})),
+				);
 
-					expect({ path, contents }).toEqual({ path, contents: 'gone' });
-				}
+				expect(remains).toEqual(cleared.map((path) => ({ path, contents: 'gone' })));
 
 				expect(await indexed(root)).toEqual(committed);
 				expect(await readFile(peer, 'utf8')).toBe(MESSY['.ts']);
