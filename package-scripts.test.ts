@@ -1037,6 +1037,39 @@ describe('pnpm format guard, against scripts built to evade it', () => {
 		},
 		TIMEOUT,
 	);
+
+	// `echo` prints no oxfmt file count, so the body throws after staging. The error that caused the
+	// failure and the stuck index both have to reach the reader.
+	it(
+		'reports both a failed run and a stuck index',
+		async () => {
+			await inScratch('echo', async (root) => {
+				const lock = join(root, '.git', 'index.lock');
+
+				try {
+					const rejection = await formatGuard(root, ['.ts'], {
+						beforeUnstage: () => writeFile(lock, ''),
+						unstageCap: 300,
+					}).then(
+						() => undefined,
+						(error: unknown) => error,
+					);
+
+					expect(rejection).toBeInstanceOf(AggregateError);
+					expect((rejection as AggregateError).errors.map((error: Error) => error.message)).toEqual(
+						[
+							expect.stringMatching(/^oxfmt printed no file count/),
+							expect.stringMatching(/^index\.lock still held after 300ms/),
+						],
+					);
+					expect(await readdir(await manifestDirectory(root))).toHaveLength(1);
+				} finally {
+					await rm(lock, { force: true });
+				}
+			});
+		},
+		TIMEOUT,
+	);
 });
 
 describe('pnpm format:check', () => {
