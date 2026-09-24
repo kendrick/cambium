@@ -18,16 +18,18 @@ import { makeFatPng, makePng } from './fixtures/png';
  * panel's copy. #24 is rewriting that outcome, and wording is not what any of these defects broke.
  */
 
-type StoredRecordSummary = { imageCount: number; serializedLength: number };
+type StoredRecordSummary = { imageCount: number; payloadLengths: (number | null)[] };
 
 /**
  * Every stored record, reduced to what these scenarios assert, read through raw IndexedDB calls
  * for the reason `e2e/indexeddb.spec.ts` gives for `countStoredRecords`: nothing here should
  * depend on the app's own store module agreeing with itself.
  *
- * `serializedLength` is the whole record as JSON, which bounds every data URL inside it without
- * naming the field that holds one. `images` is named, because an image count is what scenario 3
- * is about and `BrandRecordSchema` has carried that field since the first record shape.
+ * `payloadLengths` measures each image the way the model call will. `splitDownscaledDataUrl` in
+ * `app/readers/anthropic-request.ts:51` splits `downscaled` with this same pattern and sends only
+ * the base64 after the header as the image's `data`, so that's what the per-image limit applies to.
+ * The URL prefix and the record's other fields never reach it. A URL the reader wouldn't split
+ * comes back `null`, which is where the reader would throw.
  */
 async function readStoredRecords(page: Page): Promise<StoredRecordSummary[]> {
 	return page.evaluate(
@@ -53,10 +55,17 @@ async function readStoredRecords(page: Page): Promise<StoredRecordSummary[]> {
 					request.addEventListener('error', () => reject(request.error));
 				});
 
-				return rows.map((row) => ({
-					imageCount: (row as { images: unknown[] }).images.length,
-					serializedLength: JSON.stringify(row).length,
-				}));
+				return rows.map((row) => {
+					const { images } = row as { images: { downscaled: string }[] };
+
+					return {
+						imageCount: images.length,
+						payloadLengths: images.map(
+							({ downscaled }) =>
+								/^data:([^;,]+);base64,(.+)$/s.exec(downscaled)?.[2]?.length ?? null,
+						),
+					};
+				});
 			} finally {
 				db.close();
 			}
@@ -305,9 +314,14 @@ test('a small PNG carrying a 12 MB ancillary chunk is re-encoded rather than sto
 	await page.getByRole('button', { name: 'Save these references' }).click();
 	await expectSaved(page);
 
-	// Measured on what IndexedDB holds, against the per-image base64 limit the stored image is later
-	// sent under. Stored whole, this file's data URL alone would run to about 16 MB.
+	// Measured on the base64 payload the reader sends, against the per-image limit that payload is
+	// held to, inclusive because intake allows exactly that many characters. Stored whole, this
+	// file's payload would run to about 16 MB.
 	const records = await readStoredRecords(page);
 	expect(records).toHaveLength(1);
-	expect(records[0]!.serializedLength).toBeLessThan(MAX_ENCODED_BASE64_BYTES);
+
+	const [payloadLength] = records[0]!.payloadLengths;
+	expect(records[0]!.payloadLengths).toHaveLength(1);
+	expect(payloadLength).not.toBeNull();
+	expect(payloadLength!).toBeLessThanOrEqual(MAX_ENCODED_BASE64_BYTES);
 });
