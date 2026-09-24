@@ -55,6 +55,8 @@ export type PaidSeed = {
 export type StorageFailure = PaidSeed & {
 	kind: StorageFailureKind;
 	error: StorageQuotaExceededError | StaleRecordWriteError | RecordStampedAheadError;
+	/** The paid read's, when it had one. A save-again made no request, so it has none. */
+	requestId?: string;
 };
 
 /**
@@ -67,6 +69,8 @@ export type RecordSchemaFailure = PaidSeed & {
 	/** Paths start at the seed, not the record, so the model reads them against what it wrote. */
 	issues: SeedParseIssue[];
 	error: unknown;
+	/** The paid read's, when it had one. */
+	requestId?: string;
 };
 
 /** Nothing was sent: the font table resolves before the read, so this costs no request. */
@@ -87,6 +91,11 @@ export type GenerateResult =
 	| { ok: true; record: BrandRecord }
 	| { ok: false; failure: GenerationFailure };
 
+/** Only a commit runs here, so only the failures a commit can have. */
+export type SaveResult =
+	| { ok: true; record: BrandRecord }
+	| { ok: false; failure: StorageFailure | RecordSchemaFailure };
+
 export type SaveGeneratedVersionInput = PaidSeed & {
 	record: BrandRecord;
 	recordStore: RecordStore;
@@ -100,7 +109,10 @@ export type GenerateInput = Omit<SaveGeneratedVersionInput, keyof PaidSeed> & {
 	reader: AnthropicBrandReader;
 	/** Only ever set because a person asked for a repair. Nothing here builds one on its own. */
 	repair?: SeedRepair;
-	/** Set by the person's Cancel and passed to the reader. Nothing in this module sets a timeout. */
+	/**
+	 * Set by the person's Cancel. It ends the font lookup's wait as well as the read, since Cancel is
+	 * on screen for both. Nothing in this module sets a timeout.
+	 */
 	signal?: AbortSignal;
 	/**
 	 * Called after the last abort check, just before the commit starts. From then on an abort changes
@@ -116,6 +128,46 @@ export type GenerateInput = Omit<SaveGeneratedVersionInput, keyof PaidSeed> & {
 
 async function defaultFontTableRef(): Promise<FontTableRef> {
 	return (await resolveFontTable()).ref;
+}
+
+const ABORTED = Symbol('aborted');
+
+/**
+ * Lets Cancel end a wait on something that takes no signal. The default font lookup is a CDN fetch
+ * with none, and it can't take one: the in-flight promise is cached and shared, so aborting it for
+ * this run would fail every other caller waiting on it. It finishes in the background instead, and
+ * a late rejection lands on a handler here rather than going unhandled.
+ */
+function unlessAborted<T>(
+	start: () => Promise<T>,
+	signal?: AbortSignal,
+): Promise<T | typeof ABORTED> {
+	if (!signal) return start();
+	// A Cancel pressed during setup shouldn't start a lookup at all.
+	if (signal.aborted) return Promise.resolve(ABORTED);
+
+	const pending = start();
+
+	return new Promise((resolve, reject) => {
+		const onAbort = () => resolve(ABORTED);
+
+		signal.addEventListener('abort', onAbort, { once: true });
+		pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+	});
+}
+
+function cancelledFailure(
+	message: string,
+	signal: AbortSignal | undefined,
+	requestId?: string,
+): GenerateResult {
+	// No status either way: before the read nothing was sent, and after it the reader has already
+	// consumed the response, so the status isn't known here.
+	const error = new AnthropicReaderError('cancelled', message, {
+		cause: signal?.reason,
+		requestId: requestId ?? null,
+	});
+	return { ok: false, failure: { kind: error.kind, error } };
 }
 
 /**
@@ -175,7 +227,7 @@ export async function saveGeneratedVersion({
 	recordStore,
 	engine,
 	now,
-}: SaveGeneratedVersionInput): Promise<GenerateResult> {
+}: SaveGeneratedVersionInput): Promise<SaveResult> {
 	const workspace = createWorkspaceStore({ recordStore, engine, now }).getState();
 
 	workspace.open(record);
@@ -231,12 +283,18 @@ export async function generate({
 }: GenerateInput): Promise<GenerateResult> {
 	// Resolved before the read. Resolution only rejects when the fallback table's chunk fails to
 	// load, and failing there after a paid read would throw the seed away with it.
-	let fontTable: FontTableRef;
+	let fontTable: FontTableRef | typeof ABORTED;
 
 	try {
-		fontTable = await resolveFontTableRef();
+		fontTable = await unlessAborted(resolveFontTableRef, signal);
 	} catch (error) {
 		return { ok: false, failure: { kind: 'font-table-unavailable', error } };
+	}
+
+	// Cancel is on screen from the click, and this lookup has no timeout of its own, so a stalled CDN
+	// would otherwise hold the run open until reload. Nothing was sent, so nothing was billed.
+	if (fontTable === ABORTED) {
+		return cancelledFailure('The run was cancelled before anything was sent.', signal);
 	}
 
 	let response;
@@ -254,14 +312,14 @@ export async function generate({
 	// The Anthropic reader already refuses a response that arrived after an abort. `reader` is an
 	// injected seam, though, and this is the last point before a write, so it doesn't lean on that.
 	if (signal?.aborted) {
-		const error = new AnthropicReaderError(
-			'cancelled',
+		return cancelledFailure(
 			'The run was cancelled before its seed was saved.',
-			{ cause: signal.reason },
+			signal,
+			response.requestId,
 		);
-		return { ok: false, failure: { kind: error.kind, error } };
 	}
 
+	// `SeedParseError` spreads the whole response, so a parse failure already carries `requestId`.
 	const parsed = parseSeed(response);
 
 	if (!parsed.ok) {
@@ -270,7 +328,7 @@ export async function generate({
 
 	onCommitting?.();
 
-	return saveGeneratedVersion({
+	const saved = await saveGeneratedVersion({
 		record,
 		seed: parsed.seed,
 		provenance: {
@@ -284,4 +342,8 @@ export async function generate({
 		engine,
 		now,
 	});
+
+	if (saved.ok || !response.requestId) return saved;
+
+	return { ok: false, failure: { ...saved.failure, requestId: response.requestId } };
 }

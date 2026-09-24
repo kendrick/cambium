@@ -91,7 +91,11 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 	 */
 	const inFlight = useRef(false);
 
-	/** Set only while a model call is in flight, so Cancel has something to abort. */
+	/**
+	 * Set for a generation from the click until its commit starts, not just during the model call. The
+	 * font lookup before that call can stall on a CDN with no timeout, and `generate` ends that wait on
+	 * abort too. A save-again makes no call and leaves this null.
+	 */
 	const [abort, setAbort] = useState<AbortController | null>(null);
 
 	// A run that finishes after the person left the page mustn't drag them to the workspace.

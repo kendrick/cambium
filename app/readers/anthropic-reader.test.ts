@@ -188,6 +188,20 @@ describe('createAnthropicBrandReader success', () => {
 		expect(result.model).not.toBe(CONFIGURED_MODEL);
 	});
 
+	// A 200 can still fail later, in the core or in storage, and support needs this id to find it.
+	it('returns the request id the response carried', async () => {
+		const result = await read(stubFetch(structuredSuccess));
+
+		expect(result.requestId).toBe(structuredSuccess.headers['request-id']);
+	});
+
+	it('leaves the request id absent when the response sent none', async () => {
+		const { 'request-id': _dropped, ...headers } = structuredSuccess.headers;
+		const result = await read(stubFetch({ ...structuredSuccess, headers }));
+
+		expect(result).not.toHaveProperty('requestId');
+	});
+
 	it('falls back to the configured model when the response names none', async () => {
 		const { model, ...bodyWithoutModel } = structuredSuccess.body;
 		const result = await read(stubFetch({ ...structuredSuccess, body: bodyWithoutModel }));

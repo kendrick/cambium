@@ -341,6 +341,7 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Anthr
 				// defeat the field in the one case it exists for: the two disagreeing.
 				model: modelFromBody(body) ?? config.model,
 				promptVersion: SEED_PROMPT_VERSION,
+				...(requestId ? { requestId } : {}),
 			};
 		},
 	};

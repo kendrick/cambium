@@ -81,20 +81,27 @@ type RepairableFailure = {
 	raw: string | null;
 	/** Already worded for the model, one line each. */
 	issues: string[];
+	/** The paid read's, when it had one. */
+	requestId?: string | null;
 };
 
+function withRequestId(requestId: string | null | undefined): { requestId?: string } {
+	return requestId ? { requestId } : {};
+}
+
 function describeRepairable(
-	{ kind, raw, issues }: RepairableFailure,
+	{ kind, raw, issues, requestId }: RepairableFailure,
 	{ repairUsed }: DescribeFailureOptions,
 ): FailureDescriptor {
 	const copy = REPAIRABLE[kind];
+	const id = withRequestId(requestId);
 
 	if (!raw || raw.trim().length === 0) {
-		return { kind, message: copy.empty, recovery: 'manual-retry' };
+		return { kind, message: copy.empty, recovery: 'manual-retry', ...id };
 	}
 
 	if (repairUsed) {
-		return { kind, message: copy.afterRepair, recovery: 'manual-retry', raw };
+		return { kind, message: copy.afterRepair, recovery: 'manual-retry', raw, ...id };
 	}
 
 	return {
@@ -103,6 +110,7 @@ function describeRepairable(
 		recovery: 'repair-retry',
 		raw,
 		repair: { rawResponse: raw, issues },
+		...id,
 	};
 }
 
@@ -123,6 +131,7 @@ export function describeFailure(
 					kind: failure.kind,
 					raw: failure.error.raw,
 					issues: failure.error.issues.map(issueLine),
+					requestId: failure.error.requestId,
 				},
 				options,
 			);
@@ -132,6 +141,7 @@ export function describeFailure(
 					kind: failure.kind,
 					raw: failure.provenance.rawResponse,
 					issues: failure.issues.map(issueLine),
+					requestId: failure.requestId,
 				},
 				options,
 			);
@@ -148,6 +158,7 @@ export function describeFailure(
 				message:
 					'The new version is ready, but this browser is out of storage. Free up space, then save again.',
 				recovery: 'save-again',
+				...withRequestId(failure.requestId),
 			};
 		case 'stale-record-write':
 			return {
@@ -155,6 +166,7 @@ export function describeFailure(
 				message:
 					'The new version is ready, but this brand changed somewhere else since you opened it. Save again to add it to the latest copy.',
 				recovery: 'save-again',
+				...withRequestId(failure.requestId),
 			};
 		case 'record-stamped-ahead':
 			return {
@@ -162,6 +174,7 @@ export function describeFailure(
 				message:
 					"The new version is ready, but this brand's last version is dated later than this device's clock. Check the clock, then save again.",
 				recovery: 'save-again',
+				...withRequestId(failure.requestId),
 			};
 	}
 
@@ -170,7 +183,7 @@ export function describeFailure(
 }
 
 function describeReaderFailure({ kind, error }: ReaderFailure): FailureDescriptor {
-	const requestId = error.requestId ? { requestId: error.requestId } : {};
+	const requestId = withRequestId(error.requestId);
 
 	switch (kind) {
 		case 'malformed': {

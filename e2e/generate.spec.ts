@@ -781,6 +781,14 @@ test('a repair asked for after the key was cleared still goes out as a repair on
 	expect(repairDollars, `no dollar amount in "${repairText}"`).toBeDefined();
 	expect(Number(repairDollars)).toBeGreaterThanOrEqual(0.32);
 
+	// The floor alone passes a repair priced on output only, since a 2x2 image's input rounds to a
+	// cent. A repair resends the first request's text and adds the answer and a directive, so it can't
+	// cost less than the first run shown on the same page.
+	const firstText = (await page.locator('[data-estimate]').first().textContent()) ?? '';
+	const firstDollars = /\$(\d+\.\d{2})\b/.exec(firstText)?.[1];
+	expect(firstDollars, `no dollar amount in "${firstText}"`).toBeDefined();
+	expect(Number(repairDollars)).toBeGreaterThanOrEqual(Number(firstDollars));
+
 	// With no key left, Repair has to ask for one first. The run that follows must still be the
 	// repair, not a plain generation that drops the answer being fixed.
 	await page.locator('[data-key-indicator]').getByRole('button', { name: /clear/i }).click();
@@ -850,6 +858,43 @@ test('a stalled request can be cancelled, which offers a retry and saves no vers
 	await expect(await readRecord(page, recordId)).toMatchObject({ versions: [] });
 	expect(consoleMessages.join('\n')).not.toContain(TEST_KEY);
 	expect(sent).toHaveLength(1);
+});
+
+/**
+ * Everything the font lookup fetches from jsDelivr ends in this file (`UPSTREAM_URL` in
+ * `app/fonts/font-table-provider.ts`). No other scenario routes it, so it only stalls here.
+ */
+const FONT_TABLE_CSV_GLOB = '**/families.csv';
+
+test('a font lookup stalled before any request can be cancelled, which sends nothing and offers a retry', async ({
+	page,
+}) => {
+	const recordId = await saveOneRecord(page);
+
+	let csvRequested = false;
+	// Never fulfilled, so the lookup has no answer and no timeout. Only Cancel can end the run.
+	await page.route(FONT_TABLE_CSV_GLOB, () => {
+		csvRequested = true;
+	});
+	const sent = await mockAnthropic(page, () => ({ status: 500, body: {} }));
+
+	await waitForGenerateReady(page);
+	await generateWithFreshKey(page, TEST_KEY);
+
+	await expect.poll(() => csvRequested).toBe(true);
+	const cancel = page.getByRole('button', { name: 'Cancel' });
+	await expect(cancel).toBeVisible();
+	await cancel.click();
+
+	const container = outcome(page, 'cancelled');
+	await expect(container).toBeVisible();
+	await expect(cancel).toHaveCount(0);
+	// Generate stays disabled while a failure shows, by design, so Retry is the way back in.
+	await expect(container.getByRole('button', { name: /retry/i })).toBeEnabled();
+	await expect(container.getByRole('button')).toHaveCount(1);
+
+	expect(sent).toHaveLength(0);
+	await expect(await readRecord(page, recordId)).toMatchObject({ versions: [] });
 });
 
 /**

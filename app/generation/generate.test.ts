@@ -14,6 +14,7 @@ import refusalThinkingFirst from '../readers/fixtures/refusal-thinking-first.jso
 import structuredProseNotJson from '../readers/fixtures/structured-prose-not-json.json';
 import structuredSuccess from '../readers/fixtures/structured-success.json';
 import truncatedMaxTokensThinkingFirst from '../readers/fixtures/truncated-max-tokens-thinking-first.json';
+import type { AnthropicBrandReader } from '../readers/anthropic-reader';
 import { SEED_PROMPT_VERSION } from '../readers/seed-prompt';
 import { createInMemoryRecordStore } from '../storage/in-memory-record-store';
 import type { RecordStore } from '../storage/record-store';
@@ -110,6 +111,14 @@ function hangsUntilAborted() {
 				init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
 			}),
 	);
+}
+
+/** Settles to a sentinel after `ms`, so a regression that hangs fails the case rather than the run. */
+function within<T>(promise: Promise<T>, ms = 1000): Promise<T | 'still pending'> {
+	return Promise.race([
+		promise,
+		new Promise<'still pending'>((resolve) => setTimeout(() => resolve('still pending'), ms)),
+	]);
 }
 
 function version(overrides: Partial<BrandVersion> = {}): BrandVersion {
@@ -556,6 +565,134 @@ describe('generate', () => {
 
 			expect(!(await pending).ok).toBe(true);
 			expect(onCommitting).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('when the font table lookup stalls', () => {
+		function stalledRun(setup: Stored, signal: AbortSignal) {
+			const read = vi.fn<AnthropicBrandReader['read']>();
+
+			const pending = generate({
+				record: setup.stored,
+				key: API_KEY,
+				reader: { read },
+				recordStore: setup.store,
+				engine,
+				signal,
+				now: () => NOW,
+				resolveFontTableRef: () => new Promise<never>(() => {}),
+			});
+
+			return { pending, read };
+		}
+
+		it.each(STARTING_RECORDS)(
+			'ends as cancelled when Cancel lands mid-lookup, sending nothing and leaving a record with $label deep-equal',
+			async ({ build }) => {
+				const setup = await storeWith(build());
+				const before = await setup.store.get(RECORD_ID);
+				const controller = new AbortController();
+				const { pending, read } = stalledRun(setup, controller.signal);
+
+				controller.abort();
+				const result = await within(pending);
+
+				if (result === 'still pending' || result.ok) {
+					throw new Error(`expected a cancelled failure, got ${JSON.stringify(result)}`);
+				}
+
+				expect(result.failure.kind).toBe('cancelled');
+				expect(read).not.toHaveBeenCalled();
+				expect(await setup.store.get(RECORD_ID)).toStrictEqual(before);
+
+				// Nothing went out, so there is no status or request id for support to look up.
+				const descriptor = describeFailure(result.failure, { repairUsed: false });
+				expect(descriptor.recovery).toBe('manual-retry');
+				expect(descriptor.requestId).toBeUndefined();
+			},
+		);
+
+		it('ends as cancelled when the signal was already aborted, before the lookup is awaited', async () => {
+			const controller = new AbortController();
+			controller.abort();
+			const { pending, read } = stalledRun(await storeWith(record([])), controller.signal);
+
+			const result = await within(pending);
+
+			expect(result !== 'still pending' && !result.ok && result.failure.kind).toBe('cancelled');
+			expect(read).not.toHaveBeenCalled();
+		});
+	});
+
+	/**
+	 * A 200 that fails after the read was still billed, so support needs its request id whatever went
+	 * wrong next. Asserted at the descriptor, because that is what the panel renders.
+	 */
+	describe('after a paid read fails further on', () => {
+		const PROBE_ID = 'req_probe';
+
+		function withProbeId(fixture: Fixture): Fixture {
+			return { ...fixture, headers: { ...fixture.headers, 'request-id': PROBE_ID } };
+		}
+
+		it.each([
+			{
+				label: 'not-json (prose)',
+				setup: () => storeWith(record([])),
+				fixture: withProbeId(structuredProseNotJson),
+			},
+			{
+				label: 'record-schema (an image id the record lacks)',
+				setup: () => storeWith(record([])),
+				fixture: withProbeId(CITES_MISSING_IMAGE),
+			},
+			{
+				label: 'a storage failure (put rejects)',
+				setup: () => storeWith(record([]), fullAfterFirstWrite()),
+				fixture: withProbeId(SUCCESS_ON_GENERATION_MODEL),
+			},
+		])('keeps the request id on $label', async ({ setup: makeSetup, fixture }) => {
+			const result = await run(await makeSetup(), replay(fixture));
+
+			if (result.ok) {
+				throw new Error('expected a failure');
+			}
+
+			expect(describeFailure(result.failure, { repairUsed: false }).requestId).toBe(PROBE_ID);
+		});
+
+		it('keeps the request id when the abort lands after the answer', async () => {
+			const setup = await storeWith(record([]));
+			const controller = new AbortController();
+
+			const result = await generate({
+				record: setup.stored,
+				key: API_KEY,
+				reader: {
+					async read() {
+						controller.abort();
+						return {
+							raw: SUCCESS_TEXT,
+							provider: 'anthropic',
+							model: GENERATION_MODEL,
+							promptVersion: SEED_PROMPT_VERSION,
+							requestId: PROBE_ID,
+						};
+					},
+				},
+				recordStore: setup.store,
+				engine,
+				signal: controller.signal,
+				now: () => NOW,
+				resolveFontTableRef: async () => FONT_TABLE_REF,
+			});
+
+			if (result.ok) {
+				throw new Error('expected a failure');
+			}
+
+			expect(result.failure.kind).toBe('cancelled');
+			expect(describeFailure(result.failure, { repairUsed: false }).requestId).toBe(PROBE_ID);
 		});
 	});
 
