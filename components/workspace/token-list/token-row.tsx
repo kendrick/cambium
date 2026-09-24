@@ -8,8 +8,11 @@ import type { TokenProvenance } from '../../../core/token-set';
  * rationale truncated by CSS, and an expand control that reveals the untruncated rationale plus
  * everything `provenance` and `stepRole` know. `data-overridden` and the reset control only appear
  * when the override map actually holds this token, whether or not the current base still accepts
- * it — a held-but-now-invalid override is still the user's edit, and `issues` is how it says why it
+ * it. A held-but-now-invalid override is still the user's edit, and `issues` is how it says why it
  * is not taking effect.
+ *
+ * `swatch` prints as text beside the chip as well. A semantic row's only control is its alias
+ * `<select>`, so without the text that row would show no colour value a reader could copy.
  *
  * The expand control is a button with `aria-expanded`, not a native `<details>`, on purpose: a list
  * can hold hundreds of these, and `raw-response.tsx`'s own `<details>` is the one #24's browser
@@ -54,6 +57,11 @@ export function TokenRow({
 						className="size-4 shrink-0 rounded border"
 						style={{ backgroundColor: swatch }}
 					/>
+				) : null}
+				{swatch ? (
+					<span data-swatch-value className="font-mono text-xs">
+						{swatch}
+					</span>
 				) : null}
 				<span className="font-mono text-xs">{id}</span>
 				<span className="text-muted-foreground text-xs">{provenance.provenance}</span>

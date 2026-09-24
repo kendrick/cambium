@@ -46,7 +46,7 @@ export type TokenListProps = {
 	 * The engine result `tokenSet` was built from, kept only to tell the two null cases apart:
 	 * no seed at all versus a seed the engine refused. `tokensFor` in `app/state/workspace-store.ts`
 	 * collapses both to `tokenSet: null`, and #24's browser suite asserts the two render distinct
-	 * markup — a plain paragraph for the first, one naming the refusal's `kind` in a `<code>` for the
+	 * markup: a plain paragraph for the first, and one naming the refusal's `kind` in a `<code>` for the
 	 * second. `derived.ok` true is otherwise redundant with `tokenSet` being non-null: `tokensFor`
 	 * only returns null tokens for an ok-but-seedless derivation, which cannot happen (`derive` never
 	 * produces one), so the list below trusts `tokenSet` once it clears this branch.
@@ -74,7 +74,7 @@ export function TokenList({
 	const [scheme, setScheme] = useState<SchemeName>('light');
 	// An override the base itself rejects on the spot (a bad edit that never committed) is transient:
 	// the store already threw and kept nothing, so there is no store field for this to read back from.
-	// A held override the *current* base rejects is different — that one does live in `overrideIssues`.
+	// A held override the *current* base rejects is different. That one lives in `overrideIssues`.
 	const [attemptIssues, setAttemptIssues] = useState<Record<string, OverrideIssue[]>>({});
 
 	const resolved = useMemo(

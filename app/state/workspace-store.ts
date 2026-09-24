@@ -245,26 +245,25 @@ export type WorkspaceStoreOptions = {
 	recordStore: RecordStore;
 	/**
 	 * Required rather than defaulted, so this module names the `ScaleEngine` type and never a
-	 * concrete engine. `createOklchScaleEngine` reaches culori, and a default parameter would have
-	 * put culori in the import graph of every caller, including the ones that load the engine
-	 * lazily and would otherwise pay nothing.
+	 * concrete engine. A default would no longer keep culori or zod out of a caller's graph: building
+	 * `tokenSet` imports `core/semantic-layer.ts`, which reaches culori through `core/oklch.ts`, and
+	 * `core/token-overrides.ts`, which reaches zod. Injecting the engine still keeps the code in
+	 * `core/oklch-scale-engine.ts` out of every caller that doesn't import it, and lets a test hand in
+	 * a stub engine to produce a base the real engine never emits.
 	 *
-	 * First-load gzip, measured against a throwaway `'use client'` `app/page.tsx` holding a stub
-	 * `RecordStore`, budget 200 kB: that page alone is 187.1 kB, adding this store with the engine
-	 * behind a dynamic import is 188.7 kB, and importing the engine statically instead is 196.5 kB.
-	 * So the engine is 7.8 kB of the 24 kB of headroom ADR-0002 reserves, and whether that is
-	 * affordable is the caller's question rather than this module's.
+	 * `components/workspace/workspace-route.tsx` loads this store lazily, beside the engine and
+	 * storage chunks that bring the same two libraries, so that route pays nothing extra for them. A
+	 * client component that imports this store statically pays for both in first-load.
 	 *
-	 * `pnpm test:bundle` cannot answer it either way. The landing route is a Server Component today,
+	 * First-load gzip, measured before this store built `tokenSet`, against a throwaway
+	 * `'use client'` `app/page.tsx` holding a stub `RecordStore`, budget 200 kB: that page alone was
+	 * 187.1 kB, adding this store with the engine behind a dynamic import was 188.7 kB, and importing
+	 * the engine statically instead was 196.5 kB. Part of that 7.8 kB gap was culori, which this
+	 * store now brings on its own, so the gap overstates what a static engine import adds today.
+	 *
+	 * `pnpm test:bundle` cannot measure it either way. The landing route is a Server Component today,
 	 * so the engine runs at build time, reaches no client chunk, and the budget stays green no matter
 	 * what this file imports. The guard is the import list, in `workspace-store.test.ts`.
-	 *
-	 * The numbers above were measured before this store built `tokenSet`. Building it imports
-	 * `core/semantic-layer.ts`, which reaches culori through `core/oklch.ts`, and
-	 * `core/token-overrides.ts`, which reaches zod, so this module pulls in both libraries whichever
-	 * engine it gets. `components/workspace/workspace-route.tsx` loads the store lazily, beside the
-	 * engine and storage chunks that bring the same two libraries, so that route pays nothing extra.
-	 * A client component that imports the store statically pays for both in first-load.
 	 */
 	engine: ScaleEngine;
 	now?: () => string;
@@ -275,10 +274,10 @@ export type WorkspaceStoreOptions = {
  * record with no generated version starts from, and it means `editSeed` needs no separate "first
  * edit" path.
  *
- * Written out rather than built from `BrandSeedSchema.shape`. This store reaches zod through
- * `core/token-overrides.ts` either way, and `BrandSeed` is inferred from that schema, so a field
- * added upstream fails this literal at typecheck, which is the drift the schema version was
- * guarding against anyway.
+ * Building this from `BrandSeedSchema.shape` would cost nothing extra in the bundle, since this
+ * store reaches zod through `core/token-overrides.ts` either way. The literal is still safe to keep:
+ * `BrandSeed` is inferred from the schema, so a field added upstream fails this literal at
+ * typecheck.
  */
 const EMPTY_SEED: BrandSeed = {
 	keyColors: null,

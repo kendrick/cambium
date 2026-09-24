@@ -3,14 +3,15 @@ import { CAMBIUM_NAMESPACE } from '../../../core/provenance';
 import type { OverrideIssue, SchemeName, TokenOverride } from '../../../core/token-overrides';
 import { overrideKey } from '../../../core/token-overrides';
 import type { RampStep } from '../../../core/token-set';
+import { NumberInput, useFieldIssues } from './number-input';
 import { TokenRow } from './token-row';
 
 const CHANNELS = ['l', 'c', 'h'] as const;
 
 /**
- * One ramp step. `overrideKey` never reads `l`, `c` or `h`, only `scheme`, `ramp` and `step`, so the
- * three inputs share one key and a single reset clears all three at once — the override replaces
- * the whole triple regardless of which channel changed.
+ * One ramp step. `overrideKey` reads only `scheme`, `ramp` and `step`, never `l`, `c` or `h`, so the
+ * three inputs share one key and a single reset clears all three at once. The override replaces the
+ * whole triple whichever channel changed.
  */
 export function PrimitiveRow({
 	scheme,
@@ -40,6 +41,8 @@ export function PrimitiveRow({
 		h: step.h,
 	});
 	const overridden = Object.hasOwn(overrides, key);
+	const { fieldIssues, settle } = useFieldIssues();
+	const heldIssues = issuesFor(key) ?? [];
 
 	const withChannel = (channel: (typeof CHANNELS)[number], value: number): TokenOverride => ({
 		kind: 'primitive',
@@ -58,7 +61,7 @@ export function PrimitiveRow({
 			swatch={toOklchCss({ l: step.l, c: step.c, h: step.h })}
 			overridden={overridden}
 			onReset={overridden ? () => onReset(key) : undefined}
-			issues={issuesFor(key)}
+			issues={[...heldIssues, ...fieldIssues]}
 		>
 			{CHANNELS.map((channel) => (
 				<label
@@ -69,16 +72,12 @@ export function PrimitiveRow({
 					className="flex items-center gap-1 text-xs"
 				>
 					{channel.toUpperCase()}
-					<input
-						type="number"
-						step="any"
-						aria-label={`${id} ${channel}`}
-						defaultValue={step[channel]}
-						onBlur={(event) => {
-							const next = Number(event.target.value);
-							if (Number.isFinite(next)) onOverride(withChannel(channel, next));
-						}}
-						className="w-20 rounded border px-1"
+					<NumberInput
+						label={`${id} ${channel}`}
+						shown={step[channel]}
+						onBlurOutcome={(outcome) =>
+							settle(channel, outcome, (value) => onOverride(withChannel(channel, value)))
+						}
 					/>
 				</label>
 			))}

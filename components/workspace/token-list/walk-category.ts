@@ -22,9 +22,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /**
  * A category's `values` nests differently everywhere: a bare dimension, a record of dimensions, a
  * shadow with five parts sharing one `$extensions`, a cubic bezier tuple. Nothing exports a leaf
- * lister for any of them, so this walks to whichever object carries `$extensions` — that object is
- * one token's provenance, however deep it sits — and takes everything numeric beneath it as that
- * token's leaves. A shadow's four geometry fields and its colour's four channels come back as eight
+ * lister for any of them, so this walks to whichever object carries `$extensions`, which is one
+ * token's provenance however deep it sits, and takes everything numeric beneath it as that token's
+ * leaves. A shadow's four geometry fields and its colour's four channels come back as eight
  * leaves under one `$extensions`, because that is the one payload describing all of them.
  */
 export function walkCategoryTokens(values: unknown, path: ValuePath = []): CategoryToken[] {

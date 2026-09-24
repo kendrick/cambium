@@ -58,7 +58,7 @@ const SEED: BrandSeed = {
 /**
  * Computed once, in Node, the same way `app/state/workspace-store.ts`'s `tokensFor` builds a set:
  * generate the ramps, then derive the full set from them. Every expectation below reads off this
- * object rather than off the DOM, per Task 4's constraint that expected values come from Node.
+ * object rather than off the DOM, so a rendering bug can't supply its own expected value.
  */
 const ENGINE = createOklchScaleEngine();
 const DERIVED = ENGINE.generate(SEED, BALANCED);
@@ -83,51 +83,30 @@ const DERIVED_VALUE_CATEGORIES = ['radius', 'typography', 'tracking', 'shadow'] 
 const NON_COLOUR_CATEGORIES = [...SYSTEM_CATEGORIES, ...DERIVED_VALUE_CATEGORIES] as const;
 
 /**
- * The `values` payload `components/workspace/token-list.tsx` walks for one non-colour category.
- * Shadow is the one category a scheme carries (`token-set.ts` records why), so its top-level copy
- * mirrors the light scheme rather than holding its own values.
+ * Rows per category for `SEED`, counted once from the DTCG export (`serializeDtcg` in
+ * `core/dtcg/serialize.ts`, one `$value` per token) and written in by hand. The list finds its rows by
+ * walking to each `$extensions`; counting them the same way here would only prove the walk agrees
+ * with itself. A token added upstream fails this table until someone updates it.
  */
-function valuesFor(category: (typeof NON_COLOUR_CATEGORIES)[number]): unknown {
-	if (category === 'shadow') return LIGHT.shadow.values;
+const EXPECTED_ROWS: Record<(typeof NON_COLOUR_CATEGORIES)[number], number> = {
+	spacing: 7,
+	opacity: 4,
+	motion: 8,
+	focusRing: 2,
+	zIndex: 8,
+	radius: 7,
+	typography: 16,
+	tracking: 5,
+	shadow: 5,
+};
 
-	const entry = (TOKEN_SET as unknown as Record<string, { values: unknown }>)[category];
-
-	return entry.values;
-}
-
-/**
- * Walks a category's values to the same leaves `components/workspace/token-list/walk-category.ts`
- * counts, re-implemented here rather than imported. That module has no DOM dependency of its own,
- * but importing a component-tree module from a spec would tie this file's expected values to the
- * component's own helper instead of to the token set it renders — exactly the seam `docs/agents/
- * testing.md` warns a fixture can straddle without noticing. Walking to whichever object carries
- * `$extensions` is the one property this and the component both have to agree on, and both do it by
- * reading the same schema shape.
- */
-function countLeafTokens(node: unknown): number {
-	if (Array.isArray(node)) {
-		return node.reduce((total: number, entry) => total + countLeafTokens(entry), 0);
-	}
-
-	if (typeof node !== 'object' || node === null) return 0;
-
-	if (Object.hasOwn(node, '$extensions')) return 1;
-
-	return Object.entries(node as Record<string, unknown>).reduce(
-		(total, [, child]) => total + countLeafTokens(child),
-		0,
-	);
-}
+/** The DTCG export's `color` group for `SEED`: 26 semantic tokens plus 7 ramps of 12 steps. */
+const EXPECTED_COLOUR_ROWS = 110;
 
 function expectedRowCount(): number {
-	const semantic = SEMANTIC_TOKENS.length;
-	const primitives = RAMP_NAMES.length * 12;
-	const nonColour = NON_COLOUR_CATEGORIES.reduce(
-		(total, category) => total + countLeafTokens(valuesFor(category)),
-		0,
+	return (
+		EXPECTED_COLOUR_ROWS + Object.values(EXPECTED_ROWS).reduce((total, count) => total + count, 0)
 	);
-
-	return semantic + primitives + nonColour;
 }
 
 /**
@@ -242,9 +221,7 @@ test('every category is grouped, and every row carries a value control, a proven
 	for (const category of NON_COLOUR_CATEGORIES) {
 		const section = tokensSection.locator(`section[data-category="${category}"]`);
 		await expect(section).toBeVisible();
-		await expect(section.locator('li[data-token]')).toHaveCount(
-			countLeafTokens(valuesFor(category)),
-		);
+		await expect(section.locator('li[data-token]')).toHaveCount(EXPECTED_ROWS[category]);
 	}
 
 	// Every row, across every category, batched into one evaluate rather than one assertion per row:
@@ -300,6 +277,60 @@ test('the primary swatch renders the resolved brand colour, measured as the brow
 	]);
 
 	expect(actualColor).toBe(expectedColor);
+	await expect(page.locator('[data-token="semantic.primary"] [data-swatch-value]')).toHaveText(
+		expectedCss,
+	);
+});
+
+test("a dark-scheme shadow swatch renders that scheme's own shadow colour, alpha included", async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	await page.getByRole('button', { name: 'dark', exact: true }).click();
+
+	// Dark's shadow colour differs from light's in lightness and alpha for this seed, so a swatch
+	// still reading the top-level (light) copy fails the comparison below.
+	const darkColor = TOKEN_SET.schemes.dark.shadow.values.md!.color;
+	expect(toOklchCss(darkColor)).not.toBe(toOklchCss(LIGHT.shadow.values.md!.color));
+
+	const swatch = page.locator('[data-token="shadow.md"] [data-swatch]');
+	await expect(swatch).toBeVisible();
+
+	const expectedColor = await computedColorOf(page, toOklchCss(darkColor));
+	await expect
+		.poll(() => swatch.evaluate((element) => getComputedStyle(element).backgroundColor))
+		.toBe(expectedColor);
+});
+
+test('a field that blurs unchanged stores nothing, and a cleared field is rejected with an issue', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const primitiveRow = page.locator('[data-token="primitive.brand.1"]');
+	const lightness = page.getByLabel('primitive.brand.1 l', { exact: true });
+	await lightness.focus();
+	await lightness.blur();
+
+	await expect(primitiveRow).not.toHaveAttribute('data-overridden', '');
+	await expect(primitiveRow.getByText('overridden', { exact: true })).toHaveCount(0);
+
+	// `Number('')` is 0, and 0 is a legal radius, so a cleared field that slipped through would
+	// store an override rather than fail visibly.
+	const radiusRow = page.locator('[data-token="radius.md"]');
+	const radius = page.getByLabel('radius.md value', { exact: true });
+	await radius.fill('');
+	await radius.blur();
+
+	await expect(radiusRow.getByText('Enter a number.', { exact: true })).toBeVisible();
+	await expect(radiusRow).not.toHaveAttribute('data-overridden', '');
 });
 
 test('the full rationale stays closed on load and opens on demand', async ({ page }) => {
@@ -367,10 +398,9 @@ test("re-aliasing primary to another step marks the row overridden and repaints 
 	const row = page.locator('[data-token="semantic.primary"]');
 	const swatch = row.locator('[data-swatch]');
 
-	// Step 1 of the brand ramp is the seed's own key colour curved to the page-background lightness,
-	// which is nowhere near step 9's brand fill — the two differ on every seed this engine can take,
-	// not just this one, so this scenario cannot pass by accident on an implementation that ignores
-	// the override.
+	// Step 1 of the brand ramp sits near the page-background lightness, far from step 9's brand fill.
+	// The first assertion checks the two really differ for this seed, so the scenario can't pass on
+	// an implementation that ignores the override.
 	const targetStep = LIGHT.primitives.brand![0]!;
 	const beforeColor = await swatch.evaluate((element) => getComputedStyle(element).backgroundColor);
 	const targetColor = await computedColorOf(page, toOklchCss(targetStep));
@@ -404,9 +434,9 @@ test('an override survives a preset switch', async ({ page }) => {
 		.toBe(targetColor);
 
 	// `PRESET_PARAMS` in `app/state/workspace-store.ts` maps every preset to `BALANCED` until #37, so
-	// this switch cannot on its own move a derived value — that gap is recorded in this task's report
-	// rather than worked around here. What it can prove today is that the override rides along
-	// through a re-derivation, which is what #26's acceptance criterion actually asks for.
+	// this switch can't move a derived value on its own, and this scenario can't show an override
+	// outliving a base that actually changed. What it does prove is that the override rides along
+	// through a re-derivation, which is what #26's acceptance criterion asks for.
 	await page.getByLabel('Interpretation').selectOption('faithful');
 	await expect(page.getByLabel('Interpretation')).toHaveValue('faithful');
 	await expect(row).toHaveAttribute('data-overridden', '');
@@ -434,9 +464,8 @@ test('every semantic row resolves to a real primitive step, checked against the 
 	await expect(tokensSection.getByRole('listitem').first()).toBeVisible();
 
 	// A mix of fixed aliases and the one kind of entry `semantic-layer.ts` resolves at build time
-	// rather than declares outright (a `ContrastingPair`), so a row that merely echoes the static
-	// `SEMANTIC_MAP` — instead of the alias the built set actually holds — fails on the second kind
-	// without failing on the first.
+	// rather than declares outright (a `ContrastingPair`). A row that echoes the static `SEMANTIC_MAP`
+	// instead of the alias the built set holds fails on the second kind without failing on the first.
 	const sampledTokens = [
 		'primary',
 		'border',

@@ -6,8 +6,10 @@ import type {
 	ValueCategory,
 	ValuePath,
 } from '../../../core/token-overrides';
+import { toOklchCss } from '../../../core/css/oklch-css';
 import { overrideKey } from '../../../core/token-overrides';
 import { leafLabel } from './format';
+import { NumberInput, useFieldIssues } from './number-input';
 import { TokenRow } from './token-row';
 import type { CategoryToken } from './walk-category';
 
@@ -44,12 +46,15 @@ export function ValueRow({
 
 	const keys = token.leaves.map((leaf) => overrideKey(overrideFor(leaf.suffix, leaf.value)));
 	const overridden = keys.some((key) => Object.hasOwn(overrides, key));
-	const issues = keys.flatMap((key) => issuesFor(key) ?? []);
+	const { fieldIssues, settle } = useFieldIssues();
+	const issues = [...keys.flatMap((key) => issuesFor(key) ?? []), ...fieldIssues];
+	const swatch = shadowSwatch(token);
 
 	return (
 		<TokenRow
 			id={id}
 			provenance={provenance}
+			swatch={swatch}
 			overridden={overridden}
 			onReset={overridden ? () => keys.forEach((key) => onReset(key)) : undefined}
 			issues={issues}
@@ -65,16 +70,12 @@ export function ValueRow({
 						className="flex items-center gap-1 text-xs"
 					>
 						{label}
-						<input
-							type="number"
-							step="any"
-							aria-label={`${id} ${label}`}
-							defaultValue={leaf.value}
-							onBlur={(event) => {
-								const next = Number(event.target.value);
-								if (Number.isFinite(next)) onOverride(overrideFor(leaf.suffix, next));
-							}}
-							className="w-20 rounded border px-1"
+						<NumberInput
+							label={`${id} ${label}`}
+							shown={leaf.value}
+							onBlurOutcome={(outcome) =>
+								settle(label, outcome, (value) => onOverride(overrideFor(leaf.suffix, value)))
+							}
 						/>
 						{leaf.unit ? <span className="text-muted-foreground">{leaf.unit}</span> : null}
 					</label>
@@ -82,4 +83,21 @@ export function ValueRow({
 			})}
 		</TokenRow>
 	);
+}
+
+/**
+ * A shadow is the one token outside the colour groups that carries a colour, in the four `color`
+ * leaves the walker already collected. Reading the swatch off those leaves ties it to the numbers
+ * the inputs show, so an override on `color.alpha` repaints it too.
+ */
+function shadowSwatch(token: CategoryToken): string | undefined {
+	const channel = (name: string) =>
+		token.leaves.find(
+			(leaf) => leaf.suffix.length === 2 && leaf.suffix[0] === 'color' && leaf.suffix[1] === name,
+		)?.value;
+	const [l, c, h, alpha] = ['l', 'c', 'h', 'alpha'].map(channel);
+
+	if (l === undefined || c === undefined || h === undefined) return undefined;
+
+	return toOklchCss({ l, c, h, alpha });
 }
