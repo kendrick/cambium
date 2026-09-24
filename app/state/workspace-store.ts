@@ -471,30 +471,26 @@ export function createWorkspaceStore({
 				if (reselected) {
 					set({ record: next });
 				} else {
-					// Identity, not `sameSeed`: this asks whether `editSeed` landed in the window this
-					// write was in flight, and a structural comparison would say no for an edit that
-					// happens to reconstruct the same values, which is exactly the edit `editSeed` itself
-					// cannot tell apart from no edit at all.
+					// Identity, not `sameSeed`: asks whether `editSeed` landed mid-write. `editSeed`
+					// always builds a new object, so identity catches a real edit even when its values
+					// happen to match what was there before.
 					const editedMidWrite = get().draftSeed !== request.draftSeed;
+					const newVersion = editedMidWrite ? null : versionAt(next, version.ordinal);
 
-					// A committed seed can come back from storage canonicalised: a hue committed as 360
-					// is held as 0 there. The draft has to move to match it, or the next
-					// provenance-free commit compares an uncanonicalised draft against the canonicalised
-					// active version and reads a no-op as an edit. Skipped when an edit landed mid-write:
-					// that edit is the user's, not the version storage just wrote, and adopting the
-					// version's seed over it would silently discard it.
-					const adopted = editedMidWrite ? null : versionAt(next, version.ordinal);
+					// Storage can hand back a canonical spelling of the seed, so a hue committed as 360 is
+					// held as 0. Left at 360, the draft would make the next provenance-free commit read a
+					// no-op as an edit and refuse it. So the draft takes the stored seed, but only when the
+					// two differ, and never over an edit that landed mid-write, which is the user's. Two
+					// spellings of one hue name the same angle and derive the same tokens, so `derived`
+					// already matches and stays as it is.
+					const adopted =
+						newVersion && !sameSeed(newVersion.seed, request.draftSeed) ? newVersion.seed : null;
 
-					set(
-						adopted
-							? {
-									record: next,
-									activeOrdinal: version.ordinal,
-									draftSeed: adopted.seed,
-									derived: derive(engine, adopted.seed, get().preset),
-								}
-							: { record: next, activeOrdinal: version.ordinal },
-					);
+					set({
+						record: next,
+						activeOrdinal: version.ordinal,
+						...(adopted ? { draftSeed: adopted } : {}),
+					});
 				}
 			}
 

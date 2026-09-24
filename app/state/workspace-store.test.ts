@@ -351,8 +351,8 @@ describe('the workspace store', () => {
 
 		const pending = store.getState().commit();
 
-		// `editSeed` can land mid-write, the same window adoption now reaches into to sync the draft
-		// with what storage canonicalised. An edit that lands there has to win over the version just
+		// `editSeed` can land mid-write, the same window adoption reaches into to sync the draft with
+		// what storage canonicalised. An edit that lands there has to win over the version just
 		// written, or the user's keystroke gets silently replaced by the record they committed before it.
 		await writeInFlight;
 		store.getState().editSeed({ keyColors: seedWith(45).keyColors });
@@ -362,6 +362,16 @@ describe('the workspace store', () => {
 
 		expect(store.getState().activeOrdinal).toBe(2);
 		expect(store.getState().draftSeed).toEqual(seedWith(45));
+	});
+
+	it('leaves the draft the same object when a commit needs no canonicalising', async () => {
+		const { store } = openWorkspace();
+		const draftBefore = store.getState().draftSeed;
+
+		const next = await store.getState().commit();
+
+		expect(store.getState().draftSeed).toBe(draftBefore);
+		expect(next.versions[1]).toMatchObject({ seed: draftBefore });
 	});
 
 	it('serialises overlapping commits so the second builds on the first', async () => {
