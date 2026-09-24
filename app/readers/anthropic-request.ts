@@ -18,10 +18,20 @@ type AcceptedImageMediaType = (typeof ACCEPTED_IMAGE_MEDIA_TYPES)[number];
 
 export type AnthropicOutputMode = 'structured' | 'forced-tool';
 
+/**
+ * A failed read handed back for one correction. `rawResponse` is what the model said, verbatim,
+ * and `issues` is why the core refused it, one line each, already worded for the model to read.
+ */
+export type SeedRepair = {
+	rawResponse: string;
+	issues: string[];
+};
+
 export type SeedRequestInput = {
 	images: ReferenceImage[];
 	model: string;
 	outputMode: AnthropicOutputMode;
+	repair?: SeedRepair;
 };
 
 /**
@@ -92,6 +102,48 @@ function buildContent(images: ReferenceImage[]) {
 	return blocks;
 }
 
+function repairDirective(issues: string[]): string {
+	const listed =
+		issues.length > 0
+			? issues.map((issue) => `- ${issue}`).join('\n')
+			: '- The response could not be read as a seed.';
+
+	return [
+		'Your previous response could not be used as a brand seed, for these reasons:',
+		listed,
+		'Reply with a corrected seed for the same reference images, in the same format as before.',
+	].join('\n\n');
+}
+
+/**
+ * The repair is a conversation rather than a patched prompt: the original turn unchanged, the
+ * model's own answer, then a user turn naming what was wrong with it. Ending on a user turn is the
+ * point. An assistant turn last would be a prefill, and Opus 5.5 rejects prefill with a 400.
+ *
+ * The assistant turn carries no thinking block, because the reader never kept one. The API accepts
+ * a history with thinking stripped, which is its own documented recovery for a history it cannot
+ * bind, so this costs the model its earlier reasoning and nothing else.
+ */
+function buildMessages(content: Record<string, unknown>[], repair: SeedRepair | undefined) {
+	const original = { role: 'user', content };
+
+	if (!repair) {
+		return [original];
+	}
+
+	// An empty text block is a 400 from the API, and a blank answer gives the model nothing to
+	// correct anyway. Failing here names the caller's mistake instead of spending a request on it.
+	if (repair.rawResponse.trim().length === 0) {
+		throw new Error('a repair needs the response being repaired, and this one is empty');
+	}
+
+	return [
+		original,
+		{ role: 'assistant', content: [{ type: 'text', text: repair.rawResponse }] },
+		{ role: 'user', content: [{ type: 'text', text: repairDirective(repair.issues) }] },
+	];
+}
+
 /**
  * Builds the request body for `POST /v1/messages` only. No `fetch`, no headers, no API key: the
  * reader owns transport, and keeping this module blind to the key is what makes "no key reaches
@@ -116,7 +168,7 @@ export function buildSeedRequestBody(input: SeedRequestInput): Record<string, un
 		model: input.model,
 		max_tokens: SEED_REQUEST_MAX_TOKENS,
 		system: SEED_SYSTEM_PROMPT,
-		messages: [{ role: 'user', content: buildContent(input.images) }],
+		messages: buildMessages(buildContent(input.images), input.repair),
 	};
 
 	if (input.outputMode === 'structured') {

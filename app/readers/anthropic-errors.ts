@@ -1,11 +1,14 @@
 /**
- * Eight kinds because there are eight recoveries. #23 branches on `kind` to decide what it offers
- * the user: re-enter the key, top up the account, wait, send fewer images, retry. Status codes are
- * the wrong thing to branch on, because 401 and 403 mean the same thing to a person holding a key,
+ * One kind per recovery. #23 branches on `kind` to decide what it offers the user: re-enter the
+ * key, top up the account, wait, send fewer images, retry, ask for a repair. Status codes are the
+ * wrong thing to branch on, because 401 and 403 mean the same thing to a person holding a key,
  * and 500 and 529 both mean try later.
  *
- * `network` and `malformed` have no status behind them. The first is fetch rejecting before a
- * response exists, the second a 200 whose body holds no usable content block.
+ * `network` has no status behind it: fetch rejected before a response existed. The last three all
+ * arrive as a 200, and only the body tells them apart. `malformed` holds no usable content block.
+ * `refusal` and `truncated` come from `stop_reason`, and they need kinds of their own because
+ * their recoveries differ from `malformed`'s: a repair retry cannot talk a safety classifier round,
+ * and a truncated seed hit `max_tokens`, so asking for the same seed again hits it again.
  */
 export type AnthropicReaderErrorKind =
 	| 'credentials'
@@ -15,7 +18,9 @@ export type AnthropicReaderErrorKind =
 	| 'invalid-request'
 	| 'server'
 	| 'network'
-	| 'malformed';
+	| 'malformed'
+	| 'refusal'
+	| 'truncated';
 
 /** All optional: a network failure has no status, and a `request-id` header is not guaranteed. */
 export type AnthropicReaderErrorDetails = {
@@ -23,6 +28,7 @@ export type AnthropicReaderErrorDetails = {
 	requestId?: string | null;
 	body?: string | null;
 	retryAfterSeconds?: number | null;
+	refusalCategory?: string | null;
 	cause?: unknown;
 };
 
@@ -48,6 +54,12 @@ export class AnthropicReaderError extends Error {
 	 * to display rather than one to sleep on.
 	 */
 	readonly retryAfterSeconds: number | null;
+	/**
+	 * Only ever set for `refusal`, from the response's `stop_details.category`. The API documents
+	 * that set as open (`cyber`, `bio`, `reasoning_extraction` so far) and lets it be null, so this
+	 * is a string to show or log rather than a union to switch on.
+	 */
+	readonly refusalCategory: string | null;
 
 	constructor(
 		kind: AnthropicReaderErrorKind,
@@ -68,6 +80,7 @@ export class AnthropicReaderError extends Error {
 		this.requestId = details.requestId ?? null;
 		this.body = details.body ?? null;
 		this.retryAfterSeconds = details.retryAfterSeconds ?? null;
+		this.refusalCategory = details.refusalCategory ?? null;
 	}
 }
 

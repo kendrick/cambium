@@ -116,3 +116,30 @@ describe('AnthropicReaderError', () => {
 		expect(error.retryAfterSeconds).toBeNull();
 	});
 });
+
+describe('the kinds a 200 carries', () => {
+	// `refusal` and `truncated` come from `stop_reason` on a successful response. A status mapping
+	// that produced either would tell #23 a request failed for a reason no status can express.
+	it('never come out of a status', () => {
+		for (let status = 100; status < 600; status += 1) {
+			expect(['refusal', 'truncated']).not.toContain(errorKindForStatus(status));
+		}
+	});
+
+	it('carries the refusal category when the response named one', () => {
+		const error = new AnthropicReaderError('refusal', 'Declined.', {
+			status: 200,
+			refusalCategory: 'cyber',
+		});
+
+		expect(error.kind).toBe('refusal');
+		expect(error.refusalCategory).toBe('cyber');
+	});
+
+	it('leaves the refusal category null when nothing supplied one', () => {
+		expect(new AnthropicReaderError('truncated', 'Cut off.').refusalCategory).toBeNull();
+		expect(
+			new AnthropicReaderError('refusal', 'Declined.', { refusalCategory: null }).refusalCategory,
+		).toBeNull();
+	});
+});

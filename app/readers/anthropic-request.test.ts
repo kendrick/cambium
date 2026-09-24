@@ -181,3 +181,97 @@ describe('buildSeedRequestBody', () => {
 		});
 	});
 });
+
+describe('buildSeedRequestBody with a repair', () => {
+	const repair = {
+		rawResponse: 'Here is the seed you asked for: {"keyColors": [',
+		issues: ['keyColors: Required', 'surfacePolarity: Invalid enum value'],
+	};
+
+	type Message = { role: string; content: { type: string; text?: string }[] };
+
+	function messagesFor(outputMode: AnthropicOutputMode) {
+		return buildSeedRequestBody({ images: oneImage, model: MODEL, outputMode, repair })
+			.messages as Message[];
+	}
+
+	// Opus 5.5 rejects an assistant turn in last place as a prefill. The repair is only legal
+	// because it hands the turn back to the model with a question.
+	it.each(['structured', 'forced-tool'] as const)(
+		'ends on a user turn in %s mode',
+		(outputMode) => {
+			const messages = messagesFor(outputMode);
+
+			expect(messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+			expect(messages.at(-1)?.role).toBe('user');
+		},
+	);
+
+	it('resends the original turn unchanged', () => {
+		const original = (bodyFor('structured').messages as Message[])[0];
+
+		expect(messagesFor('structured')[0]).toEqual(original);
+	});
+
+	it('hands the model its own answer back verbatim as the assistant turn', () => {
+		expect(messagesFor('structured')[1].content).toEqual([
+			{ type: 'text', text: repair.rawResponse },
+		]);
+	});
+
+	it('names every issue in the closing user turn', () => {
+		const closing = messagesFor('structured')[2].content;
+
+		expect(closing).toHaveLength(1);
+		expect(closing[0].type).toBe('text');
+
+		for (const issue of repair.issues) {
+			expect(closing[0].text).toContain(issue);
+		}
+	});
+
+	it('still asks for a correction when the core named no issue', () => {
+		const messages = buildSeedRequestBody({
+			images: oneImage,
+			model: MODEL,
+			outputMode: 'structured',
+			repair: { rawResponse: 'not a seed', issues: [] },
+		}).messages as Message[];
+		const closing = messages[2].content[0];
+
+		expect(closing.type).toBe('text');
+		expect(closing.text?.trim().length).toBeGreaterThan(0);
+	});
+
+	// A forced `tool_choice` is a 400 on Opus 5.5, so structured mode must never grow one, anywhere
+	// in the body, repair or no repair.
+	it('sends no tool_choice and no tools in structured mode', () => {
+		const withRepair = buildSeedRequestBody({
+			images: oneImage,
+			model: MODEL,
+			outputMode: 'structured',
+			repair,
+		});
+
+		expect(collectKeys(withRepair).has('tool_choice')).toBe(false);
+		expect(collectKeys(bodyFor('structured')).has('tool_choice')).toBe(false);
+		expect(withRepair).not.toHaveProperty('tools');
+	});
+
+	it('refuses to repair an empty response, which the API would reject as an empty text block', () => {
+		expect(() =>
+			buildSeedRequestBody({
+				images: oneImage,
+				model: MODEL,
+				outputMode: 'structured',
+				repair: { rawResponse: '  \n', issues: ['empty'] },
+			}),
+		).toThrow(/empty/);
+	});
+
+	it('sends one user turn and nothing else when no repair was asked for', () => {
+		expect((bodyFor('structured').messages as Message[]).map((message) => message.role)).toEqual([
+			'user',
+		]);
+	});
+});

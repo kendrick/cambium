@@ -1,9 +1,16 @@
-import type { BrandReader } from '../../core/brand-reader';
+import type { ReferenceImage } from '../../core/brand-record';
+import type { ReadOptions, RawReaderResponse } from '../../core/brand-reader';
 
 import { isAnthropicAuth } from './anthropic-auth';
 import { AnthropicReaderError, errorKindForStatus } from './anthropic-errors';
-import { type AnthropicOutputMode, buildSeedRequestBody } from './anthropic-request';
+import {
+	type AnthropicOutputMode,
+	buildSeedRequestBody,
+	type SeedRepair,
+} from './anthropic-request';
 import { SEED_PROMPT_VERSION, SEED_TOOL_NAME } from './seed-prompt';
+
+export type { SeedRepair } from './anthropic-request';
 
 export const ANTHROPIC_PROVIDER = 'anthropic';
 export const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
@@ -18,6 +25,23 @@ export type AnthropicReaderConfig = {
 	 * test remembering to pass a stub.
 	 */
 	fetch?: typeof globalThis.fetch;
+};
+
+/**
+ * The seam's options plus one this reader alone understands. `core/brand-reader.ts` keeps
+ * `ReadOptions` to the credential on purpose, so the repair rides here instead: the field is
+ * optional, which leaves this reader assignable to `BrandReader` and every caller of the seam
+ * unchanged. Only a caller holding this reader by its own type can ask for a repair.
+ *
+ * Nothing sets `repair` automatically. It resends the images and costs a second request, so it
+ * waits for a person to ask, as issue #1 requires of anything that spends their money.
+ */
+export type AnthropicReadOptions = ReadOptions & {
+	repair?: SeedRepair;
+};
+
+export type AnthropicBrandReader = {
+	read(images: ReferenceImage[], options: AnthropicReadOptions): Promise<RawReaderResponse>;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -55,6 +79,22 @@ function rawSeedFromBody(body: unknown): string | null {
 	const textBlock = blocks.find((block) => block.type === 'text' && typeof block.text === 'string');
 
 	return typeof textBlock?.text === 'string' ? textBlock.text : null;
+}
+
+function stopReasonFromBody(body: unknown): string | null {
+	const stopReason = isRecord(body) ? body.stop_reason : null;
+	return typeof stopReason === 'string' ? stopReason : null;
+}
+
+/**
+ * The API documents `stop_details` as present only on a refusal and its `category` as an open set
+ * that may be null, so anything other than a non-empty string resolves to null rather than to a
+ * guess.
+ */
+function refusalCategoryFromBody(body: unknown): string | null {
+	const details = isRecord(body) ? body.stop_details : null;
+	const category = isRecord(details) ? details.category : null;
+	return typeof category === 'string' && category.length > 0 ? category : null;
 }
 
 function modelFromBody(body: unknown): string | null {
@@ -129,7 +169,7 @@ async function readBodyText(response: Response): Promise<string | null> {
  * logged. Nothing this module returns or throws carries it either: error messages name the status,
  * and every attached body is the response's, never the request's.
  */
-export function createAnthropicBrandReader(config: AnthropicReaderConfig): BrandReader {
+export function createAnthropicBrandReader(config: AnthropicReaderConfig): AnthropicBrandReader {
 	const outputMode = config.outputMode ?? 'structured';
 	// Bound, not merely referenced: a browser's `fetch` throws "Illegal invocation" when it is
 	// called detached from `globalThis`.
@@ -137,7 +177,7 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Brand
 
 	return {
 		async read(images, options) {
-			const { auth } = options;
+			const { auth, repair } = options;
 
 			// Before the round trip, deliberately. A missing key is a failure the user can fix where
 			// they are standing, and spending a request to learn it returns a 401 that reads like a
@@ -152,7 +192,7 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Brand
 			let requestBody: Record<string, unknown>;
 
 			try {
-				requestBody = buildSeedRequestBody({ images, model: config.model, outputMode });
+				requestBody = buildSeedRequestBody({ images, model: config.model, outputMode, repair });
 			} catch (cause) {
 				// `buildSeedRequestBody` throws a plain `Error` on purpose: a stored image that is not
 				// a base64 data URL is a caller bug, not an API failure, and the pure module has no
@@ -219,6 +259,30 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Brand
 			} catch {
 				// A 200 that is not JSON has no content block either, so it lands on `malformed` below
 				// with the text attached rather than earning a failure kind of its own.
+			}
+
+			// Both stop reasons are checked before the normalizer, because both can arrive holding a
+			// perfectly readable block. A refusal may carry a sentence of text, and a truncated seed is
+			// a text block of JSON cut off mid-value. The normalizer would pass either on as a seed, and
+			// the core would call it `not-json`, which #23 answers with a repair retry that cannot fix
+			// a refusal and would only run out of tokens again on a truncation.
+			const stopReason = stopReasonFromBody(body);
+
+			if (stopReason === 'refusal') {
+				throw new AnthropicReaderError('refusal', 'Anthropic declined to read these images.', {
+					status: response.status,
+					requestId,
+					body: payload,
+					refusalCategory: refusalCategoryFromBody(body),
+				});
+			}
+
+			if (stopReason === 'max_tokens') {
+				throw new AnthropicReaderError(
+					'truncated',
+					'Anthropic stopped at the output limit before the seed was complete.',
+					{ status: response.status, requestId, body: payload },
+				);
 			}
 
 			const raw = rawSeedFromBody(body);
