@@ -2,9 +2,8 @@ import type { ReactNode } from 'react';
 
 /**
  * One category's rows, headed by its name. `data-source="system"` is the hook the browser suite
- * checks against all five system-constant categories at once, per `core/system-constants.ts`; a
- * derived category carries no `data-source` at all rather than a `data-source="derived"` nobody
- * asked for.
+ * checks against all five system-constant categories at once, per `core/system-constants.ts`. A
+ * derived category carries no `data-source` at all.
  */
 export function CategoryGroup({
 	name,

@@ -424,8 +424,8 @@ test('every category is grouped, and every row carries a value control, a proven
 	}
 
 	// Every row, across every category, batched into one evaluate rather than one assertion per row:
-	// with ~200 rows in this fixture's set, awaiting a `toBeVisible()` apiece would make the scenario
-	// minutes slow for no more coverage than one round trip already gives.
+	// `expectedRowCount()` is 172 for this seed, and awaiting a `toBeVisible()` apiece would make the
+	// scenario minutes slow for no more coverage than one round trip already gives.
 	const rows = await tokensSection.locator('li[data-token]').evaluateAll((elements) =>
 		elements.map((element) => {
 			const provenanceLabel = Array.from(element.querySelectorAll('span')).find((span) =>
@@ -953,8 +953,8 @@ test('two cleared fields of one shadow row list as two items, not one', async ({
 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
-	// Neither edit reaches the store: each field holds its own "not a number" issue under its own
-	// label, with the same message, so only the field tells them apart.
+	// Neither edit reaches the store. Each field holds its own "Enter a number." issue under its
+	// own label, with the same message, so only the field tells them apart.
 	const shadow = page.locator('[data-token="shadow.xs"]');
 	const leaf = (label: string) => page.getByLabel(`shadow.xs ${label}`, { exact: true });
 	await leaf('offsetX').fill('');

@@ -76,8 +76,8 @@ export function PrimitiveRow({
 		>
 			{CHANNELS.map((channel) => (
 				<label
-					// Keyed on the committed value, not just the channel, so an override applied elsewhere
-					// (a preset switch, another control) remounts the input with the new truth instead of an
+					// Keyed on the committed value, not just the channel, so a change from outside the row
+					// (a seed edit, a preset switch) remounts the input with the new value instead of an
 					// uncontrolled `defaultValue` going stale under it. The reset generation covers what the
 					// value can't: a refused edit never moved its channel's committed value, so without it a
 					// reset would clear the issue and leave the refused text sitting in the field.

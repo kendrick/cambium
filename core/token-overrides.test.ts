@@ -12,7 +12,7 @@ import { applyOverrides, overrideKey, type TokenOverride } from './token-overrid
  * other scheme already held. Dark `primary` is moved to `brand.10` here so no semantic entry reads
  * the same in both schemes by accident of the fixture.
  *
- * Frozen, so any write through to the input throws rather than passing quietly.
+ * `BASE` is deep-frozen, so any write through to the input throws rather than passing quietly.
  */
 const DARK_SEMANTIC = {
 	...SEMANTIC,

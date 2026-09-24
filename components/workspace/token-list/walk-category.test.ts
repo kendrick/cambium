@@ -84,8 +84,7 @@ describe('walkCategoryTokens', () => {
 
 		expect(md).toBeDefined();
 		// One `$extensions` per shadow, not one per leaf. `ShadowSchema` carries a single provenance
-		// for the whole token, and the walker has to attribute every leaf below to that one object
-		// rather than hunting for a nonexistent one on each field.
+		// for the whole token, so the walker has to attribute every leaf below to that one object.
 		expect(md?.extensions).toBe(
 			(tokenSet.schemes.light.shadow.values as Record<string, { $extensions: unknown }>).md
 				.$extensions,

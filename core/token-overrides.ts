@@ -93,7 +93,8 @@ function isContainer(value: unknown): value is Record<string | number, unknown> 
 }
 
 /**
- * Walks to the parent of a numeric leaf and returns it with the final key, or an issue.
+ * Walks to the parent of a numeric leaf and returns it with the final key, or a message saying why
+ * there is none.
  *
  * `Object.hasOwn` at each step because `values` is a plain record: a path of `['constructor']`
  * would otherwise walk into the prototype, the same trap `declaredRamp` guards against. And the

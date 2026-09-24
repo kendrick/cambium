@@ -14,11 +14,9 @@ import type { TokenProvenance } from '../../../core/token-set';
  * `swatch` prints as text beside the chip as well. A semantic row's only control is its alias
  * `<select>`, so without the text that row would show no colour value a reader could copy.
  *
- * The expand control is a button with `aria-expanded`, not a native `<details>`, on purpose: a list
- * can hold hundreds of these, and `raw-response.tsx`'s own `<details>` is the one #24's browser
- * suite locates with a bare `page.locator('details')`. A `<details>` here would leave that locator
- * matching one element among many wherever a real seed is loaded, which is a false collision this
- * component can dodge whether or not the tag would otherwise have suited it fine.
+ * The expand control is a button with `aria-expanded`, not a native `<details>`. #24's browser
+ * suite finds `raw-response.tsx`'s own `<details>` with a bare `page.locator('details')`, and a
+ * `<details>` per row would add a match for each of the hundreds of rows a real seed loads.
  */
 export function TokenRow({
 	id,
