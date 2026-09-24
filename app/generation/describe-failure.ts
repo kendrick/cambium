@@ -20,7 +20,11 @@ export type FailureDescriptor = {
 	recovery: FailureRecovery;
 	/** Rate limits only. Null when Anthropic sent no usable `retry-after`. */
 	retryAfterSeconds?: number | null;
-	/** The model's own answer, for the person to see what went wrong. */
+	/**
+	 * What Anthropic sent back, for the person to see what went wrong. For a parse or record failure
+	 * it's the seed text the model wrote. For `malformed` it's the whole response body, since no
+	 * seed text could be found in it, which is also why `malformed` never carries a `repair`.
+	 */
 	raw?: string;
 	requestId?: string;
 	/** Set exactly when `recovery` is `repair-retry`, ready to hand back to `generate`. */
@@ -31,9 +35,6 @@ export type DescribeFailureOptions = {
 	/** A repair gets one go. A second would resend the images for an answer that already failed twice. */
 	repairUsed: boolean;
 };
-
-/** Worded for the model, which reads these inside the repair turn. */
-const MALFORMED_REPAIR_ISSUE = 'The response held no text or tool_use block to read a seed from.';
 
 function issueLine({ path, message }: SeedParseIssue): string {
 	return path.length > 0 ? `${path.map(String).join('.')}: ${message}` : message;
@@ -47,16 +48,11 @@ function seconds(count: number): string {
 type RepairableCopy = { first: string; afterRepair: string; empty: string };
 
 /**
- * The failures a repair can fix. The empty case falls back to a plain retry because the
+ * The failures a repair can fix. Each one has seed text the model wrote, which the repair hands
+ * back with what was wrong with it. The empty case falls back to a plain retry because the
  * request builder refuses a repair with nothing to correct, so offering one would fail locally.
  */
-const REPAIRABLE: Record<'malformed' | 'not-json' | 'schema' | 'record-schema', RepairableCopy> = {
-	malformed: {
-		first: "Anthropic's answer had nothing Cambium could read. Ask it to fix the answer.",
-		afterRepair:
-			"Anthropic's fixed answer still had nothing Cambium could read. Try again from the start.",
-		empty: 'Anthropic sent back an empty answer. Try again.',
-	},
+const REPAIRABLE: Record<'not-json' | 'schema' | 'record-schema', RepairableCopy> = {
 	'not-json': {
 		first:
 			'Anthropic described the brand in prose instead of returning a seed. Ask it to fix the answer.',
@@ -79,26 +75,30 @@ const REPAIRABLE: Record<'malformed' | 'not-json' | 'schema' | 'record-schema', 
 	},
 };
 
+type RepairableFailure = {
+	kind: keyof typeof REPAIRABLE;
+	/** The seed text the model wrote, which a repair hands back to it. */
+	raw: string | null;
+	/** Already worded for the model, one line each. */
+	issues: string[];
+};
+
 function describeRepairable(
-	kind: keyof typeof REPAIRABLE,
-	raw: string | null,
-	issues: string[],
-	requestId: string | undefined,
+	{ kind, raw, issues }: RepairableFailure,
 	{ repairUsed }: DescribeFailureOptions,
 ): FailureDescriptor {
 	const copy = REPAIRABLE[kind];
-	const base = { kind, ...(requestId ? { requestId } : {}) };
 
 	if (!raw || raw.trim().length === 0) {
-		return { ...base, message: copy.empty, recovery: 'manual-retry' };
+		return { kind, message: copy.empty, recovery: 'manual-retry' };
 	}
 
 	if (repairUsed) {
-		return { ...base, message: copy.afterRepair, recovery: 'manual-retry', raw };
+		return { kind, message: copy.afterRepair, recovery: 'manual-retry', raw };
 	}
 
 	return {
-		...base,
+		kind,
 		message: copy.first,
 		recovery: 'repair-retry',
 		raw,
@@ -119,18 +119,20 @@ export function describeFailure(
 		case 'not-json':
 		case 'schema':
 			return describeRepairable(
-				failure.kind,
-				failure.error.raw,
-				failure.error.issues.map(issueLine),
-				undefined,
+				{
+					kind: failure.kind,
+					raw: failure.error.raw,
+					issues: failure.error.issues.map(issueLine),
+				},
 				options,
 			);
 		case 'record-schema':
 			return describeRepairable(
-				failure.kind,
-				failure.provenance.rawResponse,
-				failure.issues.map(issueLine),
-				undefined,
+				{
+					kind: failure.kind,
+					raw: failure.provenance.rawResponse,
+					issues: failure.issues.map(issueLine),
+				},
 				options,
 			);
 		case 'font-table-unavailable':
@@ -163,24 +165,29 @@ export function describeFailure(
 			};
 	}
 
-	return describeReaderFailure(failure, options);
+	// Reader failures read the same whether or not a repair was used, since none of them offers one.
+	return describeReaderFailure(failure);
 }
 
-function describeReaderFailure(
-	{ kind, error }: ReaderFailure,
-	options: DescribeFailureOptions,
-): FailureDescriptor {
+function describeReaderFailure({ kind, error }: ReaderFailure): FailureDescriptor {
 	const requestId = error.requestId ? { requestId: error.requestId } : {};
 
 	switch (kind) {
-		case 'malformed':
-			return describeRepairable(
+		case 'malformed': {
+			// No seed text came back, so a repair would have nothing to hand the model, and the recovery
+			// is a plain retry. The body is still shown as the only clue to what Anthropic did send.
+			const body = error.body?.trim() ? error.body : null;
+
+			return {
 				kind,
-				error.body,
-				[MALFORMED_REPAIR_ISSUE],
-				error.requestId ?? undefined,
-				options,
-			);
+				message: body
+					? "Anthropic's answer had nothing Cambium could read. Try again."
+					: 'Anthropic sent back an empty answer. Try again.',
+				recovery: 'manual-retry',
+				...(body ? { raw: body } : {}),
+				...requestId,
+			};
+		}
 		case 'credentials':
 			return {
 				kind,
@@ -236,6 +243,15 @@ function describeReaderFailure(
 				message: "Couldn't reach Anthropic. Check your connection, then try again.",
 				recovery: 'manual-retry',
 				...requestId,
+			};
+		case 'cancelled':
+			// Anthropic may have started work, and billing, before the abort reached it. Saying nothing
+			// was charged would be a promise Cambium can't keep.
+			return {
+				kind,
+				message:
+					"Generation cancelled, and nothing was saved. Anthropic may still bill for a request it had already started. Try again when you're ready.",
+				recovery: 'manual-retry',
 			};
 		case 'refusal':
 			return {

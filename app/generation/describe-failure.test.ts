@@ -225,6 +225,17 @@ const ROWS: Row[] = [
 		},
 	},
 	{
+		name: 'a cancelled run offers a manual retry and never blames the connection',
+		failure: readerFailure('cancelled', { requestId: null }),
+		repairUsed: false,
+		expected: {
+			kind: 'cancelled',
+			message:
+				"Generation cancelled, and nothing was saved. Anthropic may still bill for a request it had already started. Try again when you're ready.",
+			recovery: 'manual-retry',
+		},
+	},
+	{
 		name: 'a refusal offers no retry',
 		failure: readerFailure('refusal', { status: 200, refusalCategory: 'cyber' }),
 		repairUsed: false,
@@ -247,36 +258,21 @@ const ROWS: Row[] = [
 		},
 	},
 	{
-		name: 'a malformed answer offers a repair carrying the response body',
+		// No seed text came back, so a repair would hand the model its own envelope. The body is still
+		// shown so the person can see what did arrive.
+		name: 'a malformed answer offers a manual retry, never a repair, with the body shown',
 		failure: readerFailure('malformed', { status: 200, body: MALFORMED_BODY }),
 		repairUsed: false,
 		expected: {
 			kind: 'malformed',
-			message: "Anthropic's answer had nothing Cambium could read. Ask it to fix the answer.",
-			recovery: 'repair-retry',
-			raw: MALFORMED_BODY,
-			requestId: REQUEST_ID,
-			repair: {
-				rawResponse: MALFORMED_BODY,
-				issues: ['The response held no text or tool_use block to read a seed from.'],
-			},
-		},
-	},
-	{
-		name: 'a malformed answer after a repair falls back to a manual retry, raw still shown',
-		failure: readerFailure('malformed', { status: 200, body: MALFORMED_BODY }),
-		repairUsed: true,
-		expected: {
-			kind: 'malformed',
-			message:
-				"Anthropic's fixed answer still had nothing Cambium could read. Try again from the start.",
+			message: "Anthropic's answer had nothing Cambium could read. Try again.",
 			recovery: 'manual-retry',
 			raw: MALFORMED_BODY,
 			requestId: REQUEST_ID,
 		},
 	},
 	{
-		name: 'a malformed answer with no body falls back to a manual retry, since a repair needs text',
+		name: 'a malformed answer with no body offers a manual retry and shows nothing',
 		failure: readerFailure('malformed', { status: 200, body: null }),
 		repairUsed: false,
 		expected: {
@@ -447,13 +443,12 @@ describe('describeFailure', () => {
 	});
 
 	/**
-	 * `repairUsed` only moves the three repairable kinds. Every other failure has to read the same
-	 * either way, or a person who once asked for a repair would see different advice for a 401.
+	 * `repairUsed` only moves the three repairable kinds, the ones the filter below leaves out. Every
+	 * other failure has to read the same either way, or a person who once asked for a repair would
+	 * see different advice for a 401.
 	 */
 	it.each(
-		ROWS.filter(
-			(row) => !['malformed', 'not-json', 'schema', 'record-schema'].includes(row.failure.kind),
-		),
+		ROWS.filter((row) => !['not-json', 'schema', 'record-schema'].includes(row.failure.kind)),
 	)('$name, whether or not a repair was used', ({ failure }) => {
 		expect(describeFailure(failure, { repairUsed: true })).toStrictEqual(
 			describeFailure(failure, { repairUsed: false }),
@@ -474,7 +469,7 @@ describe('describeFailure', () => {
 
 		const messages = [...firstMessageByKind.values()];
 
-		expect(firstMessageByKind.size).toBe(17);
+		expect(firstMessageByKind.size).toBe(18);
 		expect(new Set(messages).size).toBe(messages.length);
 	});
 });

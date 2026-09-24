@@ -5,8 +5,14 @@ import {
 	type AnthropicOutputMode,
 	buildSeedRequestBody,
 	SEED_REQUEST_MAX_TOKENS,
+	seedRequestTextChars,
 } from './anthropic-request';
-import { SEED_JSON_SCHEMA, SEED_TOOL_NAME } from './seed-prompt';
+import {
+	SEED_JSON_SCHEMA,
+	SEED_SYSTEM_PROMPT,
+	SEED_TOOL_NAME,
+	SEED_USER_DIRECTIVE,
+} from './seed-prompt';
 
 function image(id: string, downscaled: string): ReferenceImage {
 	return { id, downscaled, originalHash: `sha256:${id}` };
@@ -273,5 +279,41 @@ describe('buildSeedRequestBody with a repair', () => {
 		expect((bodyFor('structured').messages as Message[]).map((message) => message.role)).toEqual([
 			'user',
 		]);
+	});
+});
+
+describe('seedRequestTextChars', () => {
+	function charsFor(images: ReferenceImage[], repair?: { rawResponse: string; issues: string[] }) {
+		return seedRequestTextChars({ images, model: MODEL, outputMode: 'structured', repair });
+	}
+
+	// The API prices an image by its pixels, so a longer base64 payload must not look like a longer
+	// prompt.
+	it('leaves image payloads out of the count', () => {
+		expect(charsFor([image('img-1', 'data:image/webp;base64,AA')])).toBe(
+			charsFor([image('img-1', `data:image/webp;base64,${'A'.repeat(10_000)}`)]),
+		);
+	});
+
+	// "Image id: img-2" is 15 characters, counted by hand, and it's the only text a second image adds.
+	it('counts the id line each image adds', () => {
+		expect(charsFor([...oneImage, image('img-2', 'data:image/webp;base64,AA')])).toBe(
+			charsFor(oneImage) + 15,
+		);
+	});
+
+	it('counts at least the system prompt, the closing directive and the schema', () => {
+		expect(charsFor(oneImage)).toBeGreaterThanOrEqual(
+			SEED_SYSTEM_PROMPT.length +
+				SEED_USER_DIRECTIVE.length +
+				JSON.stringify(SEED_JSON_SCHEMA).length,
+		);
+	});
+
+	// A repair resends everything, plus the answer being fixed and every issue named in the new turn.
+	it('grows by at least the repaired answer and its issues when a repair rides along', () => {
+		const repair = { rawResponse: 'x'.repeat(500), issues: ['y'.repeat(40), 'z'.repeat(60)] };
+
+		expect(charsFor(oneImage, repair)).toBeGreaterThanOrEqual(charsFor(oneImage) + 500 + 40 + 60);
 	});
 });

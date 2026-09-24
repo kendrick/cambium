@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import type { ReferenceImage } from '../../../core/brand-record';
 import type { CostEstimate } from '../../../app/generation/cost-estimate';
 import type { FailureDescriptor } from '../../../app/generation/describe-failure';
-import type { SaveGeneratedVersionInput } from '../../../app/generation/generate';
+import type { PaidSeed } from '../../../app/generation/generate';
 import type { SeedRepair } from '../../../app/readers/anthropic-reader';
 import { getSessionKey, setSessionKey } from '../../../app/generation/session-key';
 
@@ -24,26 +24,29 @@ export type GeneratePanelProps = {
 	onKeyStored: (stored: boolean) => void;
 };
 
-type Estimate = { kind: 'pending' } | { kind: 'ready'; value: CostEstimate } | { kind: 'failed' };
+/** Carries the formatted ceiling, so the render never touches the formatter's module. */
+type Estimate =
+	| { kind: 'pending' }
+	| { kind: 'ready'; value: CostEstimate; maxUsdText: string }
+	| { kind: 'failed' };
 
 /**
- * The seed and provenance a storage failure hands back. Kept so "Save again" can commit them
- * without a second paid read; neither holds the key.
+ * `held` is the paid seed a storage failure hands back, kept so "Save again" can commit it without
+ * a second paid read.
  */
-type Held = Pick<SaveGeneratedVersionInput, 'seed' | 'provenance'>;
-
-type Shown =
-	| { kind: 'described'; descriptor: FailureDescriptor; held: Held | null }
+type ShownFailure =
+	| { kind: 'described'; descriptor: FailureDescriptor; held: PaidSeed | null }
 	| { kind: 'unexpected' };
 
-/** Why the dialog is open decides what submitting it does. Only `generate` runs a model call. */
-type DialogIntent = 'generate' | 'update';
+/**
+ * Why the dialog is open decides what submitting it does. Only `generate` runs a model call, and it
+ * carries the repair that was asked for, so entering a key on the way to a repair still sends one.
+ */
+type DialogIntent = { kind: 'generate'; repair?: SeedRepair } | { kind: 'update'; notice?: string };
 
 type Attempt =
 	| { kind: 'generate'; key: string; repair?: SeedRepair }
-	| { kind: 'save-again'; held: Held };
-
-const usd = (amount: number) => `$${(Math.ceil(amount * 100) / 100).toFixed(2)}`;
+	| { kind: 'save-again'; held: PaidSeed };
 
 const count = new Intl.NumberFormat('en-US');
 
@@ -65,7 +68,7 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 	const router = useRouter();
 	const [estimate, setEstimate] = useState<Estimate>({ kind: 'pending' });
 	const [running, setRunning] = useState(false);
-	const [shown, setShown] = useState<Shown | null>(null);
+	const [shown, setShown] = useState<ShownFailure | null>(null);
 	const [dialog, setDialog] = useState<DialogIntent | null>(null);
 	const [keyNotKept, setKeyNotKept] = useState(false);
 
@@ -77,6 +80,9 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 	 * Left set after a success, because the route is navigating away and a version already landed.
 	 */
 	const inFlight = useRef(false);
+
+	/** Set only while a model call is in flight, so Cancel has something to abort. */
+	const [abort, setAbort] = useState<AbortController | null>(null);
 
 	// A run that finishes after the person left the page mustn't drag them to the workspace.
 	const mounted = useRef(true);
@@ -92,23 +98,20 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 
 		void (async () => {
 			try {
-				// Dynamic because the prompt module pulls in zod through `core/brand-seed`.
-				const [{ estimateGenerationCost }, prompt, dimensions] = await Promise.all([
+				// Dynamic because the estimate measures the real request body, and the prompt module behind
+				// it pulls in zod through `core/brand-seed`.
+				const [cost, dimensions] = await Promise.all([
 					import('../../../app/generation/cost-estimate'),
-					import('../../../app/readers/seed-prompt'),
 					Promise.all(images.map((image) => measure(image.downscaled))),
 				]);
 
-				const promptChars =
-					prompt.SEED_SYSTEM_PROMPT.length +
-					prompt.SEED_USER_DIRECTIVE.length +
-					JSON.stringify(prompt.SEED_JSON_SCHEMA).length;
+				const value = cost.estimateGenerationCost({
+					images: dimensions,
+					promptChars: cost.generationPromptChars(images),
+				});
 
 				if (live) {
-					setEstimate({
-						kind: 'ready',
-						value: estimateGenerationCost({ images: dimensions, promptChars }),
-					});
+					setEstimate({ kind: 'ready', value, maxUsdText: cost.formatUsdCeiling(value.maxUsd) });
 				}
 			} catch {
 				if (live) setEstimate({ kind: 'failed' });
@@ -133,7 +136,11 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 		inFlight.current = true;
 		setRunning(true);
 
-		let next: Shown;
+		// A save-again makes no model call, so there's nothing slow enough to be worth cancelling.
+		const controller = attempt.kind === 'generate' ? new AbortController() : null;
+		setAbort(controller);
+
+		let next: ShownFailure;
 
 		try {
 			const [generation, { describeFailure }, storage, { createOklchScaleEngine }] =
@@ -163,6 +170,7 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 								recordStore,
 								engine,
 								repair: attempt.repair,
+								signal: controller?.signal,
 							})
 						: await generation.saveGeneratedVersion({
 								record,
@@ -177,6 +185,8 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 			}
 
 			if (result.ok) {
+				// The version is written, so Cancel has nothing left to stop while the route changes.
+				setAbort(null);
 				if (mounted.current) router.push(`/workspace?${RECORD_PARAM}=${result.record.id}`);
 				return;
 			}
@@ -200,19 +210,30 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 
 		inFlight.current = false;
 		setRunning(false);
+		setAbort(null);
 		setShown(next);
+
+		// #23: a rejected key reopens the dialog by itself, prefilled with the key that was sent, since
+		// it stays in session. The outcome's own button is there for after the dialog is dismissed.
+		if (next.kind === 'described' && next.descriptor.recovery === 'reopen-key-dialog') {
+			setDialog({ kind: 'update', notice: next.descriptor.message });
+		}
 	}
 
-	function startGenerate() {
+	/**
+	 * The one way into a model call from a click, repair or not. #23 asks for the key at first
+	 * generation, never on arrival, so with none in session this opens the dialog and lets its
+	 * submit carry on with the same repair.
+	 */
+	function startGenerate(repair?: SeedRepair) {
 		const key = getSessionKey();
 
-		// #23 asks for the key at first generation, never on arrival.
 		if (!key) {
-			setDialog('generate');
+			setDialog({ kind: 'generate', repair });
 			return;
 		}
 
-		void run({ kind: 'generate', key });
+		void run({ kind: 'generate', key, repair });
 	}
 
 	function acceptKey(key: string) {
@@ -223,10 +244,10 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 		const intent = dialog;
 		setDialog(null);
 
-		if (intent === 'generate') {
+		if (intent?.kind === 'generate') {
 			// Passed on directly rather than re-read, so a browser that refused to keep it still gets this
 			// one generation out of it.
-			void run({ kind: 'generate', key });
+			void run({ kind: 'generate', key, repair: intent.repair });
 		} else {
 			// Updating the key after a rejection runs nothing, since #23 forbids an automatic retry.
 			// Generate comes back and the person decides.
@@ -245,12 +266,12 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 			<p className="text-muted-foreground text-sm" data-estimate>
 				{estimate.kind === 'pending' && 'Working out what this will cost…'}
 				{estimate.kind === 'ready' &&
-					`Generating costs at most ${usd(estimate.value.maxUsd)} on your Anthropic account: about ${count.format(estimate.value.inputTokens)} input tokens and at most ${count.format(estimate.value.maxOutputTokens)} output tokens.`}
+					`Generating costs at most ${estimate.maxUsdText} on your Anthropic account: about ${count.format(estimate.value.inputTokens)} input tokens and at most ${count.format(estimate.value.maxOutputTokens)} output tokens.`}
 				{estimate.kind === 'failed' &&
 					"Cambium couldn't read these images back to estimate the cost, so it can't say what generating will spend."}
 			</p>
 
-			<Button disabled={generateDisabled} onClick={startGenerate}>
+			<Button disabled={generateDisabled} onClick={() => startGenerate()}>
 				Generate
 			</Button>
 
@@ -258,6 +279,14 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 				<p aria-live="polite" className="text-muted-foreground text-sm">
 					Generating. This usually takes under a minute.
 				</p>
+			)}
+
+			{/* No timeout stands in for this. A slow read may be a paid one still on its way back, so
+			    only the person decides when to give up on it. */}
+			{abort && (
+				<Button onClick={() => abort.abort()} variant="outline">
+					Cancel
+				</Button>
 			)}
 
 			{keyNotKept && (
@@ -270,17 +299,10 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 			{shown && (
 				<FailureNotice
 					disabled={running}
-					onRepair={(repair) => {
-						const key = getSessionKey();
-						if (!key) {
-							setDialog('generate');
-							return;
-						}
-						void run({ kind: 'generate', key, repair });
-					}}
-					onRetry={startGenerate}
+					onRepair={(repair) => startGenerate(repair)}
+					onRetry={() => startGenerate()}
 					onSaveAgain={(held) => void run({ kind: 'save-again', held })}
-					onUpdateKey={() => setDialog('update')}
+					onUpdateKey={() => setDialog({ kind: 'update' })}
 					shown={shown}
 				/>
 			)}
@@ -288,6 +310,7 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 			{dialog && (
 				<Suspense fallback={null}>
 					<KeyDialog
+						notice={dialog.kind === 'update' ? dialog.notice : undefined}
 						onOpenChange={(open) => {
 							if (!open) setDialog(null);
 						}}
@@ -301,12 +324,12 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 }
 
 type FailureNoticeProps = {
-	shown: Shown;
+	shown: ShownFailure;
 	disabled: boolean;
 	onUpdateKey: () => void;
 	onRetry: () => void;
 	onRepair: (repair: SeedRepair) => void;
-	onSaveAgain: (held: Held) => void;
+	onSaveAgain: (held: PaidSeed) => void;
 };
 
 /**

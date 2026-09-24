@@ -51,6 +51,10 @@ const SUCCESS_ON_GENERATION_MODEL: Fixture = {
 
 const SUCCESS_TEXT = (structuredSuccess.body.content[0] as { text: string }).text;
 
+const PROSE_TEXT = (
+	structuredProseNotJson.body.content.find((block) => block.type === 'text') as { text: string }
+).text;
+
 /** A seed with a key the schema doesn't know, in a normal 200 envelope. */
 const SCHEMA_REJECTED: Fixture = {
 	...SUCCESS_ON_GENERATION_MODEL,
@@ -96,6 +100,16 @@ function networkDown() {
 	return vi.fn<typeof globalThis.fetch>(async () => {
 		throw new TypeError('Failed to fetch');
 	});
+}
+
+/** Settles only by rejecting on abort, the way a browser's `fetch` does for a stalled request. */
+function hangsUntilAborted() {
+	return vi.fn<typeof globalThis.fetch>(
+		(_url, init) =>
+			new Promise<Response>((_resolve, reject) => {
+				init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+			}),
+	);
 }
 
 function version(overrides: Partial<BrandVersion> = {}): BrandVersion {
@@ -241,7 +255,7 @@ const READ_FAILURES: FailureCase[] = [
 		kind: 'malformed',
 		name: 'no content block',
 		fetch: () => replay(malformedNoContentBlock),
-		recovery: 'repair-retry',
+		recovery: 'manual-retry',
 	},
 	{
 		kind: 'refusal',
@@ -376,8 +390,8 @@ describe('generate', () => {
 		expect(await setup.store.get(RECORD_ID)).toStrictEqual(before);
 	});
 
-	it('repairs a malformed answer from its body when asked, in one request', async () => {
-		const first = await run(await storeWith(record([])), replay(malformedNoContentBlock));
+	it('repairs a prose answer from the prose itself when asked, in one request', async () => {
+		const first = await run(await storeWith(record([])), replay(structuredProseNotJson));
 
 		if (first.ok) {
 			throw new Error('expected a failure');
@@ -388,11 +402,100 @@ describe('generate', () => {
 		const setup = await storeWith(record([]));
 
 		const second = await run(setup, fetch, { repair });
+		const messages = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).messages;
 
-		expect(repair?.rawResponse).toBe(JSON.stringify(malformedNoContentBlock.body));
+		// The model's own words go back, never the response envelope around them.
+		expect(repair?.rawResponse).toBe(PROSE_TEXT);
+		expect(messages[1].content[0].text).toBe(PROSE_TEXT);
 		expect(second.ok).toBe(true);
 		expect(fetch).toHaveBeenCalledTimes(1);
 		expect((await setup.store.get(RECORD_ID))?.versions).toHaveLength(1);
+	});
+
+	// A malformed answer has no seed text to hand back, so a repair would replay the envelope.
+	it('offers no repair for a malformed answer, only a retry with the body still shown', async () => {
+		const result = await run(await storeWith(record([])), replay(malformedNoContentBlock));
+
+		if (result.ok) {
+			throw new Error('expected a failure');
+		}
+
+		const descriptor = describeFailure(result.failure, { repairUsed: false });
+
+		expect(descriptor.recovery).toBe('manual-retry');
+		expect(descriptor.repair).toBeUndefined();
+		expect(descriptor.raw).toBe(JSON.stringify(malformedNoContentBlock.body));
+	});
+
+	describe('when the person cancels', () => {
+		it.each(STARTING_RECORDS)(
+			'fails as cancelled mid-request and leaves a record with $label deep-equal',
+			async ({ build }) => {
+				const setup = await storeWith(build());
+				const before = await setup.store.get(RECORD_ID);
+				const controller = new AbortController();
+				const fetch = hangsUntilAborted();
+
+				const pending = generate({
+					record: setup.stored,
+					key: API_KEY,
+					reader: createGenerationReader({ fetch }),
+					recordStore: setup.store,
+					engine,
+					signal: controller.signal,
+					now: () => NOW,
+					resolveFontTableRef: async () => FONT_TABLE_REF,
+				});
+				// Lets the font table resolve and the request go out before the abort.
+				await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+				controller.abort();
+				const result = await pending;
+
+				if (result.ok) {
+					throw new Error('expected a failure');
+				}
+
+				expect(result.failure.kind).toBe('cancelled');
+				expect(await setup.store.get(RECORD_ID)).toStrictEqual(before);
+				expect(describeFailure(result.failure, { repairUsed: false }).recovery).toBe(
+					'manual-retry',
+				);
+			},
+		);
+
+		// A reader that ignores the signal still can't get a version written once the person said stop.
+		it.each(STARTING_RECORDS)(
+			'commits nothing to a record with $label when a good answer arrives after the abort',
+			async ({ build }) => {
+				const setup = await storeWith(build());
+				const before = await setup.store.get(RECORD_ID);
+				const controller = new AbortController();
+
+				const result = await generate({
+					record: setup.stored,
+					key: API_KEY,
+					reader: {
+						async read() {
+							controller.abort();
+							return {
+								raw: SUCCESS_TEXT,
+								provider: 'anthropic',
+								model: GENERATION_MODEL,
+								promptVersion: SEED_PROMPT_VERSION,
+							};
+						},
+					},
+					recordStore: setup.store,
+					engine,
+					signal: controller.signal,
+					now: () => NOW,
+					resolveFontTableRef: async () => FONT_TABLE_REF,
+				});
+
+				expect(!result.ok && result.failure.kind).toBe('cancelled');
+				expect(await setup.store.get(RECORD_ID)).toStrictEqual(before);
+			},
+		);
 	});
 
 	it.each(STARTING_RECORDS)(

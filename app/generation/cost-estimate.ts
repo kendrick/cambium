@@ -1,5 +1,7 @@
-import { SEED_REQUEST_MAX_TOKENS } from '../readers/anthropic-request';
-import { GENERATION_PRICING } from './model';
+import type { ReferenceImage } from '../../core/brand-record';
+import { SEED_REQUEST_MAX_TOKENS, seedRequestTextChars } from '../readers/anthropic-request';
+
+import { GENERATION_MODEL, GENERATION_OUTPUT_MODE, GENERATION_PRICING } from './model';
 
 export interface ImageDimensions {
 	width: number;
@@ -48,4 +50,34 @@ export function estimateGenerationCost({ images, promptChars }: CostEstimateInpu
 		(maxOutputTokens * GENERATION_PRICING.outputUsdPerMTok) / TOKENS_PER_MILLION;
 
 	return { inputTokens, maxOutputTokens, maxUsd };
+}
+
+/** The prompt text a first generation sends for these images, measured from the body itself. */
+export function generationPromptChars(images: ReferenceImage[]): number {
+	return seedRequestTextChars({
+		images,
+		model: GENERATION_MODEL,
+		outputMode: GENERATION_OUTPUT_MODE,
+	});
+}
+
+/**
+ * Enough decimals to hold any `maxUsd` exactly. Every term is a whole token count times a
+ * whole-dollar rate over a million, so the true value never has more than six decimal places of a
+ * dollar, which is four of a cent.
+ */
+const CENT_PRECISION = 6;
+
+/**
+ * Dollars rounded up to the cent, as the person reads them. Up, because the figure is a ceiling and
+ * rounding it down would promise less than a run can spend.
+ *
+ * The cents are rounded to `CENT_PRECISION` before the ceiling, because binary floating point
+ * nudges some exact amounts just past a whole cent. `0.07 * 100` is `7.000000000000001`, and a bare
+ * `Math.ceil` turns that into eight cents.
+ */
+export function formatUsdCeiling(amount: number): string {
+	const cents = Math.ceil(Number((amount * 100).toFixed(CENT_PRECISION)));
+
+	return `$${(cents / 100).toFixed(2)}`;
 }

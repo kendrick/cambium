@@ -24,7 +24,7 @@ import {
 import { type RecordStore, StaleRecordWriteError } from '../storage/record-store';
 import { StorageQuotaExceededError } from '../storage/storage-estimate';
 
-import { GENERATION_MODEL } from './model';
+import { GENERATION_MODEL, GENERATION_OUTPUT_MODE } from './model';
 
 export type ReaderFailure = {
 	kind: AnthropicReaderErrorKind;
@@ -42,29 +42,31 @@ export type StorageFailureKind =
 	| 'record-stamped-ahead';
 
 /**
- * The model call already succeeded and was paid for by the time any of these happen, so the seed
- * and its provenance ride along. `saveGeneratedVersion` takes them back, which is how the landing
- * page saves again without spending a second request.
+ * A seed from a read that already succeeded and was paid for, with the provenance its version
+ * would carry. `saveGeneratedVersion` takes the pair back, which is how the landing page saves
+ * again without spending a second request. Neither half holds the key.
  */
-export type StorageFailure = {
-	kind: StorageFailureKind;
-	error: StorageQuotaExceededError | StaleRecordWriteError | RecordStampedAheadError;
+export type PaidSeed = {
 	seed: BrandSeed;
 	provenance: CommitProvenance;
+};
+
+/** The model call had already succeeded when any of these happened, so the paid seed rides along. */
+export type StorageFailure = PaidSeed & {
+	kind: StorageFailureKind;
+	error: StorageQuotaExceededError | StaleRecordWriteError | RecordStampedAheadError;
 };
 
 /**
  * `put` refused the record the seed would produce, most often because the seed cites an image id
  * the record doesn't hold. `parseSeed` can't catch that, since it never sees the record. The read
- * was still paid for, so the seed and provenance ride along like a storage failure's do.
+ * was still paid for, so the paid seed rides along like a storage failure's does.
  */
-export type RecordSchemaFailure = {
+export type RecordSchemaFailure = PaidSeed & {
 	kind: 'record-schema';
 	/** Paths start at the seed, not the record, so the model reads them against what it wrote. */
 	issues: SeedParseIssue[];
 	error: unknown;
-	seed: BrandSeed;
-	provenance: CommitProvenance;
 };
 
 /** Nothing was sent: the font table resolves before the read, so this costs no request. */
@@ -85,21 +87,21 @@ export type GenerateResult =
 	| { ok: true; record: BrandRecord }
 	| { ok: false; failure: GenerationFailure };
 
-export type SaveGeneratedVersionInput = {
+export type SaveGeneratedVersionInput = PaidSeed & {
 	record: BrandRecord;
-	seed: BrandSeed;
-	provenance: CommitProvenance;
 	recordStore: RecordStore;
 	engine: ScaleEngine;
 	now?: () => string;
 };
 
-export type GenerateInput = Omit<SaveGeneratedVersionInput, 'seed' | 'provenance'> & {
+export type GenerateInput = Omit<SaveGeneratedVersionInput, keyof PaidSeed> & {
 	/** Passed in rather than read from `session-key.ts`, so this module never touches storage. */
 	key: string;
 	reader: AnthropicBrandReader;
 	/** Only ever set because a person asked for a repair. Nothing here builds one on its own. */
 	repair?: SeedRepair;
+	/** Set by the person's Cancel and passed to the reader. Nothing in this module sets a timeout. */
+	signal?: AbortSignal;
 	/**
 	 * Injectable because the default fetches the font taxonomy from a CDN, and a test that let it
 	 * would depend on the network to exercise a failure path that never gets that far.
@@ -111,11 +113,18 @@ async function defaultFontTableRef(): Promise<FontTableRef> {
 	return (await resolveFontTable()).ref;
 }
 
-/** Binds the reader to `GENERATION_MODEL`, the model `GENERATION_PRICING` prices, so the cost estimate and the call name the same model. */
+/**
+ * Binds the reader to `GENERATION_MODEL` and `GENERATION_OUTPUT_MODE`, the pair the cost estimate
+ * prices and measures, so the estimate and the call describe the same request.
+ */
 export function createGenerationReader(
 	options: { fetch?: typeof globalThis.fetch } = {},
 ): AnthropicBrandReader {
-	return createAnthropicBrandReader({ model: GENERATION_MODEL, fetch: options.fetch });
+	return createAnthropicBrandReader({
+		model: GENERATION_MODEL,
+		outputMode: GENERATION_OUTPUT_MODE,
+		fetch: options.fetch,
+	});
 }
 
 function asStorageError(error: unknown): StorageFailure['error'] | null {
@@ -199,6 +208,9 @@ export async function saveGeneratedVersion({
  *
  * Nothing is written until the parse succeeds, so a failed read or parse can't touch the record. A
  * storage failure means `RecordStore.put` rejected, and a rejected `put` writes nothing.
+ *
+ * A cancelled run commits nothing either, even when the answer landed before the abort did. The
+ * person said stop, and a version turning up after that would be one they didn't ask for.
  */
 export async function generate({
 	record,
@@ -207,6 +219,7 @@ export async function generate({
 	recordStore,
 	engine,
 	repair,
+	signal,
 	now,
 	resolveFontTableRef = defaultFontTableRef,
 }: GenerateInput): Promise<GenerateResult> {
@@ -223,13 +236,24 @@ export async function generate({
 	let response;
 
 	try {
-		response = await reader.read(record.images, { auth: anthropicAuth(key), repair });
+		response = await reader.read(record.images, { auth: anthropicAuth(key), repair, signal });
 	} catch (cause) {
 		if (cause instanceof AnthropicReaderError) {
 			return { ok: false, failure: { kind: cause.kind, error: cause } };
 		}
 
 		throw cause;
+	}
+
+	// The Anthropic reader already refuses a response that arrived after an abort. `reader` is an
+	// injected seam, though, and this is the last point before a write, so it doesn't lean on that.
+	if (signal?.aborted) {
+		const error = new AnthropicReaderError(
+			'cancelled',
+			'The run was cancelled before its seed was saved.',
+			{ cause: signal.reason },
+		);
+		return { ok: false, failure: { kind: error.kind, error } };
 	}
 
 	const parsed = parseSeed(response);

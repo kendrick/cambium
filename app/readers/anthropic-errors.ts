@@ -1,14 +1,19 @@
 /**
- * One kind per recovery. #23 branches on `kind` to decide what it offers the user: re-enter the
- * key, top up the account, wait, send fewer images, retry, ask for a repair. Status codes are the
- * wrong thing to branch on, because 401 and 403 mean the same thing to a person holding a key,
- * and 500 and 529 both mean try later.
+ * One kind per thing that went wrong, as a person holding a key would tell them apart. #23 maps
+ * each to a message of its own and to one recovery: re-enter the key, retry, ask for a repair, or
+ * nothing at all. Several kinds share a recovery, and the message tells the person which
+ * situation they're in. Status codes are the wrong thing to branch on,
+ * because 401 and 403 mean the same thing to a person holding a key, and 500 and 529 both mean
+ * try later.
  *
- * `network` has no status behind it: fetch rejected before a response existed. The last three all
- * arrive as a 200, and only the body tells them apart. `malformed` holds no usable content block.
- * `refusal` and `truncated` come from `stop_reason`, and they need kinds of their own because
- * their recoveries differ from `malformed`'s: a repair retry cannot talk a safety classifier round,
- * and a truncated seed hit `max_tokens`, so asking for the same seed again hits it again.
+ * `network` and `cancelled` have no status behind them: fetch rejected before a response existed,
+ * on its own for `network` and because the caller aborted for `cancelled`. They're apart because
+ * only one of them is the connection's fault, and telling somebody who pressed Cancel to check
+ * their connection would be wrong. The last three all arrive as a 200, and only the body tells
+ * them apart. `malformed` holds no usable content block. `refusal` and `truncated` come from
+ * `stop_reason`, and they need kinds of their own because their recoveries differ from a parse
+ * failure's: a repair retry can't talk a safety classifier round, and a truncated seed hit
+ * `max_tokens`, so asking for the same seed again hits it again.
  */
 export type AnthropicReaderErrorKind =
 	| 'credentials'
@@ -18,6 +23,7 @@ export type AnthropicReaderErrorKind =
 	| 'invalid-request'
 	| 'server'
 	| 'network'
+	| 'cancelled'
 	| 'malformed'
 	| 'refusal'
 	| 'truncated';

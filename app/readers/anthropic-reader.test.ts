@@ -525,3 +525,89 @@ describe('createAnthropicBrandReader seam', () => {
 		expect(parseSeed(result).ok).toBe(true);
 	});
 });
+
+/**
+ * Behaves the way a browser's `fetch` does with a signal: it never settles on its own, and it
+ * rejects with the signal's reason once the signal aborts. A stub that ignored the signal would
+ * leave the read hanging, and the test would time out rather than fail on the kind.
+ */
+function hangsUntilAborted() {
+	return vi.fn<typeof globalThis.fetch>(
+		(_url, init) =>
+			new Promise<Response>((_resolve, reject) => {
+				init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+			}),
+	);
+}
+
+describe('createAnthropicBrandReader cancellation', () => {
+	it('turns an abort mid-request into cancelled, not network, after exactly one request', async () => {
+		const controller = new AbortController();
+		const fetchStub = hangsUntilAborted();
+
+		const pending = rejection(
+			readerWith(fetchStub).read(IMAGES, {
+				auth: anthropicAuth(API_KEY),
+				signal: controller.signal,
+			}),
+		);
+		controller.abort();
+		const error = await pending;
+
+		expect(error.kind).toBe('cancelled');
+		expect(error.status).toBeNull();
+		expect(fetchStub).toHaveBeenCalledTimes(1);
+		expect(everythingAnErrorCarries(error)).not.toContain(API_KEY);
+	});
+
+	it('sends nothing when the signal is already aborted', async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const fetchStub = stubFetch(structuredSuccess);
+
+		const error = await rejection(
+			readerWith(fetchStub).read(IMAGES, {
+				auth: anthropicAuth(API_KEY),
+				signal: controller.signal,
+			}),
+		);
+
+		expect(error.kind).toBe('cancelled');
+		expect(fetchStub).not.toHaveBeenCalled();
+	});
+
+	// The response is complete and readable here. Resolving it anyway would hand the caller a seed
+	// the person had already said they didn't want.
+	it('refuses a response that arrived after the abort, even a readable one', async () => {
+		const controller = new AbortController();
+		const fetchStub = vi.fn<typeof globalThis.fetch>(async () => {
+			controller.abort();
+			return responseFrom(structuredSuccess);
+		});
+
+		const error = await rejection(
+			readerWith(fetchStub).read(IMAGES, {
+				auth: anthropicAuth(API_KEY),
+				signal: controller.signal,
+			}),
+		);
+
+		expect(error.kind).toBe('cancelled');
+	});
+
+	it('still calls a plain rejected fetch network when a signal was passed and never aborted', async () => {
+		const controller = new AbortController();
+		const fetchStub = vi.fn<typeof globalThis.fetch>(async () => {
+			throw new TypeError('Failed to fetch');
+		});
+
+		const error = await rejection(
+			readerWith(fetchStub).read(IMAGES, {
+				auth: anthropicAuth(API_KEY),
+				signal: controller.signal,
+			}),
+		);
+
+		expect(error.kind).toBe('network');
+	});
+});

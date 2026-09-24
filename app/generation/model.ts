@@ -11,3 +11,9 @@ export const GENERATION_PRICING = {
 	inputUsdPerMTok: 4,
 	outputUsdPerMTok: 20,
 } as const;
+
+/**
+ * Named here, not left to the reader's default, because the cost estimate measures the request body
+ * this mode builds, and the two modes carry the schema in different places.
+ */
+export const GENERATION_OUTPUT_MODE = 'structured' as const;

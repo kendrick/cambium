@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { estimateGenerationCost } from './cost-estimate';
+import { estimateGenerationCost, formatUsdCeiling } from './cost-estimate';
 
 describe('estimateGenerationCost', () => {
 	it('sums per-image and prompt tokens, and prices output at the request ceiling', () => {
@@ -41,5 +41,42 @@ describe('estimateGenerationCost', () => {
 		expect(estimate.inputTokens).toBe(211);
 		expect(estimate.maxOutputTokens).toBe(16000);
 		expect(estimate.maxUsd).toBeCloseTo(0.320844, 9);
+	});
+});
+
+/**
+ * The string is what the person reads, so it's the thing asserted. Each expected value is worked
+ * out by hand from the rule "round up to the next whole cent", not from the code.
+ */
+describe('formatUsdCeiling', () => {
+	it.each([
+		// 32.0844 cents rounds up to 33.
+		{ amount: 0.320844, rendered: '$0.33' },
+		// A thousandth of a cent past 33 still rounds up to 34.
+		{ amount: 0.3300001, rendered: '$0.34' },
+		// Exactly 33 cents stays 33.
+		{ amount: 0.33, rendered: '$0.33' },
+		// Exactly 7 cents stays 7, though 0.07 * 100 is 7.000000000000001 in floating point.
+		{ amount: 0.07, rendered: '$0.07' },
+		// Exactly $1.10 stays $1.10, though 1.1 * 100 is 110.00000000000001.
+		{ amount: 1.1, rendered: '$1.10' },
+		// 1234.5 cents rounds up to 1235.
+		{ amount: 12.345, rendered: '$12.35' },
+		{ amount: 0, rendered: '$0.00' },
+	])('renders $amount as $rendered', ({ amount, rendered }) => {
+		expect(formatUsdCeiling(amount)).toBe(rendered);
+	});
+
+	// The sum `estimateGenerationCost` actually produces, rendered: 0.337396 is 33.7396 cents, so 34.
+	it('renders a computed estimate rounded up to the cent', () => {
+		const { maxUsd } = estimateGenerationCost({
+			images: [
+				{ width: 1568, height: 1176 },
+				{ width: 800, height: 600 },
+			],
+			promptChars: 5000,
+		});
+
+		expect(formatUsdCeiling(maxUsd)).toBe('$0.34');
 	});
 });

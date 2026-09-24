@@ -38,6 +38,11 @@ export type AnthropicReaderConfig = {
  */
 export type AnthropicReadOptions = ReadOptions & {
 	repair?: SeedRepair;
+	/**
+	 * Set by a person's Cancel. Nothing here aborts on a timer, because a slow read may still be a
+	 * paid one on its way back.
+	 */
+	signal?: AbortSignal;
 };
 
 export type AnthropicBrandReader = {
@@ -160,6 +165,19 @@ async function readBodyText(response: Response): Promise<string | null> {
 }
 
 /**
+ * An abort can land while the body is still streaming, and `readBodyText` swallows that rejection
+ * as a missing body. Checking the signal afterward is what stops a cancelled read from arriving as
+ * `malformed`, or as a success built from a body read before the abort.
+ */
+function throwIfCancelled(signal: AbortSignal | undefined, cause?: unknown): void {
+	if (signal?.aborted) {
+		throw new AnthropicReaderError('cancelled', 'The read was cancelled before it finished.', {
+			cause: cause ?? signal.reason,
+		});
+	}
+}
+
+/**
  * The only module in the repo that calls `fetch`. It talks to `POST /v1/messages` directly rather
  * than through `@anthropic-ai/sdk`, per ADR-0002: the request is one shape, the dependency is not
  * in the measured baseline, and a bring-your-own-key static site pays for every kilobyte.
@@ -177,7 +195,10 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Anthr
 
 	return {
 		async read(images, options) {
-			const { auth, repair } = options;
+			const { auth, repair, signal } = options;
+
+			// A signal already aborted costs no request, the same as a missing key doesn't.
+			throwIfCancelled(signal);
 
 			// Before the round trip, deliberately. A missing key is a failure the user can fix where
 			// they are standing, and spending a request to learn it returns a 401 that reads like a
@@ -224,8 +245,11 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Anthr
 						'anthropic-dangerous-direct-browser-access': 'true',
 					},
 					body: JSON.stringify(requestBody),
+					signal,
 				});
 			} catch (cause) {
+				throwIfCancelled(signal, cause);
+
 				throw new AnthropicReaderError(
 					'network',
 					'The request never reached Anthropic. Check the connection and try again.',
@@ -238,6 +262,8 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Anthr
 			if (!response.ok) {
 				const kind = errorKindForStatus(response.status);
 				const body = await readBodyText(response);
+
+				throwIfCancelled(signal);
 
 				// No automatic retry lives here. Issue #1 rules it out because retrying "spends the
 				// user's money without consent", so a rate limit comes back as a number to show rather
@@ -252,6 +278,8 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Anthr
 			}
 
 			const payload = await readBodyText(response);
+
+			throwIfCancelled(signal);
 			let body: unknown = null;
 
 			try {

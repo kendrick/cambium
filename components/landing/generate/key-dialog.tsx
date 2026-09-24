@@ -18,20 +18,22 @@ export type KeyDialogProps = {
 	onOpenChange: (open: boolean) => void;
 	/** Gets the key straight from the input, so no component state ever holds a copy. */
 	onSubmit: (key: string) => void;
+	/** The rejection to show when the dialog opened by itself after Anthropic refused the key. */
+	notice?: string;
 };
 
 const CONSOLE_URL = 'https://console.anthropic.com';
 
 /**
- * Asks for the key, and never on arrival: the panel opens this from Generate, or from the recovery
- * for a rejected key.
+ * Asks for the key, and never on arrival: the panel opens this from Generate, by itself when
+ * Anthropic rejects a key, or from the recovery button left behind after that.
  *
  * The field is uncontrolled and prefilled from session storage. After a credentials failure the
  * stored key is still there (#23: a rejected key doesn't clear it), so the person sees what was
  * sent and can fix a typo rather than paste it all again. Controlled state would keep the key in
  * React's memory for as long as the panel lives.
  */
-export default function KeyDialog({ open, onOpenChange, onSubmit }: KeyDialogProps) {
+export default function KeyDialog({ open, onOpenChange, onSubmit, notice }: KeyDialogProps) {
 	const inputId = useId();
 
 	return (
@@ -47,6 +49,11 @@ export default function KeyDialog({ open, onOpenChange, onSubmit }: KeyDialogPro
 					}}
 				>
 					<DialogTitle>Your Anthropic API key</DialogTitle>
+					{notice && (
+						<p className="text-destructive text-sm" data-key-notice role="alert">
+							{notice}
+						</p>
+					)}
 					<DialogDescription>
 						Cambium sends your reference images to Anthropic with this key, from this browser. The
 						key stays in this tab and is cleared when you close it.

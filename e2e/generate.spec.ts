@@ -8,6 +8,7 @@ import { ANTHROPIC_MESSAGES_URL } from '../app/readers/anthropic-reader';
 import error401Fixture from '../app/readers/fixtures/error-401-credentials.json' with { type: 'json' };
 import error529Fixture from '../app/readers/fixtures/error-529-overloaded.json' with { type: 'json' };
 import malformedFixture from '../app/readers/fixtures/malformed-no-content-block.json' with { type: 'json' };
+import proseNotJsonFixture from '../app/readers/fixtures/structured-prose-not-json.json' with { type: 'json' };
 import refusalFixture from '../app/readers/fixtures/refusal-thinking-first.json' with { type: 'json' };
 import structuredSuccessFixture from '../app/readers/fixtures/structured-success.json' with { type: 'json' };
 import { SESSION_KEY_STORAGE_KEY } from '../app/generation/session-key';
@@ -53,7 +54,7 @@ type MockResponse = { status: number; body: unknown; headers?: Record<string, st
  * POST to `respond`. `respond` sees the parsed body and how many real requests have landed so far
  * (1-based), which is what the repair and no-auto-retry scenarios need to tell requests apart.
  *
- * The returned array is the live list of requests sent so far — it grows as the page makes
+ * The returned array is the live list of requests sent so far—it grows as the page makes
  * requests, so a scenario can `expect(sent.length)` after waiting on whatever the UI does next.
  */
 async function mockAnthropic(
@@ -89,7 +90,7 @@ async function mockAnthropic(
 /**
  * A route that answers the preflight and then drops the real request, the way an offline tab or a
  * DNS failure would. `route.abort` rejects the page's `fetch` before any response exists, which is
- * exactly what `anthropic-reader.ts` maps to the `network` kind — there is no status to fulfill.
+ * exactly what `anthropic-reader.ts` maps to the `network` kind—there is no status to fulfill.
  */
 async function mockAnthropicNetworkFailure(page: Page): Promise<void> {
 	await page.route(ANTHROPIC_MESSAGES_URL, async (route) => {
@@ -249,7 +250,7 @@ function outcome(page: Page, kind: string) {
 
 /**
  * Chromium's own network diagnostic for a fetch that lands on a non-2xx status or gets aborted —
- * "Failed to load resource: the server responded with a status of…" or "net::ERR_FAILED" — never
+ * "Failed to load resource: the server responded with a status of…" or "net::ERR_FAILED"—never
  * anything the app's code calls, and it fires the same way for a real Anthropic outage as it does
  * here.
  */
@@ -258,7 +259,7 @@ const NETWORK_DIAGNOSTIC_LOG = /Failed to load resource|net::ERR_FAILED/;
 /**
  * Removes only Chromium's own network diagnostic from the auto `consoleErrors` fixture, leaving
  * anything else in the list untouched. The 401, 429, 529 and network-abort scenarios below trigger
- * the diagnostic on purpose, so each calls this once the failure has rendered — but clearing the
+ * the diagnostic on purpose, so each calls this once the failure has rendered—but clearing the
  * whole list, rather than filtering, would just as happily hide a real console error the app logged
  * on the same path, key included. `e2e/fixtures.ts`'s own docblock allows a scenario to "empty"
  * the list to tolerate an expected one; this is the narrower form that keeps the teardown check
@@ -271,8 +272,8 @@ function tolerateExpectedNetworkErrorLog(consoleErrors: string[]): void {
 }
 
 /**
- * Every console message the page logs, at any level — not just `consoleErrors`' `error`-level
- * subset — so a failure scenario can prove the key reaches none of them, the same check the success
+ * Every console message the page logs, at any level—not just `consoleErrors`' `error`-level
+ * subset—so a failure scenario can prove the key reaches none of them, the same check the success
  * scenario already runs.
  */
 function collectConsoleMessages(page: Page): string[] {
@@ -303,6 +304,20 @@ test('the key dialog links to the Anthropic console, and a cost estimate is show
 	await expect(page.locator('[data-estimate]')).toBeVisible();
 
 	await waitForGenerateReady(page);
+
+	// Read as the person reads it: the dollar figure in the rendered sentence. The bounds are worked
+	// out by hand from the published rates ($4/M input, $20/M output), not from `cost-estimate.ts`.
+	//   Floor: the output ceiling alone, 16,000 tokens x $20/M = $0.32. No prompt can cost less.
+	//   Ceiling: the fixture PNG is 2x2 px, and intake never upscales, so the image is at most
+	//   ceil(4/750) = 1 token. The prompt text is about 13,000 characters today; 100,000 characters
+	//   is a generous bound, which at 4 characters a token is 25,000 tokens. Input is then at most
+	//   25,001 x $4/M = $0.100004, so the total is at most $0.420004, which rounds up to $0.43.
+	const estimateText = (await page.locator('[data-estimate]').textContent()) ?? '';
+	const dollars = /\$(\d+\.\d{2})\b/.exec(estimateText)?.[1];
+	expect(dollars, `no dollar amount in "${estimateText}"`).toBeDefined();
+	expect(Number(dollars)).toBeGreaterThanOrEqual(0.32);
+	expect(Number(dollars)).toBeLessThanOrEqual(0.43);
+
 	await generateButton(page).click();
 
 	const dialog = keyDialog(page);
@@ -383,7 +398,7 @@ test('a successful generation reaches the workspace, and the key touches nothing
 	expect(stored.localStorageHoldsKey).toBe(false);
 });
 
-test('a rejected key (401) reopens the key dialog with the key still in session, and no version is saved', async ({
+test('a rejected key (401) reopens the key dialog by itself with the key still in session, and no version is saved', async ({
 	page,
 	consoleErrors,
 }) => {
@@ -395,13 +410,13 @@ test('a rejected key (401) reopens the key dialog with the key still in session,
 	await waitForGenerateReady(page);
 	await generateWithFreshKey(page, TEST_KEY);
 
-	const container = outcome(page, 'credentials');
-	await expect(container).toBeVisible();
+	// Nothing is clicked between the 401 and this check. The dialog comes back by itself, with the key
+	// that was sent still in the field and the rejection stated inside it.
+	const dialog = keyDialog(page);
+	await expect(dialog).toBeVisible();
+	await expect(dialog.getByLabel(/api key/i)).toHaveValue(TEST_KEY);
+	await expect(dialog.locator('[data-key-notice]')).toBeVisible();
 	tolerateExpectedNetworkErrorLog(consoleErrors);
-
-	const recovery = container.getByRole('button', { name: /api key|update key/i });
-	await expect(recovery).toHaveCount(1);
-	await expect(container.getByRole('button')).toHaveCount(1);
 
 	// #23's own rule: a rejected key stays loaded, so the person can inspect or fix it rather than
 	// paste it again from scratch.
@@ -411,8 +426,17 @@ test('a rejected key (401) reopens the key dialog with the key still in session,
 	);
 	expect(sessionValue).toBe(TEST_KEY);
 
+	// Dismissing the dialog leaves the outcome and its one button for reopening the dialog.
+	await dialog.getByRole('button', { name: 'Cancel' }).click();
+	await expect(dialog).toHaveCount(0);
+
+	const container = outcome(page, 'credentials');
+	await expect(container).toBeVisible();
+	const recovery = container.getByRole('button', { name: /api key|update key/i });
+	await expect(recovery).toHaveCount(1);
+	await expect(container.getByRole('button')).toHaveCount(1);
+
 	await recovery.click();
-	const dialog = keyDialog(page);
 	await expect(dialog).toBeVisible();
 	await expect(dialog.getByLabel(/api key/i)).toHaveValue(TEST_KEY);
 
@@ -442,7 +466,7 @@ test('a rate limit (429) offers a manual retry, surfaces the retry window, no ve
 	await expect(container.getByRole('button', { name: /retry/i })).toHaveCount(1);
 	await expect(container.getByRole('button')).toHaveCount(1);
 	// Not a wording check: the issue asks for the retry window to reach the page at all, and the
-	// number is the one part of `describeFailure`'s message that isn't copy — it's
+	// number is the one part of `describeFailure`'s message that isn't copy—it's
 	// `error.retryAfterSeconds` off the `retry-after` header, read back out through the DOM. The
 	// paired "no retry-after" scenario below is what proves this isn't matching on a stray "30"
 	// somewhere else in the panel.
@@ -536,7 +560,7 @@ test('a network failure offers a manual retry, and no version is saved', async (
 	expect(consoleMessages.join('\n')).not.toContain(TEST_KEY);
 });
 
-test('a malformed response offers a repair, and no version is saved until it is used', async ({
+test('a malformed response offers a retry, not a repair, shows what came back, and saves no version', async ({
 	page,
 }) => {
 	const consoleMessages = collectConsoleMessages(page);
@@ -547,9 +571,11 @@ test('a malformed response offers a repair, and no version is saved until it is 
 	await waitForGenerateReady(page);
 	await generateWithFreshKey(page, TEST_KEY);
 
+	// No seed text came back, so there is nothing for a repair to hand the model. The raw body is
+	// still there for the person to read.
 	const container = outcome(page, 'malformed');
 	await expect(container).toBeVisible();
-	await expect(container.getByRole('button', { name: /repair/i })).toHaveCount(1);
+	await expect(container.getByRole('button', { name: /retry/i })).toHaveCount(1);
 	await expect(container.getByRole('button')).toHaveCount(1);
 	await expect(container.locator('details')).toBeVisible();
 
@@ -576,35 +602,93 @@ test('a refusal offers no retry, and no version is saved', async ({ page }) => {
 	expect(consoleMessages.join('\n')).not.toContain(TEST_KEY);
 });
 
-test('a repair retry resends the conversation once and succeeds on the second call', async ({
+const PROSE_TEXT = (
+	proseNotJsonFixture.body.content.find((block) => block.type === 'text') as { text: string }
+).text;
+
+test('a repair asked for after the key was cleared still goes out as a repair once a key is entered', async ({
 	page,
 }) => {
 	const recordId = await saveOneRecord(page);
 
 	const sent = await mockAnthropic(page, (body, attempt) => {
-		if (attempt === 1) return { status: 200, body: malformedFixture.body };
+		if (attempt === 1) return { status: 200, body: proseNotJsonFixture.body };
 		return { status: 200, body: successResponseBody(imageIdFromRequest(body)) };
 	});
 
 	await waitForGenerateReady(page);
 	await generateWithFreshKey(page, TEST_KEY);
 
-	const container = outcome(page, 'malformed');
+	const container = outcome(page, 'not-json');
 	await expect(container).toBeVisible();
+
+	// With no key left, Repair has to ask for one first. The run that follows must still be the
+	// repair, not a plain generation that drops the answer being fixed.
+	await page.locator('[data-key-indicator]').getByRole('button', { name: /clear/i }).click();
 	await container.getByRole('button', { name: /repair/i }).click();
+	await submitKeyDialog(page, TEST_KEY);
 
 	await expect(page).toHaveURL(new RegExp(`/workspace\\?record=${recordId}$`));
 
 	expect(sent).toHaveLength(2);
-	// The repair conversation is the original turn, the model's own (unreadable) answer played back,
-	// and a user turn naming what to fix — never a trailing assistant turn, which Opus 5.5 rejects
-	// as a prefill (`buildMessages` in `app/readers/anthropic-request.ts`).
-	expect(sent[1]?.body.messages.map((message) => message.role)).toEqual([
-		'user',
-		'assistant',
-		'user',
-	]);
+	// The repair conversation is the original turn, the model's own prose played back, and a user
+	// turn naming what to fix. Never a trailing assistant turn, which Opus 5.5 rejects as a prefill
+	// (`buildMessages` in `app/readers/anthropic-request.ts`).
+	const repairMessages = sent[1]?.body.messages ?? [];
+	expect(repairMessages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+	expect(repairMessages[1]?.content).toEqual([{ type: 'text', text: PROSE_TEXT }]);
 
 	const record = await readRecord(page, recordId);
 	expect(record?.versions).toHaveLength(1);
+});
+
+/**
+ * A route that answers the preflight and then holds the real request open forever, the way a
+ * stalled connection does. The handler never settles the route, so only the page aborting its own
+ * `fetch` can end the request.
+ */
+async function mockAnthropicStall(page: Page): Promise<SentRequest[]> {
+	const sent: SentRequest[] = [];
+
+	await page.route(ANTHROPIC_MESSAGES_URL, async (route) => {
+		const request = route.request();
+
+		if (request.method() === 'OPTIONS') {
+			await route.fulfill({ status: 204, headers: PREFLIGHT_HEADERS });
+			return;
+		}
+
+		sent.push({ body: request.postDataJSON() as SentBody, headers: request.headers() });
+	});
+
+	return sent;
+}
+
+test('a stalled request can be cancelled, which offers a retry and saves no version', async ({
+	page,
+	consoleErrors,
+}) => {
+	const consoleMessages = collectConsoleMessages(page);
+	const recordId = await saveOneRecord(page);
+
+	const sent = await mockAnthropicStall(page);
+
+	await waitForGenerateReady(page);
+	await generateWithFreshKey(page, TEST_KEY);
+
+	await expect.poll(() => sent.length).toBe(1);
+	const cancel = page.getByRole('button', { name: 'Cancel' });
+	await expect(cancel).toBeVisible();
+	await cancel.click();
+
+	const container = outcome(page, 'cancelled');
+	await expect(container).toBeVisible();
+	tolerateExpectedNetworkErrorLog(consoleErrors);
+	await expect(container.getByRole('button', { name: /retry/i })).toHaveCount(1);
+	await expect(container.getByRole('button')).toHaveCount(1);
+	await expect(cancel).toHaveCount(0);
+
+	await expect(await readRecord(page, recordId)).toMatchObject({ versions: [] });
+	expect(consoleMessages.join('\n')).not.toContain(TEST_KEY);
+	expect(sent).toHaveLength(1);
 });

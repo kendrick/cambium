@@ -19,8 +19,10 @@ type AcceptedImageMediaType = (typeof ACCEPTED_IMAGE_MEDIA_TYPES)[number];
 export type AnthropicOutputMode = 'structured' | 'forced-tool';
 
 /**
- * A failed read handed back for one correction. `rawResponse` is what the model said, verbatim,
- * and `issues` is why the core refused it, one line each, already worded for the model to read.
+ * A seed the model did answer with, handed back for one correction. `rawResponse` is the seed text
+ * the reader took from that answer: a text block verbatim, or a tool call's input re-serialized.
+ * It's never the response envelope, since a response with no seed text has nothing to correct.
+ * `issues` is why the core or the record refused it, one line each, already worded for the model.
  */
 export type SeedRepair = {
 	rawResponse: string;
@@ -198,4 +200,33 @@ export function buildSeedRequestBody(input: SeedRequestInput): Record<string, un
 	// since the whole response is small enough to arrive in one shot.
 
 	return body;
+}
+
+/**
+ * How many characters of text a request body carries, for the cost estimate. Counted from the body
+ * this module would actually send, so the estimate follows the prompt, the schema, the per-image id
+ * lines and any repair turns as they change, with nothing restated by hand.
+ *
+ * Image blocks are left out, since the API prices an image by its pixels, not by the length of its
+ * base64. Everything else is text the model reads, including the schema inside `output_config` or
+ * `tools`, so it's counted as JSON.
+ */
+export function seedRequestTextChars(input: SeedRequestInput): number {
+	const { system, messages, output_config, tools } = buildSeedRequestBody(input) as {
+		system: string;
+		messages: { content: { type: string; text?: string }[] }[];
+		output_config?: unknown;
+		tools?: unknown;
+	};
+
+	const messageChars = messages
+		.flatMap((message) => message.content)
+		.reduce((total, block) => total + (block.type === 'text' ? (block.text?.length ?? 0) : 0), 0);
+
+	return (
+		system.length +
+		messageChars +
+		(output_config === undefined ? 0 : JSON.stringify(output_config).length) +
+		(tools === undefined ? 0 : JSON.stringify(tools).length)
+	);
 }

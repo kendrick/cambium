@@ -14,6 +14,7 @@ const ALL_KINDS: AnthropicReaderErrorKind[] = [
 	'invalid-request',
 	'server',
 	'network',
+	'cancelled',
 	'malformed',
 ];
 
@@ -53,7 +54,10 @@ describe('errorKindForStatus', () => {
 
 	// This runs on the failure path, where a throw has nowhere to go.
 	it('returns a kind for every status without throwing', () => {
-		const statusOnly = ALL_KINDS.filter((kind) => kind !== 'network' && kind !== 'malformed');
+		// `network` and `cancelled` have no response behind them. `malformed` comes from a 200's body.
+		const statusOnly = ALL_KINDS.filter(
+			(kind) => kind !== 'network' && kind !== 'cancelled' && kind !== 'malformed',
+		);
 
 		for (let status = 100; status < 600; status += 1) {
 			expect(statusOnly).toContain(errorKindForStatus(status));
