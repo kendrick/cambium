@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test';
 import { PNG } from 'pngjs';
 
 import { ANTHROPIC_MESSAGES_URL } from '../app/readers/anthropic-reader';
-// `with { type: 'json' }` isn't decoration here: Playwright runs this file as native Node ESM
+// `with { type: 'json' }` is required here: Playwright runs this file as native Node ESM
 // (`package.json`'s `"type": "module"`), and Node's own loader refuses a JSON import without the
 // attribute, unlike Vitest's bundled runtime, which is why `anthropic-reader.test.ts` gets away
 // without one.
@@ -19,11 +19,11 @@ import { expect, test } from './fixtures';
 import { makePng } from './fixtures/png';
 
 /**
- * #23 forbids asserting `describeFailure`'s wording here (`AGENTS.md`'s Task 6 constraint, and the
- * plan's own decision), because that message is already pinned in
- * `app/generation/describe-failure.test.ts`. What a browser alone can prove is the wiring: which
- * `data-outcome` renders, which single recovery control comes with it, and what does or does not
- * reach storage, a URL, or the console. Every assertion below stays at that seam.
+ * Nothing here asserts `describeFailure`'s wording, because
+ * `app/generation/describe-failure.test.ts` already pins every message. What a browser alone can
+ * prove is the wiring: which `data-outcome` renders, which single recovery control comes with it,
+ * and what does or does not reach storage, a URL, or the console. Every assertion below stays at
+ * that seam.
  */
 
 /** Distinctive enough that a stray match in a URL, storage dump, or console line can't be a coincidence. */
@@ -134,8 +134,8 @@ function imageIdFromRequest(body: SentBody): string {
  * `keyColors[].sourceImageId` and `imageClassifications[].imageId`, so both move or the seed still
  * cites an id this fresh record never minted and `commit` rejects it as `record-schema`. The test
  * stages exactly one reference image, so there is only one real id for either field to cite.
- * `model` is pinned to `claude-opus-5-5` because the fixture was recorded against `claude-opus-5`
- * and #23 pins generation to the dated model name.
+ * `model` is pinned to `claude-opus-5-5` because the fixture was recorded against `claude-opus-5`,
+ * and generation runs on `GENERATION_MODEL`, which is `claude-opus-5-5`.
  */
 function successResponseBody(imageId: string): unknown {
 	const fixtureBody = structuredSuccessFixture.body as {
@@ -328,9 +328,10 @@ test('the key dialog links to the Anthropic console, and a cost estimate is show
 	// out by hand from the published rates ($4/M input, $20/M output), not from `cost-estimate.ts`.
 	//   Floor: the output ceiling alone, 16,000 tokens x $20/M = $0.32. No prompt can cost less.
 	//   Ceiling: the fixture PNG is 2x2 px, and intake never upscales, so the image is at most
-	//   ceil(4/750) = 1 token. The prompt text is about 13,000 characters today; 100,000 characters
-	//   is a generous bound, which at 4 characters a token is 25,000 tokens. Input is then at most
-	//   25,001 x $4/M = $0.100004, so the total is at most $0.420004, which rounds up to $0.43.
+	//   ceil(4/750) = 1 token. The prompt text is about 13,000 characters, as `generationPromptChars`
+	//   counts it; 100,000 characters is a generous bound, which at 4 characters a token is 25,000
+	//   tokens. Input is then at most 25,001 x $4/M = $0.100004, so the total is at most $0.420004,
+	//   which rounds up to $0.43.
 	const estimateText = (await page.locator('[data-estimate]').textContent()) ?? '';
 	const dollars = /\$(\d+\.\d{2})\b/.exec(estimateText)?.[1];
 	expect(dollars, `no dollar amount in "${estimateText}"`).toBeDefined();
@@ -343,8 +344,8 @@ test('the key dialog links to the Anthropic console, and a cost estimate is show
 	await expect(dialog).toBeVisible();
 	await expect(dialog.getByLabel(/api key/i)).toBeVisible();
 	await expect(useKeyButton(page)).toBeVisible();
-	// The one control criterion 5 needs, per the plan's own Task 6 mapping: the console link, not
-	// the spend-limit sentence's wording.
+	// #23's criterion 5 is checked through its one control, the console link. The spend-limit
+	// sentence is copy, so its wording goes unasserted here.
 	await expect(dialog.getByRole('link', { name: /anthropic console/i })).toHaveAttribute(
 		'href',
 		'https://console.anthropic.com',

@@ -52,7 +52,7 @@ describe('formatUsdCeiling', () => {
 	it.each([
 		// 32.0844 cents rounds up to 33.
 		{ amount: 0.320844, rendered: '$0.33' },
-		// A thousandth of a cent past 33 still rounds up to 34.
+		// A hundred-thousandth of a cent past 33 still rounds up to 34.
 		{ amount: 0.3300001, rendered: '$0.34' },
 		// Exactly 33 cents stays 33.
 		{ amount: 0.33, rendered: '$0.33' },

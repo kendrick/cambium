@@ -201,8 +201,8 @@ describe('buildSeedRequestBody with a repair', () => {
 			.messages as Message[];
 	}
 
-	// Opus 5.5 rejects an assistant turn in last place as a prefill. The repair is only legal
-	// because it hands the turn back to the model with a question.
+	// Opus 5.5 rejects an assistant turn in last place as a prefill. The repair is legal only
+	// because a user turn naming what was wrong follows the model's answer.
 	it.each(['structured', 'forced-tool'] as const)(
 		'ends on a user turn in %s mode',
 		(outputMode) => {

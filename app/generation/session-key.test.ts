@@ -175,8 +175,8 @@ describe('session key', () => {
 			}
 		});
 
-		// The constraint this module exists under. A fallback here would outlive the tab, which is
-		// the one property the issue asks the key to have.
+		// The constraint this module exists under. A fallback here would outlive the tab's session,
+		// and ending with that session is the one property #23 asks of the key.
 		it('falls back to nothing when sessionStorage throws', () => {
 			const watch = watchOtherStorage();
 			vi.stubGlobal('sessionStorage', throwingStorage());

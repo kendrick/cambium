@@ -39,8 +39,8 @@ function DialogBackdrop({ className, ...props }: DialogPrimitive.Backdrop.Props)
 	);
 }
 
-// The backdrop and portal are bundled here so every caller gets a dialog
-// that's actually reachable in the DOM, rather than one more place to forget them.
+// The backdrop and portal are bundled here so no caller can forget either one and render a popup
+// with no portal or backdrop behind it.
 function DialogPopup({ className, children, ...props }: DialogPrimitive.Popup.Props) {
 	return (
 		<DialogPortal>

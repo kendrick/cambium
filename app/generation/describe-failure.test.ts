@@ -115,8 +115,8 @@ type Row = {
 };
 
 /**
- * Every recovery the plan maps, asserted with its exact copy. The messages are the product here:
- * the landing page renders them verbatim, and the browser tier asserts no copy at all.
+ * Every recovery `describeFailure` maps, asserted with its exact copy. The messages are the product
+ * here: the landing page renders them verbatim, and the browser tier asserts no copy at all.
  */
 const ROWS: Row[] = [
 	{
@@ -457,7 +457,7 @@ describe('describeFailure', () => {
 	});
 
 	/**
-	 * `repairUsed` only moves the three repairable kinds, the ones the filter below leaves out. Every
+	 * `repairUsed` moves only the three repairable kinds, the ones the filter below leaves out. Every
 	 * other failure has to read the same either way, or a person who once asked for a repair would
 	 * see different advice for a 401.
 	 */

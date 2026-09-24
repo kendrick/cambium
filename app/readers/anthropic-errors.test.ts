@@ -143,7 +143,8 @@ describe('AnthropicReaderError', () => {
 
 describe('the kinds a 200 carries', () => {
 	// `refusal` and `truncated` come from `stop_reason` on a successful response. A status mapping
-	// that produced either would tell #23 a request failed for a reason no status can express.
+	// that produced either would tell `describeFailure` a request failed for a reason no status can
+	// express.
 	it('never come out of a status', () => {
 		for (let status = 100; status < 600; status += 1) {
 			expect(['refusal', 'truncated']).not.toContain(errorKindForStatus(status));

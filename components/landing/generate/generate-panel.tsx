@@ -139,9 +139,10 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 	}, [images]);
 
 	/**
-	 * #23 wants a cost shown before every generation, and a repair is one. It sends the images again
-	 * under the same output ceiling, so it costs about as much as the first run. Never throws, since a
-	 * price it can't work out is still something to say next to the button.
+	 * #23 wants a cost shown before every generation, and a repair is one. It resends the images
+	 * under the same output ceiling and adds the answer being fixed and its issues, so it costs at
+	 * least as much as the first run. Never throws, since a price it can't work out is still
+	 * something to say next to the button.
 	 */
 	async function priceRepair(repair: SeedRepair): Promise<RepairEstimate> {
 		if (estimate.kind !== 'ready') return { kind: 'failed' };

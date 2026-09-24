@@ -95,7 +95,7 @@ export type SaveGeneratedVersionInput = PaidSeed & {
 };
 
 export type GenerateInput = Omit<SaveGeneratedVersionInput, keyof PaidSeed> & {
-	/** Passed in rather than read from `session-key.ts`, so this module never touches storage. */
+	/** Passed in, not read from `session-key.ts`, so this module never touches `sessionStorage`. */
 	key: string;
 	reader: AnthropicBrandReader;
 	/** Only ever set because a person asked for a repair. Nothing here builds one on its own. */

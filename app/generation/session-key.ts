@@ -2,8 +2,8 @@
  * Holds the Anthropic key for one tab's session. `sessionStorage` survives a reload and ends with
  * the tab's session, which is the lifetime #23 asks for. A tab opened from this one starts with a
  * copy, and session restore can bring one back, so this module never promises that closing the
- * tab clears the key. There is deliberately no fallback when it throws: every other place a
- * browser can keep a string outlives the session, so a fallback would quietly break the one
+ * tab clears the key. There is deliberately no fallback when `sessionStorage` throws: every other
+ * place a browser can keep a string outlives the session, so a fallback would quietly break the one
  * promise this module makes. A failed write leaves the caller holding the key in memory for
  * that one generation, and the dialog asks again next time.
  *

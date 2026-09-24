@@ -206,7 +206,7 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Anthr
 		async read(images, options) {
 			const { auth, repair, signal } = options;
 
-			// A signal already aborted costs no request, the same as a missing key doesn't.
+			// An already-aborted signal costs no request, just as a missing key doesn't.
 			throwIfCancelled(signal);
 
 			// Before the round trip, deliberately. A missing key is a failure the user can fix where
@@ -301,8 +301,9 @@ export function createAnthropicBrandReader(config: AnthropicReaderConfig): Anthr
 			// Both stop reasons are checked before the normalizer, because both can arrive holding a
 			// perfectly readable block. A refusal may carry a sentence of text, and a truncated seed is
 			// a text block of JSON cut off mid-value. The normalizer would pass either on as a seed, and
-			// the core would call it `not-json`, which #23 answers with a repair retry that cannot fix
-			// a refusal and would only run out of tokens again on a truncation.
+			// the core would call it `not-json`, which `describeFailure` answers with a repair
+			// retry. That retry can't fix a refusal, and on a truncation it would only run out of
+			// tokens again.
 			const stopReason = stopReasonFromBody(body);
 
 			if (stopReason === 'refusal') {

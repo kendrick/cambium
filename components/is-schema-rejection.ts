@@ -1,8 +1,8 @@
 /**
- * Whether a storage call failed because a record would not parse. It has two callers, one on each
- * side of storage: the landing page's read-back of a stored record, and `saveGeneratedVersion` in
- * `app/generation/generate.ts` on a commit. Sharing it keeps both sides agreed on what a schema
- * rejection is.
+ * Whether a storage call failed because a record would not parse. Its callers sit on both sides of
+ * storage: the landing and workspace routes' read-back of a stored record, and
+ * `saveGeneratedVersion` in `app/generation/generate.ts` on a commit. Sharing it keeps both sides
+ * agreed on what a schema rejection is.
  *
  * On a read, it means a row came back and would not parse.
  * `RecordStore.get` awaits the row and then runs `BrandRecordSchema.parse` on it inside one
@@ -20,7 +20,7 @@
  * ADR-0002 leaves about 5 kB in, so that is not available. Matching the class name instead was the
  * first attempt and rests on two of the library's internals at once, its error name and its
  * inheritance, either of which can move in a minor release with nothing here failing loudly.
- * Nothing else that can reach either caller's catch carries `issues`: an `idb` or IndexedDB
+ * Nothing else that can reach any caller's catch carries `issues`: an `idb` or IndexedDB
  * rejection is a `DOMException`, and the storage and workspace errors a commit can throw are
  * this repo's own `Error` subclasses, none of which has the field.
  *

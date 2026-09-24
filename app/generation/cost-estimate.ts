@@ -57,9 +57,10 @@ export function estimateGenerationCost({ images, promptChars }: CostEstimateInpu
 }
 
 /**
- * The prompt text a generation sends for these images, measured from the body itself. Pass the
- * repair for a repair run. A repair is a whole second request that resends the images and adds the
- * answer being fixed and the directive, so pricing it as a first generation would understate it.
+ * Character count of the prompt text a generation sends for these images, measured from the body
+ * itself. Pass the repair for a repair run. A repair is a whole second request that resends the
+ * images and adds the answer being fixed and the directive, so pricing it as a first generation
+ * would understate it.
  */
 export function generationPromptChars(images: ReferenceImage[], repair?: SeedRepair): number {
 	return seedRequestTextChars({

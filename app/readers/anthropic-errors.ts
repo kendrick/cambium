@@ -1,17 +1,16 @@
 /**
- * One kind per thing that went wrong, as a person holding a key would tell them apart. #23 maps
- * each to a message of its own and to one recovery: re-enter the key, retry, ask for a repair, or
- * nothing at all. Several kinds share a recovery, and the message tells the person which
- * situation they're in. Status codes are the wrong thing to branch on,
- * because 401 and 403 mean the same thing to a person holding a key, and 500 and 529 both mean
- * try later.
+ * One kind per thing that went wrong, as a person holding a key would tell them apart.
+ * `describeFailure` maps each to a message of its own and to one recovery: re-enter the key, retry,
+ * or nothing at all. Several kinds share a recovery, and the message tells the person which
+ * situation they're in. Status codes are the wrong thing to branch on, because 401 and 403 mean
+ * the same thing to a person holding a key, and 500 and 529 both mean try later.
  *
  * `network` never has a status behind it: fetch rejected before a response existed. `cancelled`
  * has one only when the abort landed after the headers arrived, and then it carries that status
- * and request id; an abort before that leaves both null. They're apart because only one of them is
- * the connection's fault, and telling somebody who pressed Cancel to check their connection would
- * be wrong. The last three all arrive as a 200, and only the body tells
- * them apart. `malformed` holds no usable content block. `refusal` and `truncated` come from
+ * and request id; an abort before that leaves both null. The two stay separate because only
+ * `network` is the connection's fault, and telling somebody who pressed Cancel to check their
+ * connection would be wrong. The last three all arrive as a 200, and only the body tells them
+ * apart. `malformed` holds no usable content block. `refusal` and `truncated` come from
  * `stop_reason`, and they need kinds of their own because their recoveries differ from a parse
  * failure's: a repair retry can't talk a safety classifier round, and a truncated seed hit
  * `max_tokens`, so asking for the same seed again hits it again.
@@ -98,8 +97,8 @@ export class AnthropicReaderError extends Error {
  * The taxonomy in #17 names the statuses the API documents, which leaves the ones it does not:
  * 404, 409, 502. An unmapped 4xx is the request being wrong, so it joins `invalid-request`.
  * Everything else, 5xx and the impossible alike, is the service failing rather than the caller, so
- * it joins `server`. Both put a wrong guess on the side that tells the user to try again instead
- * of blaming their input.
+ * it joins `server`, which tells the user to try again. `describeFailure` gives `invalid-request`
+ * no recovery, since resending a request the API rejected gets the same answer.
  */
 export function errorKindForStatus(status: number): AnthropicReaderErrorKind {
 	switch (status) {
