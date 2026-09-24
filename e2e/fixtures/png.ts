@@ -6,7 +6,7 @@ import { deflateSync } from 'node:zlib';
  * fixture failed silently instead of catching the regression it existed to guard.
  *
  * Everything here is pure bytes over `node:zlib`'s `deflateSync`, with no dependency on an image
- * decoder — `pngjs` is a devDependency the *tests* use to check these bytes from the outside;
+ * decoder—`pngjs` is a devDependency the *tests* use to check these bytes from the outside;
  * the generators themselves never import it. That split is the point: a generator that decoded
  * its own output to check it would only prove agreement with itself.
  */
@@ -72,7 +72,8 @@ function u32be(value: number): Uint8Array {
 	return out;
 }
 
-function asciiBytes(text: string): Uint8Array {
+/** ASCII bytes for a fixed-width field (a chunk type, a box brand, …); one byte per char, no encoding. */
+export function asciiBytes(text: string): Uint8Array {
 	return Uint8Array.from(text, (ch) => ch.charCodeAt(0));
 }
 

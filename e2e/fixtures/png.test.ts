@@ -17,7 +17,7 @@ function readUint32BE(bytes: Uint8Array, offset: number): number {
 	return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, false);
 }
 
-/** Walks a PNG's chunks without inflating or CRC-checking anything — pure length-prefixed framing. */
+/** Walks a PNG's chunks without inflating or CRC-checking anything—pure length-prefixed framing. */
 function walkChunks(
 	bytes: Uint8Array,
 ): Array<{ type: string; typeAndData: Uint8Array; storedCrc: number }> {
