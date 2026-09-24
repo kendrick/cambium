@@ -260,9 +260,9 @@ describe('shadowScale', () => {
 	});
 
 	/**
-	 * One token, one provenance, two ancestries. A null `shadowCharacter` still lets the tint come
-	 * from the resolved page surface, which rests on the neutral ramp and so moves with the brand
-	 * key colour; only geometry and diffusion fall back to the module constants above. A token names
+	 * One token, one provenance, two ancestries. A null `shadowCharacter` still lets the tint come from
+	 * the resolved page surface, which rests on the neutral ramp and so traces to whichever seed field
+	 * shaped it; only geometry and diffusion fall back to the module constants above. A token names
 	 * the field its value traces to rather than the field that was absent, so this is `derived`
 	 * from the surface's own trace, `neutralTemperature` when the seed stated one and `keyColors`
 	 * when it did not; the rationale carries the geometry caveat.
