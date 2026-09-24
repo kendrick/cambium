@@ -117,11 +117,11 @@ const SEED_WITH_NO_KEY_COLORS: BrandSeed = { ...FIXTURE_SEED, keyColors: null };
 
 /**
  * Writes one row straight into the `records` object store, bypassing `RecordStore` and the app's
- * own save path entirely. `open`'s dynamic import of `app/storage/indexed-db-record-store` only
- * ever calls `openDB` without a version, so this opens at the same version `DATABASE_VERSION`
- * names, `1`, and creates the store the same way `createIndexedDbRecordStore`'s `upgrade` callback
- * does, so an app-side open right after this finds a database already at the version it expects
- * rather than one negotiating a bump.
+ * own save path entirely. `createIndexedDbRecordStore` (`app/storage/indexed-db-record-store.ts`)
+ * calls `openDB(DATABASE_NAME, DATABASE_VERSION, { upgrade })`; this helper opens at the same
+ * version, `1`, mirroring `DATABASE_VERSION`, and creates the store the same way that `upgrade`
+ * callback does, so an app-side open right after this finds a database already at the version it
+ * expects rather than one negotiating a bump.
  *
  * Runs through `page.evaluate` because IndexedDB is scoped to a page's origin, not to this Node
  * process. It has to be called only once `page` already sits on the served origin, which every
@@ -129,7 +129,7 @@ const SEED_WITH_NO_KEY_COLORS: BrandSeed = { ...FIXTURE_SEED, keyColors: null };
  * already navigated there and back before the scenario body starts.
  *
  * Takes `unknown` rather than `BrandRecord`, so a caller can write a row `BrandRecordSchema` would
- * reject — the schema-failing-row scenario needs exactly that, to reach `get`'s own
+ * reject—the schema-failing-row scenario needs exactly that, to reach `get`'s own
  * `BrandRecordSchema.parse` on the way out and prove it rejects.
  */
 async function writeIndexedDbRow(page: Page, value: unknown): Promise<void> {
@@ -299,7 +299,7 @@ test('a seed with no key colors renders the token list error branch, distinct fr
 	// `components/workspace/token-list.tsx`'s `!derived.ok` branch is the only one of its three
 	// that puts a `<code>` element inside the Tokens region: the no-seed branch is a bare `<p>`,
 	// and the success branch has no `<code>` at all. Structure, not the error kind's own text, is
-	// what tells this branch apart from "no seed yet" — both render one paragraph of copy.
+	// what tells this branch apart from "no seed yet"—both render one paragraph of copy.
 	await expect(tokensSection.locator('code')).toBeVisible();
 	await expect(tokensSection.getByRole('listitem')).toHaveCount(0);
 });
@@ -370,7 +370,7 @@ test('switching the interpretation preset re-derives tokens and makes no network
 	// guessed duration. The listener above has been attached since before the first switch, so
 	// reading its count after this one covers both switches, the whole of what this scenario does
 	// to the store. What it still cannot see is a request slow enough to arrive after this test has
-	// already finished — this closes the gap a 300 ms guess left, not every gap there is.
+	// already finished—this closes the gap a 300 ms guess left, not every gap there is.
 	await page.getByLabel('Interpretation').selectOption('balanced');
 	await expect(page.getByLabel('Interpretation')).toHaveValue('balanced');
 
@@ -403,7 +403,8 @@ test('a workspace pointed at a row that fails BrandRecordSchema reports the unre
 
 	// Written straight into the object store rather than through `seedWorkspaceRecord`, which
 	// parses first: this row has to reach `RecordStore.get`'s own `BrandRecordSchema.parse` and
-	// fail there. `schemaVersion: 1` predates `revision`, which `BrandRecordSchema` now requires.
+	// fail there. It supplies `revision`, so that's not what trips the schema; `schemaVersion` is a
+	// `z.literal(SCHEMA_VERSION)`, and `1` is a version the schema has moved past.
 	await writeIndexedDbRow(page, {
 		id,
 		schemaVersion: 1,
@@ -420,16 +421,18 @@ test('a workspace pointed at a row that fails BrandRecordSchema reports the unre
 test('a workspace that cannot open its database at all reports the unavailable outcome', async ({
 	page,
 }) => {
-	// `open`'s dynamic import calls `openDB(DATABASE_NAME, 1)`. Opening the same database at a
-	// higher version first, ahead of that call, bumps the version IndexedDB has on record for this
-	// origin — a fact storage keeps, not a fact this connection holds. The connection itself does
-	// not need to outlive this call, and does not: `page.goto` below replaces the document, which
-	// tears down the JS heap this closure ran in along with any object it stashed on `window`, so
-	// it is closed here explicitly instead. What survives the navigation is the version number.
-	// `WorkspaceRoute`'s own `openDB(DATABASE_NAME, 1)` then asks to open at a version lower than
-	// the one storage now has on record, which the spec refuses; the refusal is a `VersionError`
-	// delivered as an async `error` event on the request, not a synchronous throw, so `RecordStore`
-	// only sees it once its own promise wrapper's `error` listener fires.
+	// `WorkspaceRoute`'s dynamic import calls `createIndexedDbRecordStore`, which opens at
+	// `DATABASE_VERSION`, `1`. Opening the same database at a higher version first, ahead of that
+	// call, bumps the version IndexedDB has on record for this origin—a fact storage keeps, not a
+	// fact this connection holds. The connection itself does not need to outlive this call, and does
+	// not: `page.goto` below replaces the document, which tears down the JS heap this closure ran in
+	// along with any object it stashed on `window`, so it is closed here explicitly instead. What
+	// survives the navigation is the version number. `createIndexedDbRecordStore`'s own `openDB`
+	// call then asks to open at a version lower than the one storage now has on record, which the
+	// spec refuses; the refusal is a `VersionError` delivered as an async `error` event on the
+	// request, not a synchronous throw, so it rejects `createIndexedDbRecordStore`'s promise instead
+	// of throwing into its caller directly, and `WorkspaceRoute`'s outer `catch` is what turns that
+	// rejection into `unavailable`.
 	await page.evaluate(async (databaseName) => {
 		const request = indexedDB.open(databaseName, 2);
 		await new Promise<void>((resolve, reject) => {
@@ -466,17 +469,17 @@ test('opening record A then client-navigating to record B shows only B, never a 
 	// `history.pushState` rather than `page.goto`, because a `goto` is a hard navigation that
 	// remounts `WorkspaceRoute` and starts `loaded` over at null, which can never expose the bug:
 	// the render guard only matters while `loaded` still holds a previous record's result. Next.js's
-	// app router patches `window.history.pushState` for exactly this — see the comment above
-	// `patchHistoryMethod` in `next/dist/client/components/app-router.js` — specifically so an
+	// app router patches `window.history.pushState` for exactly this—see the comment above
+	// `patchHistoryMethod` in `next/dist/client/components/app-router.js`—specifically so an
 	// external call like this one is picked up as a client-side navigation, `useSearchParams()`
 	// included, the same as a same-page `<Link>` click would be.
 	//
 	// The mutant under test drops the `loaded?.id === recordId` guard to `loaded ? loaded.result :
-	// ...`. Losing the id check does not change what the very next render paints — `WorkspaceRoute`'s
+	// ...`. Losing the id check does not change what the very next render paints—`WorkspaceRoute`'s
 	// own re-render still has to reach the DOM before either build can differ. The two diverge from
 	// that render on: a correct build has already moved to the loading state, since `loaded.id` (A)
-	// no longer matches `recordId` (B), while the mutant keeps painting `loaded.result` — A's
-	// already-resolved, still-non-null seed — for as long as record B's own open stays unresolved.
+	// no longer matches `recordId` (B), while the mutant keeps painting `loaded.result`—A's
+	// already-resolved, still-non-null seed—for as long as record B's own open stays unresolved.
 	// Arming the hold and pushing the new URL happen in the one call, so record B's effect (which
 	// only runs once `recordId` changes) has no gap in which to slip past an unarmed hold.
 	await page.evaluate(
@@ -497,7 +500,7 @@ test('opening record A then client-navigating to record B shows only B, never a 
 	// Held here for as long as this assertion's own retries choose to wait: record B's open cannot
 	// resolve until `release` runs below, so a correct build's loading state (no `<dl>` at all) and
 	// the mutant's stale render of A (a `<dl>` that never goes away on its own) stay exactly as they
-	// are — nothing to race, because nothing changes until the test says so.
+	// are—nothing to race, because nothing changes until the test says so.
 	await expect(page.locator('dl')).toHaveCount(0);
 
 	await page.evaluate(() => {
@@ -639,7 +642,7 @@ test('a saved record links to its workspace, which opens reporting no versions y
 	await expect(page).toHaveURL(new RegExp(`${RECORD_PARAM}=${savedId}$`));
 
 	// Absence alone also passes while `WorkspaceRoute` is still on its loading state, or never
-	// resolves at all — nothing below is `<dl>`, a token row, or a `<details>` either. This asserts
+	// resolves at all—nothing below is `<dl>`, a token row, or a `<details>` either. This asserts
 	// the shell itself actually mounted for this record before reading what it left out: the rail
 	// is the structural marker `components/workspace/shell.tsx` always renders once a record loads,
 	// with or without versions.

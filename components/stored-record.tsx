@@ -20,7 +20,7 @@ export const RECORD_PARAM = 'record';
 /**
  * Re-exported from `./is-schema-rejection` so every existing `@/components/stored-record` import
  * site keeps working. The function itself lives there, in a plain `.ts` module, so its unit test
- * can import it without pulling in this file's `next/link` — see that module's docblock.
+ * can import it without pulling in this file's `next/link`—see that module's docblock.
  */
 export { isSchemaRejection };
 
