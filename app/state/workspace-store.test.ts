@@ -6,7 +6,9 @@ import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/
 import type { BrandSeed } from '../../core/brand-seed';
 import { BALANCED } from '../../core/interpretation';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
-import type { ScaleEngine, ScaleEngineResult } from '../../core/scale-engine';
+import type { RampSet, ScaleEngine, ScaleEngineResult } from '../../core/scale-engine';
+import { overrideKey, type TokenOverride } from '../../core/token-overrides';
+import type { TokenSet } from '../../core/token-set';
 import { createInMemoryRecordStore } from '../storage/in-memory-record-store';
 import type { RecordStore } from '../storage/record-store';
 import { StorageQuotaExceededError } from '../storage/storage-estimate';
@@ -15,6 +17,7 @@ import {
 	CommitAbandonedError,
 	type CommitProvenance,
 	createWorkspaceStore,
+	OverrideRejectedError,
 	RecordStampedAheadError,
 	StaleWorkspaceError,
 } from './workspace-store';
@@ -900,5 +903,281 @@ describe('the workspace store', () => {
 
 		expect(state.record).toBe(record);
 		expect(state.activeOrdinal).toBe(1);
+	});
+});
+
+/** `border` derives to `neutral.6` in both schemes, so any other step reads as the override. */
+const BORDER_TO_8: TokenOverride = {
+	kind: 'alias',
+	scheme: 'light',
+	token: 'border',
+	alias: 'neutral.8',
+};
+
+function borderAlias(tokenSet: TokenSet | null): { mirror?: string; light?: string } {
+	return {
+		mirror: tokenSet?.semantic.border?.alias,
+		light: tokenSet?.schemes.light.semantic.border?.alias,
+	};
+}
+
+function withSpare(ramps: RampSet): RampSet {
+	return { ...ramps, spare: ramps.brand } as RampSet;
+}
+
+/**
+ * The real engine, plus a `spare` ramp copied from `brand` whenever the seed's hue is 30. No real
+ * seed changes which ramps exist today, so this is the only way to hold an override that applied
+ * against one base and has no target on the next.
+ */
+function reshapingEngine(): ScaleEngine {
+	const real = createOklchScaleEngine();
+
+	return {
+		id: real.id,
+		generate(seed, params) {
+			const result = real.generate(seed, params);
+
+			if (!result.ok || seed.keyColors?.[0]?.oklch[2] !== 30) {
+				return result;
+			}
+
+			return {
+				...result,
+				schemes: { light: withSpare(result.schemes.light), dark: withSpare(result.schemes.dark) },
+			};
+		},
+	};
+}
+
+describe('the workspace store’s token set and overrides', () => {
+	it('builds the token set from the same derivation, and rebuilds it when the seed changes', () => {
+		const { store } = openWorkspace();
+
+		expect(store.getState().tokenSet?.primitives.brand[8]!.h).toBe(
+			brandHue(store.getState().derived),
+		);
+
+		store.getState().editSeed({ keyColors: seedWith(30).keyColors });
+
+		expect(store.getState().tokenSet?.primitives.brand[8]!.h).toBe(
+			brandHue(store.getState().derived),
+		);
+		expect(store.getState().tokenSet?.primitives.brand[8]!.h).toBeCloseTo(30, 0);
+	});
+
+	it('holds no token set when nothing is derived, and refuses an override there', () => {
+		const { store } = openWorkspace(makeRecord([]));
+
+		expect(store.getState().tokenSet).toBeNull();
+		expect(() => store.getState().setOverride(BORDER_TO_8)).toThrow(/nothing is derived/);
+		expect(store.getState().overrides).toEqual({});
+	});
+
+	it('applies an override to the light scheme and its mirror, and holds it by key', () => {
+		const { store } = openWorkspace();
+
+		store.getState().setOverride(BORDER_TO_8);
+
+		expect(borderAlias(store.getState().tokenSet)).toEqual({
+			mirror: 'neutral.8',
+			light: 'neutral.8',
+		});
+		expect(store.getState().overrides).toEqual({ [overrideKey(BORDER_TO_8)]: BORDER_TO_8 });
+		expect(store.getState().overrideIssues).toEqual({});
+	});
+
+	it('replaces an earlier override on the same token', () => {
+		const { store } = openWorkspace();
+
+		store.getState().setOverride(BORDER_TO_8);
+		store.getState().setOverride({ ...BORDER_TO_8, alias: 'neutral.3' });
+
+		expect(Object.keys(store.getState().overrides)).toHaveLength(1);
+		expect(borderAlias(store.getState().tokenSet).light).toBe('neutral.3');
+	});
+
+	it('refuses an override the derived set cannot take, and changes nothing', () => {
+		const { store } = openWorkspace();
+
+		store.getState().setOverride(BORDER_TO_8);
+
+		const before = store.getState();
+		const invalid: TokenOverride = { ...BORDER_TO_8, token: 'ring', alias: 'neutral.13' };
+		let thrown: unknown;
+
+		try {
+			store.getState().setOverride(invalid);
+		} catch (error) {
+			thrown = error;
+		}
+
+		expect(thrown).toBeInstanceOf(OverrideRejectedError);
+		expect(thrown).toMatchObject({ kind: 'override-rejected', key: overrideKey(invalid) });
+		expect((thrown as OverrideRejectedError).issues.length).toBeGreaterThan(0);
+		expect(store.getState()).toBe(before);
+	});
+
+	it('keeps an overridden alias across a preset switch, on a token set rebuilt for that preset', () => {
+		const { store, engine } = openWorkspace();
+
+		store.getState().setOverride(BORDER_TO_8);
+
+		const before = store.getState().tokenSet;
+		const derivations = engine.generate.mock.calls.length;
+
+		store.getState().selectPreset('expressive');
+
+		// All three presets share Balanced's numbers until #37, so a rebuilt set is otherwise equal
+		// to the old one. Identity and the engine call are what show it was rebuilt at all.
+		expect(engine.generate.mock.calls.length).toBe(derivations + 1);
+		expect(store.getState().tokenSet).not.toBe(before);
+		expect(borderAlias(store.getState().tokenSet)).toEqual({
+			mirror: 'neutral.8',
+			light: 'neutral.8',
+		});
+		expect(store.getState().overrides).toEqual({ [overrideKey(BORDER_TO_8)]: BORDER_TO_8 });
+	});
+
+	it('keeps overrides across a seed edit while the rest of the set follows the new seed', () => {
+		const { store } = openWorkspace();
+		const primitive: TokenOverride = {
+			kind: 'primitive',
+			scheme: 'light',
+			ramp: 'brand',
+			step: 3,
+			l: 0.5,
+			c: 0.1,
+			h: 120,
+		};
+
+		store.getState().setOverride(BORDER_TO_8);
+		store.getState().setOverride(primitive);
+		store.getState().editSeed({ keyColors: seedWith(30).keyColors });
+
+		const { tokenSet } = store.getState();
+
+		expect(tokenSet?.primitives.brand[8]!.h).toBeCloseTo(30, 0);
+		expect(tokenSet?.primitives.brand[2]).toMatchObject({ step: 3, l: 0.5, c: 0.1, h: 120 });
+		expect(borderAlias(tokenSet).light).toBe('neutral.8');
+	});
+
+	it('keeps overrides when a commit adopts storage’s spelling of the seed', async () => {
+		const { store } = openWorkspace();
+
+		store.getState().setOverride(BORDER_TO_8);
+		store.getState().editSeed({ keyColors: seedWith(360).keyColors });
+		await store.getState().commit(PROVENANCE);
+
+		// The hue came back as 0, so the adopting branch re-derived. The override has to ride through.
+		expect(store.getState().draftSeed?.keyColors?.[0]?.oklch[2]).toBe(0);
+		expect(borderAlias(store.getState().tokenSet).light).toBe('neutral.8');
+	});
+
+	it('commits no token set, so an override never reaches storage', async () => {
+		const { store, recordStore } = openWorkspace();
+
+		store.getState().setOverride(BORDER_TO_8);
+		store.getState().editSeed({ keyColors: seedWith(30).keyColors });
+		await store.getState().commit(PROVENANCE);
+
+		const written = recordStore.puts.at(-1)!.versions.at(-1)!;
+
+		expect(written.tokenSet).toBeNull();
+		expect(written.seed).toEqual(seedWith(30));
+	});
+
+	const twoVersions = () =>
+		makeRecord([
+			makeVersion(),
+			makeVersion({ createdAt: '2026-02-01T00:00:00.000Z', ordinal: 2, seed: seedWith(200) }),
+		]);
+
+	it.each([
+		[
+			'open',
+			(s: ReturnType<typeof openWorkspace>['store'], r: BrandRecord) => s.getState().open(r),
+		],
+		[
+			'selectVersion',
+			(s: ReturnType<typeof openWorkspace>['store']) => s.getState().selectVersion(1),
+		],
+		['discardEdits', (s: ReturnType<typeof openWorkspace>['store']) => s.getState().discardEdits()],
+	])('drops overrides on %s and shows the derived value again', (_name, act) => {
+		const record = twoVersions();
+		const { store } = openWorkspace(record);
+
+		store.getState().setOverride(BORDER_TO_8);
+		act(store, record);
+
+		expect(store.getState().overrides).toEqual({});
+		expect(store.getState().overrideIssues).toEqual({});
+		expect(borderAlias(store.getState().tokenSet)).toEqual({
+			mirror: 'neutral.6',
+			light: 'neutral.6',
+		});
+	});
+
+	it('drops overrides and the token set on close', () => {
+		const { store } = openWorkspace();
+
+		store.getState().setOverride(BORDER_TO_8);
+		store.getState().close();
+
+		expect(store.getState().overrides).toEqual({});
+		expect(store.getState().tokenSet).toBeNull();
+	});
+
+	it('clears one override back to the derived value and leaves the others', () => {
+		const { store } = openWorkspace();
+		const ring: TokenOverride = { ...BORDER_TO_8, token: 'ring', alias: 'brand.9' };
+
+		store.getState().setOverride(BORDER_TO_8);
+		store.getState().setOverride(ring);
+		store.getState().clearOverride(overrideKey(BORDER_TO_8));
+
+		expect(borderAlias(store.getState().tokenSet).light).toBe('neutral.6');
+		expect(store.getState().tokenSet?.semantic.ring?.alias).toBe('brand.9');
+		expect(store.getState().overrides).toEqual({ [overrideKey(ring)]: ring });
+	});
+
+	it('treats clearing a key nothing holds as a no-op', () => {
+		const { store } = openWorkspace();
+		const before = store.getState();
+
+		store.getState().clearOverride(overrideKey(BORDER_TO_8));
+
+		expect(store.getState()).toBe(before);
+	});
+
+	it('keeps an override the new base rejects, applies the rest, and reapplies it once it fits', () => {
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed: seedWith(30) })]), {
+			engine: reshapingEngine(),
+		});
+		const toSpare: TokenOverride = { ...BORDER_TO_8, token: 'ring', alias: 'spare.11' };
+
+		store.getState().setOverride(toSpare);
+		store.getState().setOverride(BORDER_TO_8);
+
+		// No spare ramp at this hue. The edit has to land, not throw, and the override stays held.
+		store.getState().editSeed({ keyColors: seedWith(259.8).keyColors });
+
+		let state = store.getState();
+
+		expect(state.draftSeed?.keyColors?.[0]?.oklch[2]).toBe(259.8);
+		expect(Object.keys(state.overrides)).toEqual([overrideKey(toSpare), overrideKey(BORDER_TO_8)]);
+		expect(Object.keys(state.overrideIssues)).toEqual([overrideKey(toSpare)]);
+		expect(state.tokenSet?.semantic.ring?.alias).toBe('brand.11');
+		expect(borderAlias(state.tokenSet).light).toBe('neutral.8');
+
+		// A held override the base rejects must not block an unrelated edit.
+		store.getState().setOverride({ ...BORDER_TO_8, alias: 'neutral.5' });
+		expect(borderAlias(store.getState().tokenSet).light).toBe('neutral.5');
+
+		store.getState().editSeed({ keyColors: seedWith(30).keyColors });
+		state = store.getState();
+
+		expect(state.overrideIssues).toEqual({});
+		expect(state.tokenSet?.semantic.ring?.alias).toBe('spare.11');
 	});
 });

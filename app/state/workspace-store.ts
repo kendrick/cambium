@@ -4,6 +4,14 @@ import type { BrandRecord, BrandVersion } from '../../core/brand-record';
 import type { BrandSeed } from '../../core/brand-seed';
 import { type ScaleEngine, type ScaleEngineResult } from '../../core/scale-engine';
 import { BALANCED, type InterpretationParams } from '../../core/interpretation';
+import { buildTokenSet } from '../../core/semantic-layer';
+import {
+	applyOverrides,
+	type OverrideIssue,
+	overrideKey,
+	type TokenOverride,
+} from '../../core/token-overrides';
+import type { TokenSet } from '../../core/token-set';
 import type { RecordStore } from '../storage/record-store';
 
 export type Interpretation = BrandVersion['interpretation'];
@@ -127,6 +135,26 @@ export class StaleWorkspaceError extends Error {
 }
 
 /**
+ * Thrown when `setOverride` is handed an override the derived set cannot take, such as an alias to
+ * a step outside its ramp. Nothing is stored.
+ *
+ * Typed because a person at a control supplied the value, and the list has to mark that control
+ * and say why. `key` and `issues` carry both, so no caller parses the message.
+ */
+export class OverrideRejectedError extends Error {
+	readonly kind = 'override-rejected';
+	readonly key: string;
+	readonly issues: OverrideIssue[];
+
+	constructor(key: string, issues: OverrideIssue[], options?: { cause?: unknown }) {
+		super(`override ${key} does not apply: ${issues.map((i) => i.message).join('; ')}`, options);
+		this.name = 'OverrideRejectedError';
+		this.key = key;
+		this.issues = issues;
+	}
+}
+
+/**
  * A commit frozen at the moment it was requested: what the new version holds, plus the two counters
  * that decide afterwards whether the finished write still belongs to the workspace on screen.
  * `session` and `selection` are bookkeeping and reach no stored field.
@@ -150,8 +178,8 @@ export type WorkspaceState = {
 	 * After a commit the workspace adopts, this is the record `RecordStore.put` resolved with, so it
 	 * matches what storage holds. The record this store proposed would not: `put` stamps the revision,
 	 * and `BrandSeedSchema` canonicalises values that have two spellings, so a hue committed as 360
-	 * comes back as 0 and is held here as 0. Adopting what `put` returns keeps zod out of every client
-	 * chunk that touches this store and saves a `get` after every write.
+	 * comes back as 0 and is held here as 0. Adopting what `put` returns saves a `get` after every
+	 * write.
 	 *
 	 * `open` takes whatever record the caller hands it, so what this holds before the first commit
 	 * is only as current as that record.
@@ -171,6 +199,30 @@ export type WorkspaceState = {
 	 * is pure arithmetic, so caching it in a record would only create a second thing to keep true.
 	 */
 	derived: ScaleEngineResult | null;
+	/**
+	 * The user's edits on top of the derived set, keyed by `overrideKey`, in the order they were first
+	 * made. Draft state like `draftSeed`: `editSeed` and `selectPreset` keep them, and everything that
+	 * resets the draft to a version (`open`, `close`, `selectVersion`, `discardEdits`) drops them.
+	 *
+	 * Never persisted. `commit` writes `tokenSet: null` whatever is held here, so a committed version
+	 * does not carry them; persisting overrides is a follow-up to #26 and a schema change.
+	 */
+	overrides: Record<string, TokenOverride>;
+	/**
+	 * `derived` built into a full token set with `overrides` applied, recomputed wherever `derived`
+	 * is. Null whenever `derived` is null or not ok, since there are no ramps to build from.
+	 */
+	tokenSet: TokenSet | null;
+	/**
+	 * Held overrides the current derivation rejects, keyed like `overrides`. Empty unless a seed edit
+	 * or preset switch moved the base out from under an override that applied when it was set.
+	 *
+	 * The engine emits the same ramp names and token paths for every seed today, so this stays empty
+	 * with the real engine. If a future base does change shape, the store skips the override it can't
+	 * apply, keeps it in `overrides`, and applies it again once the base can take it. `editSeed`
+	 * doesn't throw, and nothing the user set is deleted.
+	 */
+	overrideIssues: Record<string, OverrideIssue[]>;
 
 	open(record: BrandRecord): void;
 	close(): void;
@@ -180,6 +232,13 @@ export type WorkspaceState = {
 	selectPreset(preset: Interpretation): void;
 	discardEdits(): void;
 	commit(provenance?: CommitProvenance): Promise<BrandRecord>;
+	/**
+	 * Replaces any override on the same target. Throws `OverrideRejectedError` and changes nothing
+	 * when the derived set cannot take it, and a bare `Error` when nothing is derived to override.
+	 */
+	setOverride(override: TokenOverride): void;
+	/** A key nothing holds is a no-op, so a stale control cannot throw. */
+	clearOverride(key: string): void;
 };
 
 export type WorkspaceStoreOptions = {
@@ -199,6 +258,13 @@ export type WorkspaceStoreOptions = {
 	 * `pnpm test:bundle` cannot answer it either way. The landing route is a Server Component today,
 	 * so the engine runs at build time, reaches no client chunk, and the budget stays green no matter
 	 * what this file imports. The guard is the import list, in `workspace-store.test.ts`.
+	 *
+	 * The numbers above were measured before this store built `tokenSet`. Building it imports
+	 * `core/semantic-layer.ts`, which reaches culori through `core/oklch.ts`, and
+	 * `core/token-overrides.ts`, which reaches zod, so this module pulls in both libraries whichever
+	 * engine it gets. `components/workspace/workspace-route.tsx` loads the store lazily, beside the
+	 * engine and storage chunks that bring the same two libraries, so that route pays nothing extra.
+	 * A client component that imports the store statically pays for both in first-load.
 	 */
 	engine: ScaleEngine;
 	now?: () => string;
@@ -209,10 +275,10 @@ export type WorkspaceStoreOptions = {
  * record with no generated version starts from, and it means `editSeed` needs no separate "first
  * edit" path.
  *
- * Written out rather than built from `BrandSeedSchema.shape`, which would have been shorter and
- * would have cost 93 kB: importing the schema for its keys pulls zod into every client chunk that
- * reaches this store. `BrandSeed` is inferred from that schema, so a field added upstream fails
- * this literal at typecheck, which is the drift the schema version was guarding against anyway.
+ * Written out rather than built from `BrandSeedSchema.shape`. This store reaches zod through
+ * `core/token-overrides.ts` either way, and `BrandSeed` is inferred from that schema, so a field
+ * added upstream fails this literal at typecheck, which is the drift the schema version was
+ * guarding against anyway.
  */
 const EMPTY_SEED: BrandSeed = {
 	keyColors: null,
@@ -236,6 +302,67 @@ function derive(
 	return seed ? engine.generate(seed, PRESET_PARAMS[preset]) : null;
 }
 
+type Derivation = Pick<WorkspaceState, 'derived' | 'tokenSet' | 'overrideIssues'>;
+
+/**
+ * Applies each override on its own so one the base rejects is skipped and reported rather than
+ * failing the rest. `applyOverrides` stops at the first failure, which is right for validating one
+ * new edit and wrong for re-applying a set the user built up against an older base.
+ */
+function withOverrides(
+	base: TokenSet,
+	overrides: Record<string, TokenOverride>,
+): Pick<WorkspaceState, 'tokenSet' | 'overrideIssues'> {
+	let tokenSet = base;
+	const overrideIssues: Record<string, OverrideIssue[]> = {};
+
+	for (const override of Object.values(overrides)) {
+		const result = applyOverrides(tokenSet, [override]);
+
+		if (result.ok) {
+			tokenSet = result.tokenSet;
+		} else {
+			overrideIssues[result.key] = result.issues;
+		}
+	}
+
+	return { tokenSet, overrideIssues };
+}
+
+/**
+ * With no overrides, this returns the built set without parsing it. `applyOverrides` runs
+ * `TokenSetSchema` twice per override and a seed edit re-derives on every keystroke, so only a
+ * workspace holding overrides pays for the parse.
+ */
+function tokensFor(
+	derived: ScaleEngineResult | null,
+	seed: BrandSeed | null,
+	preset: Interpretation,
+	overrides: Record<string, TokenOverride>,
+): Pick<WorkspaceState, 'tokenSet' | 'overrideIssues'> {
+	if (!seed || !derived?.ok) {
+		return { tokenSet: null, overrideIssues: {} };
+	}
+
+	const base = buildTokenSet(derived.schemes, seed, PRESET_PARAMS[preset]);
+
+	return Object.keys(overrides).length === 0
+		? { tokenSet: base, overrideIssues: {} }
+		: withOverrides(base, overrides);
+}
+
+/** Every place that re-derives goes through here, so `tokenSet` cannot fall behind `derived`. */
+function derivation(
+	engine: ScaleEngine,
+	seed: BrandSeed | null,
+	preset: Interpretation,
+	overrides: Record<string, TokenOverride>,
+): Derivation {
+	const derived = derive(engine, seed, preset);
+
+	return { derived, ...tokensFor(derived, seed, preset, overrides) };
+}
+
 /**
  * The three fields a version dictates, in one piece. Opening a record, switching versions,
  * discarding edits, and closing all land on the same answer, and splitting it across four call
@@ -246,11 +373,13 @@ function derive(
 function workspaceFor(
 	engine: ScaleEngine,
 	version: BrandVersion | null,
-): Pick<WorkspaceState, 'draftSeed' | 'preset' | 'derived'> {
+): Pick<WorkspaceState, 'draftSeed' | 'preset' | 'overrides'> & Derivation {
 	const draftSeed = version?.seed ?? null;
 	const preset = version?.interpretation ?? 'balanced';
 
-	return { draftSeed, preset, derived: derive(engine, draftSeed, preset) };
+	// Overrides are edits to the draft, so landing on a version drops them with the rest of the
+	// draft. Keeping them would apply one version's edits to another version's tokens.
+	return { draftSeed, preset, overrides: {}, ...derivation(engine, draftSeed, preset, {}) };
 }
 
 function versionAt(record: BrandRecord, ordinal: number | null): BrandVersion | null {
@@ -491,7 +620,10 @@ export function createWorkspaceStore({
 						record: next,
 						activeOrdinal: version.ordinal,
 						...(adopted
-							? { draftSeed: adopted, derived: derive(engine, adopted, get().preset) }
+							? {
+									draftSeed: adopted,
+									...derivation(engine, adopted, get().preset, get().overrides),
+								}
 							: {}),
 					});
 				}
@@ -561,6 +693,9 @@ export function createWorkspaceStore({
 			draftSeed: null,
 			preset: 'balanced',
 			derived: null,
+			overrides: {},
+			tokenSet: null,
+			overrideIssues: {},
 
 			open(record) {
 				// The last version is the current one—`BrandRecordSchema` guarantees the array runs
@@ -589,17 +724,54 @@ export function createWorkspaceStore({
 			},
 
 			editSeed(patch) {
-				const { draftSeed, preset } = get();
+				const { draftSeed, preset, overrides } = get();
 				const next = { ...(draftSeed ?? EMPTY_SEED), ...patch };
 
 				// No storage write. An edit is uncommitted by definition, and derivation is cheap enough
 				// to run on every keystroke, which is the whole reason tokens are not stored.
-				set({ draftSeed: next, derived: derive(engine, next, preset) });
+				set({ draftSeed: next, ...derivation(engine, next, preset, overrides) });
 			},
 
 			selectPreset(preset) {
-				const { draftSeed } = get();
-				set({ preset, derived: derive(engine, draftSeed, preset) });
+				const { draftSeed, overrides } = get();
+				set({ preset, ...derivation(engine, draftSeed, preset, overrides) });
+			},
+
+			setOverride(override) {
+				const { draftSeed, preset, derived, overrides } = get();
+
+				if (!draftSeed || !derived?.ok) {
+					throw new Error('nothing is derived to override');
+				}
+
+				const key = overrideKey(override);
+				const next = { ...overrides, [key]: override };
+				// The ramps don't depend on overrides, so the derivation already held is reused rather than
+				// running the engine again for an edit that cannot change it.
+				const result = tokensFor(derived, draftSeed, preset, next);
+				const issues = result.overrideIssues[key];
+
+				// Only the new override's own failure refuses the call. One already held and already
+				// rejected by this base stays reported in `overrideIssues`, and blocking every other edit
+				// on it would leave the user unable to change anything until they found it.
+				if (issues) {
+					throw new OverrideRejectedError(key, issues);
+				}
+
+				set({ overrides: next, ...result });
+			},
+
+			clearOverride(key) {
+				const { draftSeed, preset, derived, overrides } = get();
+
+				if (!Object.hasOwn(overrides, key)) {
+					return;
+				}
+
+				const next = { ...overrides };
+				delete next[key];
+
+				set({ overrides: next, ...tokensFor(derived, draftSeed, preset, next) });
 			},
 
 			discardEdits() {
