@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 import { toOklchCss } from '../../../core/css/oklch-css';
 import { CAMBIUM_NAMESPACE } from '../../../core/provenance';
 import type { OverrideIssue, SchemeName, TokenOverride } from '../../../core/token-overrides';
@@ -43,6 +45,7 @@ export function PrimitiveRow({
 	const overridden = Object.hasOwn(overrides, key);
 	const { fieldIssues, settle, clear } = useFieldIssues();
 	const heldIssues = issuesFor(key);
+	const [resetGeneration, setResetGeneration] = useState(0);
 
 	const withChannel = (channel: (typeof CHANNELS)[number], value: number): TokenOverride => ({
 		kind: 'primitive',
@@ -64,6 +67,7 @@ export function PrimitiveRow({
 				overridden
 					? () => {
 							clear();
+							setResetGeneration((generation) => generation + 1);
 							onReset(key);
 						}
 					: undefined
@@ -72,10 +76,12 @@ export function PrimitiveRow({
 		>
 			{CHANNELS.map((channel) => (
 				<label
-					// Keyed on the committed value, not just the channel, so a reset or an override applied
-					// elsewhere (a preset switch, another control) remounts the input with the new truth
-					// instead of an uncontrolled `defaultValue` going stale under it.
-					key={`${channel}:${step[channel]}`}
+					// Keyed on the committed value, not just the channel, so an override applied elsewhere
+					// (a preset switch, another control) remounts the input with the new truth instead of an
+					// uncontrolled `defaultValue` going stale under it. The reset generation covers what the
+					// value can't: a refused edit never moved its channel's committed value, so without it a
+					// reset would clear the issue and leave the refused text sitting in the field.
+					key={`${channel}:${step[channel]}:${resetGeneration}`}
 					className="flex items-center gap-1 text-xs"
 				>
 					{channel.toUpperCase()}

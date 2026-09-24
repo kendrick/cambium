@@ -42,6 +42,10 @@ export function TokenRow({
 	children: ReactNode;
 }) {
 	const [expanded, setExpanded] = useState(false);
+	// A light-scheme edit is checked against the scheme and the top-level copy that mirrors it, so
+	// the store refuses it once per copy under two paths with one message. The reader needs the
+	// message, not the copy count, so the row lists each distinct message once.
+	const messages = [...new Set((issues ?? []).map((issue) => issue.message))];
 
 	return (
 		<li
@@ -104,10 +108,10 @@ export function TokenRow({
 				) : null}
 			</div>
 
-			{issues && issues.length > 0 ? (
+			{messages.length > 0 ? (
 				<ul data-issues className="text-destructive text-xs">
-					{issues.map((issue) => (
-						<li key={`${issue.path.join('.')}:${issue.message}`}>{issue.message}</li>
+					{messages.map((message) => (
+						<li key={message}>{message}</li>
 					))}
 				</ul>
 			) : null}

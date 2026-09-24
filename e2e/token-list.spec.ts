@@ -11,7 +11,7 @@ import {
 	SCHEMA_VERSION,
 } from '../core/brand-record';
 import type { BrandSeed } from '../core/brand-seed';
-import { toOklchCss } from '../core/css/oklch-css';
+import { serializeDtcg } from '../core/dtcg/serialize';
 import { BALANCED } from '../core/interpretation';
 import { createOklchScaleEngine } from '../core/oklch-scale-engine';
 import { CAMBIUM_NAMESPACE } from '../core/provenance';
@@ -98,6 +98,104 @@ const EXPECTED_ROWS: Record<(typeof NON_COLOUR_CATEGORIES)[number], number> = {
 	tracking: 5,
 	shadow: 5,
 };
+
+/** What one row should show, read off the DTCG export rather than off the token set's own shape. */
+type ExportedRow = {
+	/** A semantic row's alias as its `<select>` holds it, or every number a row's inputs hold. */
+	values: (number | string)[];
+	provenance: string;
+};
+
+function numbersIn(value: unknown): number[] {
+	if (typeof value === 'number') return [value];
+	if (typeof value !== 'object' || value === null) return [];
+	return Object.values(value).flatMap(numbersIn);
+}
+
+/**
+ * How many times each value occurs. Two tallies are equal when the lists hold the same values the
+ * same number of times in any order, which is the comparison a row's controls need: the inputs
+ * follow no order the export promises, and a repeated row or a dropped input changes a count.
+ */
+function tally<T>(values: Iterable<T>): Map<T, number> {
+	const counts = new Map<T, number>();
+	for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+	return counts;
+}
+
+/**
+ * Every row the light scheme should render, keyed by the list's `data-token` id and built from
+ * `serializeDtcg`'s light document. The list finds its tokens by walking to each `$extensions`;
+ * the export finds them by where DTCG puts a `$value`, so the two only agree when the list shows
+ * exactly the tokens a consumer of the export would read. Every number under a `$value` is one
+ * input's worth: a shadow's four lengths plus its colour's three components and alpha, an easing's
+ * four, a dimension's one. The strings beside them (`unit`, `hex`, `colorSpace`) aren't editable.
+ */
+const EXPORTED_ROWS: ReadonlyMap<string, ExportedRow> = (() => {
+	const rows = new Map<string, ExportedRow>();
+
+	function visit(node: unknown, path: string[]): void {
+		if (typeof node !== 'object' || node === null) return;
+
+		const record = node as Record<string, unknown>;
+
+		if (!Object.hasOwn(record, '$value')) {
+			for (const [key, child] of Object.entries(record)) {
+				if (!key.startsWith('$')) visit(child, [...path, key]);
+			}
+			return;
+		}
+
+		const extensions = record.$extensions as Record<string, { provenance: string }>;
+		const provenance = extensions[CAMBIUM_NAMESPACE]!.provenance;
+		const value = record.$value;
+
+		// The export nests both colour groups under `color`; the list names them on their own.
+		if (path[0] === 'color' && path[1] === 'semantic') {
+			const alias = String(value).replace(/^\{color\.primitive\.(.+)\}$/, '$1');
+			rows.set(`semantic.${path.slice(2).join('.')}`, { values: [alias], provenance });
+			return;
+		}
+
+		const id = path[0] === 'color' ? path.slice(1).join('.') : path.join('.');
+		const components = (value as { components?: number[] }).components;
+		rows.set(id, {
+			values: path[0] === 'color' && components ? components : numbersIn(value),
+			provenance,
+		});
+	}
+
+	visit(serializeDtcg(TOKEN_SET).light, []);
+	return rows;
+})();
+
+/** The exported ids a `section[data-category]` should hold, found by the prefix each one carries. */
+function exportedIdsFor(prefix: string): Map<string, number> {
+	return tally([...EXPORTED_ROWS.keys()].filter((id) => id.startsWith(`${prefix}.`)));
+}
+
+/** Every row id a section renders, in one round trip. */
+async function renderedIds(section: Locator): Promise<Map<string, number>> {
+	return tally(
+		await section
+			.locator('li[data-token]')
+			.evaluateAll((elements) =>
+				elements.map((element) => element.getAttribute('data-token') ?? ''),
+			),
+	);
+}
+
+/**
+ * A colour written straight from its own fields, never through `toOklchCss`, which is how the list
+ * writes a swatch. A reference built with the swatch's own serializer can't catch that serializer
+ * getting a channel wrong. Alpha stays the 0-1 number the token holds; CSS Color 4 takes either
+ * that or a percentage in the slash slot.
+ */
+function oklchFromFields(color: { l: number; c: number; h: number; alpha?: number }): string {
+	const triple = `${color.l} ${color.c} ${color.h}`;
+
+	return color.alpha === undefined ? `oklch(${triple})` : `oklch(${triple} / ${color.alpha})`;
+}
 
 /** The DTCG export's `color` group for `SEED`: 26 semantic tokens plus 7 ramps of 12 steps. */
 const EXPECTED_COLOUR_ROWS = 110;
@@ -261,17 +359,22 @@ test('every category is grouped, and every row carries a value control, a proven
 	const semanticSection = tokensSection.locator('section[data-category="semantic"]');
 	await expect(semanticSection).toBeVisible();
 	await expect(semanticSection.locator('li[data-token]')).toHaveCount(SEMANTIC_TOKENS.length);
+	expect(await renderedIds(semanticSection)).toEqual(exportedIdsFor('semantic'));
 
+	// A count alone passes a section that repeats one real row in place of another, so each section
+	// also has to hold exactly the ids the export names for it.
 	for (const ramp of RAMP_NAMES) {
 		const section = tokensSection.locator(`section[data-category="${ramp}"]`);
 		await expect(section).toBeVisible();
 		await expect(section.locator('li[data-token]')).toHaveCount(12);
+		expect(await renderedIds(section), ramp).toEqual(exportedIdsFor(`primitive.${ramp}`));
 	}
 
 	for (const category of NON_COLOUR_CATEGORIES) {
 		const section = tokensSection.locator(`section[data-category="${category}"]`);
 		await expect(section).toBeVisible();
 		await expect(section.locator('li[data-token]')).toHaveCount(EXPECTED_ROWS[category]);
+		expect(await renderedIds(section), category).toEqual(exportedIdsFor(category));
 	}
 
 	// Every row, across every category, batched into one evaluate rather than one assertion per row:
@@ -284,8 +387,9 @@ test('every category is grouped, and every row carries a value control, a proven
 			);
 
 			return {
-				id: element.getAttribute('data-token'),
-				controls: element.querySelectorAll('input, select').length,
+				id: element.getAttribute('data-token') ?? '',
+				inputs: Array.from(element.querySelectorAll('input'), (input) => input.value),
+				selects: Array.from(element.querySelectorAll('select'), (select) => select.value),
 				provenance: provenanceLabel?.textContent?.trim() ?? null,
 				rationale: element.querySelector('p')?.textContent?.trim() ?? '',
 			};
@@ -293,10 +397,17 @@ test('every category is grouped, and every row carries a value control, a proven
 	);
 
 	expect(rows.length).toBe(expectedRowCount());
+	expect(tally(rows.map((row) => row.id))).toEqual(tally(EXPORTED_ROWS.keys()));
 
 	for (const row of rows) {
-		expect(row.controls, `${row.id} should carry a value control`).toBeGreaterThan(0);
-		expect(row.provenance, `${row.id} should carry a provenance label`).not.toBeNull();
+		const exported = EXPORTED_ROWS.get(row.id)!;
+		// One control per exported number, each holding one of them. Tallied rather than paired by
+		// label, since the export has no label for a shadow's alpha. Inputs compare as numbers, so
+		// `0.5` and `.5` count as the same value.
+		const shown = [...row.selects, ...row.inputs.map(Number)];
+
+		expect(tally(shown), `${row.id} controls`).toEqual(tally(exported.values));
+		expect(row.provenance, `${row.id} provenance`).toBe(exported.provenance);
 		expect(row.rationale.length, `${row.id} should carry a rationale`).toBeGreaterThan(0);
 	}
 
@@ -324,13 +435,20 @@ test('the primary swatch paints the brand step its alias names, measured in scre
 	// own route from alias to colour. `primary` is a fixed alias in the semantic map.
 	expect(LIGHT.semantic.primary!.alias).toBe('brand.9');
 	const brand9 = LIGHT.primitives.brand!.find((step) => step.step === 9)!;
-	const expectedCss = toOklchCss({ l: brand9.l, c: brand9.c, h: brand9.h });
 
-	const expected = await referencePaint(page, swatch, expectedCss);
+	const expected = await referencePaint(page, swatch, oklchFromFields(brand9));
 	expect(paintDistance(await paintedCentre(swatch), expected)).toBeLessThanOrEqual(1);
-	await expect(page.locator('[data-token="semantic.primary"] [data-swatch-value]')).toHaveText(
-		expectedCss,
-	);
+
+	// The printed value is read back as numbers, so the check is on what a reader copies out of it
+	// rather than on the serializer's exact spelling.
+	const printed = await page
+		.locator('[data-token="semantic.primary"] [data-swatch-value]')
+		.textContent();
+	const channels = /^oklch\(([^ ]+) ([^ ]+) ([^ )]+)\)$/.exec(printed ?? '');
+	expect(channels, `swatch value ${printed}`).not.toBeNull();
+	expect(Number(channels![1])).toBeCloseTo(brand9.l, 6);
+	expect(Number(channels![2])).toBeCloseTo(brand9.c, 6);
+	expect(Number(channels![3])).toBeCloseTo(brand9.h, 6);
 });
 
 test("a dark-scheme shadow swatch paints that scheme's own shadow colour, alpha included", async ({
@@ -346,12 +464,14 @@ test("a dark-scheme shadow swatch paints that scheme's own shadow colour, alpha 
 	// Dark's shadow colour differs from light's in lightness and alpha for this seed, so a swatch
 	// still reading the top-level (light) copy fails the comparison below.
 	const darkColor = TOKEN_SET.schemes.dark.shadow.values.md!.color;
-	expect(toOklchCss(darkColor)).not.toBe(toOklchCss(LIGHT.shadow.values.md!.color));
+	const lightColor = LIGHT.shadow.values.md!.color;
+	expect(darkColor.l).not.toBe(lightColor.l);
+	expect(darkColor.alpha).not.toBe(lightColor.alpha);
 
 	const swatch = page.locator('[data-token="shadow.md"] [data-swatch]');
 	await expect(swatch).toBeVisible();
 
-	const expected = await referencePaint(page, swatch, toOklchCss(darkColor));
+	const expected = await referencePaint(page, swatch, oklchFromFields(darkColor));
 	await expect
 		.poll(async () => paintDistance(await paintedCentre(swatch), expected))
 		.toBeLessThanOrEqual(1);
@@ -472,7 +592,7 @@ test("re-aliasing primary to another step marks the row overridden and repaints 
 	// The first assertion checks the two really differ for this seed, so the scenario can't pass on
 	// an implementation that ignores the override.
 	const targetStep = LIGHT.primitives.brand![0]!;
-	const target = await referencePaint(page, swatch, toOklchCss(targetStep));
+	const target = await referencePaint(page, swatch, oklchFromFields(targetStep));
 	expect(paintDistance(await paintedCentre(swatch), target)).toBeGreaterThan(1);
 
 	await expect(row).not.toHaveAttribute('data-overridden', '');
@@ -494,7 +614,7 @@ test('an override survives a preset switch', async ({ page }) => {
 	const row = page.locator('[data-token="semantic.primary"]');
 	const swatch = row.locator('[data-swatch]');
 	const targetStep = LIGHT.primitives.brand![0]!;
-	const target = await referencePaint(page, swatch, toOklchCss(targetStep));
+	const target = await referencePaint(page, swatch, oklchFromFields(targetStep));
 
 	await page.getByLabel('primary alias', { exact: true }).selectOption('brand.1');
 	await expect(row).toHaveAttribute('data-overridden', '');
@@ -635,4 +755,102 @@ test("a field issue raised in the light scheme doesn't follow the row into dark"
 	const darkStep = TOKEN_SET.schemes.dark.primitives.brand!.find((step) => step.step === 1)!;
 	await expect(lightness()).toHaveValue(String(darkStep.l));
 	await expect(issueItems(row)).toHaveCount(0);
+});
+
+test('reset puts every channel of a primitive back to its committed value, a refused one included', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const step = LIGHT.primitives.brand!.find((candidate) => candidate.step === 1)!;
+	const row = page.locator('[data-token="primitive.brand.1"]');
+	const channel = (name: 'l' | 'c' | 'h') =>
+		page.getByLabel(`primitive.brand.1 ${name}`, { exact: true });
+
+	await channel('c').fill('0.01');
+	await channel('c').blur();
+	await expect(row).toHaveAttribute('data-overridden', '');
+
+	// L tops out at 1, so the store refuses this and L's committed value never moves. Its input is
+	// the one a reset keyed only on committed values would leave showing the refused text.
+	await channel('l').fill('2');
+	await channel('l').blur();
+	await expect(issueItems(row)).not.toHaveCount(0);
+
+	await row.getByRole('button', { name: 'Reset' }).click();
+
+	await expect(row).not.toHaveAttribute('data-overridden', '');
+	await expect(issueItems(row)).toHaveCount(0);
+	await expect(channel('l')).toHaveValue(String(step.l));
+	await expect(channel('c')).toHaveValue(String(step.c));
+	await expect(channel('h')).toHaveValue(String(step.h));
+});
+
+test('reset puts every leaf of a shadow back to its committed value, a refused one included', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const shadow = LIGHT.shadow.values.xs!;
+	const row = page.locator('[data-token="shadow.xs"]');
+	const leaf = (label: string) => page.getByLabel(`shadow.xs ${label}`, { exact: true });
+
+	await leaf('offsetY').fill(String(shadow.offsetY.value + 1));
+	await leaf('offsetY').blur();
+	await expect(row).toHaveAttribute('data-overridden', '');
+
+	await leaf('color.alpha').fill('2');
+	await leaf('color.alpha').blur();
+	await expect(issueItems(row)).not.toHaveCount(0);
+
+	await row.getByRole('button', { name: 'Reset' }).click();
+
+	await expect(row).not.toHaveAttribute('data-overridden', '');
+	await expect(issueItems(row)).toHaveCount(0);
+
+	const committed: Record<string, number> = {
+		offsetX: shadow.offsetX.value,
+		offsetY: shadow.offsetY.value,
+		blur: shadow.blur.value,
+		spread: shadow.spread.value,
+		'color.l': shadow.color.l,
+		'color.c': shadow.color.c,
+		'color.h': shadow.color.h,
+		'color.alpha': shadow.color.alpha,
+	};
+
+	await expect(row.locator('input')).toHaveCount(Object.keys(committed).length);
+
+	await Promise.all(
+		Object.entries(committed).map(([label, value]) =>
+			expect(leaf(label), label).toHaveValue(String(value)),
+		),
+	);
+});
+
+test('a refused light-scheme edit lists its message once, though the store checks two copies', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const primitive = page.locator('[data-token="primitive.brand.1"]');
+	const lightness = page.getByLabel('primitive.brand.1 l', { exact: true });
+	await lightness.fill('2');
+	await lightness.blur();
+	await expect(issueItems(primitive)).toHaveCount(1);
+
+	const shadow = page.locator('[data-token="shadow.xs"]');
+	const alpha = page.getByLabel('shadow.xs color.alpha', { exact: true });
+	await alpha.fill('2');
+	await alpha.blur();
+	await expect(issueItems(shadow)).toHaveCount(1);
 });

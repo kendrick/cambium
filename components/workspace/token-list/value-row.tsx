@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 import { CAMBIUM_NAMESPACE } from '../../../core/provenance';
 import type {
 	OverrideIssue,
@@ -49,6 +51,7 @@ export function ValueRow({
 	const { fieldIssues, settle, clear } = useFieldIssues();
 	const issues = [...keys.flatMap((key) => issuesFor(key)), ...fieldIssues];
 	const swatch = shadowSwatch(token);
+	const [resetGeneration, setResetGeneration] = useState(0);
 
 	return (
 		<TokenRow
@@ -60,6 +63,7 @@ export function ValueRow({
 				overridden
 					? () => {
 							clear();
+							setResetGeneration((generation) => generation + 1);
 							keys.forEach((key) => onReset(key));
 						}
 					: undefined
@@ -71,9 +75,9 @@ export function ValueRow({
 
 				return (
 					<label
-						// See `primitive-row.tsx`: keying on the committed value remounts the input on a
-						// reset or an outside override instead of leaving a stale `defaultValue` in place.
-						key={`${leaf.suffix.join('.')}:${leaf.value}`}
+						// See `primitive-row.tsx`: the committed value remounts the input on an outside
+						// override, and the reset generation remounts a refused one whose value never moved.
+						key={`${leaf.suffix.join('.')}:${leaf.value}:${resetGeneration}`}
 						className="flex items-center gap-1 text-xs"
 					>
 						{label}
