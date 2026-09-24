@@ -250,6 +250,38 @@ describe('applyOverrides', () => {
 			expect(issues.every((issue) => issue.message.length > 0)).toBe(true);
 		});
 
+		// The 'a path into provenance' case above can't catch a missing `$extensions` guard: its target
+		// is an object, so the walk refuses it as not a numeric leaf either way. A foreign namespace
+		// carrying a number is the one shape where only the guard stands between the override and the
+		// payload, since `TokenExtensionsSchema` is loose and would happily re-parse the rewrite.
+		it('refuses a numeric leaf inside $extensions, not just an object there', () => {
+			const withForeign = TokenSetSchema.parse({
+				...BASE,
+				radius: {
+					...BASE.radius,
+					values: {
+						lg: {
+							...BASE.radius.values.lg,
+							$extensions: { ...BASE.radius.values.lg!.$extensions, 'org.other': { rank: 3 } },
+						},
+					},
+				},
+			});
+			const override: TokenOverride = {
+				kind: 'value',
+				category: 'radius',
+				path: ['lg', '$extensions', 'org.other', 'rank'],
+				value: 99,
+			};
+
+			const result = applyOverrides(withForeign, [override]);
+
+			expect(result).toMatchObject({ ok: false, key: overrideKey(override) });
+			expect(result.ok ? [] : result.issues.map((issue) => issue.message)).toEqual([
+				expect.stringContaining('$extensions'),
+			]);
+		});
+
 		it('names the invalid override rather than a valid one applied beside it', () => {
 			const valid: TokenOverride = {
 				kind: 'alias',

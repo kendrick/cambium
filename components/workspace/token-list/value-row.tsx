@@ -32,8 +32,8 @@ export function ValueRow({
 	scheme: SchemeName;
 	token: CategoryToken;
 	overrides: Record<string, TokenOverride>;
-	issuesFor: (key: string) => OverrideIssue[] | undefined;
-	onOverride: (override: TokenOverride) => void;
+	issuesFor: (key: string) => OverrideIssue[];
+	onOverride: (override: TokenOverride) => OverrideIssue[] | null;
 	onReset: (key: string) => void;
 }) {
 	const id = `${category}.${token.path.join('.')}`;
@@ -46,8 +46,8 @@ export function ValueRow({
 
 	const keys = token.leaves.map((leaf) => overrideKey(overrideFor(leaf.suffix, leaf.value)));
 	const overridden = keys.some((key) => Object.hasOwn(overrides, key));
-	const { fieldIssues, settle } = useFieldIssues();
-	const issues = [...keys.flatMap((key) => issuesFor(key) ?? []), ...fieldIssues];
+	const { fieldIssues, settle, clear } = useFieldIssues();
+	const issues = [...keys.flatMap((key) => issuesFor(key)), ...fieldIssues];
 	const swatch = shadowSwatch(token);
 
 	return (
@@ -56,7 +56,14 @@ export function ValueRow({
 			provenance={provenance}
 			swatch={swatch}
 			overridden={overridden}
-			onReset={overridden ? () => keys.forEach((key) => onReset(key)) : undefined}
+			onReset={
+				overridden
+					? () => {
+							clear();
+							keys.forEach((key) => onReset(key));
+						}
+					: undefined
+			}
 			issues={issues}
 		>
 			{token.leaves.map((leaf) => {

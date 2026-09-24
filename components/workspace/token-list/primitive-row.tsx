@@ -26,8 +26,8 @@ export function PrimitiveRow({
 	ramp: string;
 	step: RampStep;
 	overrides: Record<string, TokenOverride>;
-	issuesFor: (key: string) => OverrideIssue[] | undefined;
-	onOverride: (override: TokenOverride) => void;
+	issuesFor: (key: string) => OverrideIssue[];
+	onOverride: (override: TokenOverride) => OverrideIssue[] | null;
 	onReset: (key: string) => void;
 }) {
 	const id = `primitive.${ramp}.${step.step}`;
@@ -41,8 +41,8 @@ export function PrimitiveRow({
 		h: step.h,
 	});
 	const overridden = Object.hasOwn(overrides, key);
-	const { fieldIssues, settle } = useFieldIssues();
-	const heldIssues = issuesFor(key) ?? [];
+	const { fieldIssues, settle, clear } = useFieldIssues();
+	const heldIssues = issuesFor(key);
 
 	const withChannel = (channel: (typeof CHANNELS)[number], value: number): TokenOverride => ({
 		kind: 'primitive',
@@ -60,7 +60,14 @@ export function PrimitiveRow({
 			provenance={step.$extensions[CAMBIUM_NAMESPACE]}
 			swatch={toOklchCss({ l: step.l, c: step.c, h: step.h })}
 			overridden={overridden}
-			onReset={overridden ? () => onReset(key) : undefined}
+			onReset={
+				overridden
+					? () => {
+							clear();
+							onReset(key);
+						}
+					: undefined
+			}
 			issues={[...heldIssues, ...fieldIssues]}
 		>
 			{CHANNELS.map((channel) => (

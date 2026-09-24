@@ -72,10 +72,12 @@ export function TokenList({
 	clearOverride,
 }: TokenListProps) {
 	const [scheme, setScheme] = useState<SchemeName>('light');
-	// An override the base itself rejects on the spot (a bad edit that never committed) is transient:
-	// the store already threw and kept nothing, so there is no store field for this to read back from.
-	// A held override the *current* base rejects is different. That one lives in `overrideIssues`.
-	const [attemptIssues, setAttemptIssues] = useState<Record<string, OverrideIssue[]>>({});
+	// A number field keeps its own refused edits (`useFieldIssues`), since only the field knows when
+	// its text has gone back to the shown value. An alias `<select>` is controlled and snaps back to
+	// the committed alias the moment the store refuses, so its refusal is held here, by key, until a
+	// later pick lands or the row resets. A held override the *current* base rejects is a different
+	// thing again and lives in the store's `overrideIssues`.
+	const [aliasAttempts, setAliasAttempts] = useState<Record<string, OverrideIssue[]>>({});
 
 	const resolved = useMemo(
 		() => (tokenSet ? resolveScheme(tokenSet.schemes[scheme]) : {}),
@@ -109,25 +111,31 @@ export function TokenList({
 		steps.map((step) => `${ramp}.${step.step}`),
 	);
 
-	function tryOverride(override: TokenOverride) {
-		const key = overrideKey(override);
-
+	/** Returns the store's issues when it refuses `override`, or null once it holds it. */
+	function tryOverride(override: TokenOverride): OverrideIssue[] | null {
 		try {
 			setOverride(override);
-			setAttemptIssues((issues) => {
-				if (!(key in issues)) return issues;
-				const next = { ...issues };
-				delete next[key];
-				return next;
-			});
+			return null;
 		} catch (error) {
 			if (!(error instanceof OverrideRejectedError)) throw error;
-			setAttemptIssues((issues) => ({ ...issues, [key]: error.issues }));
+			return error.issues;
 		}
 	}
 
-	function issuesFor(key: string): OverrideIssue[] | undefined {
-		return attemptIssues[key] ?? overrideIssues[key];
+	function holdAliasAttempt(key: string, issues: OverrideIssue[] | null) {
+		setAliasAttempts((current) => {
+			if (issues) return { ...current, [key]: issues };
+			if (!(key in current)) return current;
+			const next = { ...current };
+			delete next[key];
+			return next;
+		});
+	}
+
+	// Both lists, never one in place of the other: a refused attempt says nothing about whether the
+	// override already held under this key still fits the base, so hiding either would lose a fact.
+	function issuesFor(key: string): OverrideIssue[] {
+		return [...(aliasAttempts[key] ?? []), ...(overrideIssues[key] ?? [])];
 	}
 
 	return (
@@ -163,14 +171,24 @@ export function TokenList({
 							stepRole={role}
 							swatch={toOklchCss(resolved[token]!)}
 							overridden={overridden}
-							onReset={overridden ? () => clearOverride(key) : undefined}
+							onReset={
+								overridden
+									? () => {
+											holdAliasAttempt(key, null);
+											clearOverride(key);
+										}
+									: undefined
+							}
 							issues={issuesFor(key)}
 						>
 							<select
 								aria-label={`${token} alias`}
 								value={entry.alias}
 								onChange={(event) =>
-									tryOverride({ kind: 'alias', scheme, token, alias: event.target.value })
+									holdAliasAttempt(
+										key,
+										tryOverride({ kind: 'alias', scheme, token, alias: event.target.value }),
+									)
 								}
 							>
 								{rampOptions.map((option) => (
@@ -188,7 +206,9 @@ export function TokenList({
 				<CategoryGroup key={ramp} name={ramp}>
 					{steps.map((step) => (
 						<PrimitiveRow
-							key={step.step}
+							// Keyed by scheme too, so a toggle remounts the row: a refused edit belongs to
+							// the scheme it was typed in, and the other scheme's step never saw it.
+							key={`${scheme}:${step.step}`}
 							scheme={scheme}
 							ramp={ramp}
 							step={step}
@@ -213,7 +233,9 @@ export function TokenList({
 					<CategoryGroup key={category} name={category} source={topEntry.source}>
 						{tokens.map((token) => (
 							<ValueRow
-								key={token.path.join('.')}
+								// Shadow is the one category here that differs by scheme; see `PrimitiveRow`'s
+								// key for why that has to remount on a toggle.
+								key={`${category === 'shadow' ? scheme : ''}:${token.path.join('.')}`}
 								category={category}
 								scheme={scheme}
 								token={token}

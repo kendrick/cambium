@@ -84,7 +84,7 @@ export function TokenRow({
 				{expanded ? 'Less' : 'More'}
 			</button>
 			{expanded ? (
-				<div className="flex flex-col gap-1 pl-2 text-xs">
+				<div data-rationale-expanded className="flex flex-col gap-1 pl-2 text-xs">
 					<p>{provenance.rationale}</p>
 					<p className="text-muted-foreground">
 						{provenance.seedField
@@ -105,7 +105,7 @@ export function TokenRow({
 			</div>
 
 			{issues && issues.length > 0 ? (
-				<ul className="text-destructive text-xs">
+				<ul data-issues className="text-destructive text-xs">
 					{issues.map((issue) => (
 						<li key={`${issue.path.join('.')}:${issue.message}`}>{issue.message}</li>
 					))}

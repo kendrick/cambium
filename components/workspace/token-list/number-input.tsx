@@ -52,27 +52,40 @@ export function NumberInput({
 }
 
 /**
- * A rejected field never reaches the store, so the store holds no issue for it. The row keeps the
- * issue here, one per field, until that field next blurs with something readable.
+ * Issues from an edit that never reached the store: text that isn't a number, or a number the store
+ * refused. Neither leaves anything in the store to read back, so the row holds them here, per field,
+ * until that field next blurs on something the store accepts or on the value already shown.
+ *
+ * Per field rather than per override key because a primitive's three channels share one key. A
+ * rejected L followed by an untouched blur on H must not clear the issue while L still shows the
+ * refused number.
  */
 export function useFieldIssues() {
-	const [issues, setIssues] = useState<Record<string, OverrideIssue>>({});
+	const [issues, setIssues] = useState<Record<string, OverrideIssue[]>>({});
 
-	function settle(field: string, outcome: NumberFieldOutcome, commit: (value: number) => void) {
-		if (outcome.kind === 'invalid') {
-			setIssues((held) => ({ ...held, [field]: { path: [field], message: outcome.message } }));
-			return;
-		}
-
-		setIssues((held) => {
-			if (!(field in held)) return held;
-			const next = { ...held };
+	function hold(field: string, held: OverrideIssue[] | null) {
+		setIssues((current) => {
+			if (held) return { ...current, [field]: held };
+			if (!(field in current)) return current;
+			const next = { ...current };
 			delete next[field];
 			return next;
 		});
-
-		if (outcome.kind === 'changed') commit(outcome.value);
 	}
 
-	return { fieldIssues: Object.values(issues), settle };
+	/** `commit` returns the store's issues when it refuses the value, or null once it holds it. */
+	function settle(
+		field: string,
+		outcome: NumberFieldOutcome,
+		commit: (value: number) => OverrideIssue[] | null,
+	) {
+		if (outcome.kind === 'invalid') {
+			hold(field, [{ path: [field], message: outcome.message }]);
+			return;
+		}
+
+		hold(field, outcome.kind === 'changed' ? commit(outcome.value) : null);
+	}
+
+	return { fieldIssues: Object.values(issues).flat(), settle, clear: () => setIssues({}) };
 }

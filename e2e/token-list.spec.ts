@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
+import { PNG } from 'pngjs';
 
 import { DATABASE_NAME, RECORD_STORE_NAME } from '../app/storage/indexed-db-record-store';
 import {
@@ -14,7 +15,6 @@ import { toOklchCss } from '../core/css/oklch-css';
 import { BALANCED } from '../core/interpretation';
 import { createOklchScaleEngine } from '../core/oklch-scale-engine';
 import { CAMBIUM_NAMESPACE } from '../core/provenance';
-import { resolveScheme } from '../core/resolve-scheme';
 import { buildTokenSet } from '../core/semantic-layer';
 import { STEP_ROLES } from '../core/step-roles';
 import { stepForAlias, type TokenSet } from '../core/token-set';
@@ -69,7 +69,6 @@ if (!DERIVED.ok) {
 
 const TOKEN_SET: TokenSet = buildTokenSet(DERIVED.schemes, SEED, BALANCED);
 const LIGHT = TOKEN_SET.schemes.light;
-const RESOLVED_LIGHT = resolveScheme(LIGHT);
 
 const SEMANTIC_TOKENS = Object.keys(LIGHT.semantic);
 const RAMP_NAMES = Object.keys(LIGHT.primitives);
@@ -179,22 +178,73 @@ async function seedWorkspaceRecord(page: Page, record: BrandRecord): Promise<voi
 	await writeIndexedDbRow(page, record);
 }
 
+type Rgb = readonly [number, number, number];
+
 /**
- * The colour a consumer's own compositor makes of an `oklch()` string, read off a throwaway element
- * rather than off the string itself. `data-swatch`'s inline `background-color` and this probe both
- * go through the same browser CSS engine, so comparing their computed styles is the seam itself,
- * not our own serialization of it: `docs/agents/testing.md`'s "Where the seam actually is" is what
- * this stands in for.
+ * The pixel at the centre of whatever `target` covers on screen, decoded from a real screenshot.
+ * A computed `background-color` is only what the cascade declared: Chromium reports it unchanged
+ * under an ancestor at `opacity: 0`, so a swatch nobody can see would still pass a style check.
+ * The screenshot is what the compositor actually produced, which is the consumer's unit here.
  */
-async function computedColorOf(page: Page, oklchCss: string): Promise<string> {
-	return page.evaluate((css) => {
-		const probe = document.createElement('div');
-		probe.style.backgroundColor = css;
-		document.body.appendChild(probe);
-		const color = getComputedStyle(probe).backgroundColor;
-		probe.remove();
-		return color;
-	}, oklchCss);
+async function paintedCentre(target: Locator): Promise<Rgb> {
+	const png = PNG.sync.read(await target.screenshot({ animations: 'disabled' }));
+	const offset = (Math.floor(png.height / 2) * png.width + Math.floor(png.width / 2)) * 4;
+
+	return [png.data[offset]!, png.data[offset + 1]!, png.data[offset + 2]!];
+}
+
+/**
+ * What the browser paints for `oklchCss` over the same backdrop `swatch` sits on, measured the same
+ * way as the swatch itself. The reference hangs off `<body>` rather than beside the swatch so an
+ * ancestor that hides the swatch can't hide the reference along with it. Its backdrop is the first
+ * non-transparent background above the swatch, so a translucent colour (a shadow's alpha)
+ * composites over the same thing in both.
+ */
+async function referencePaint(page: Page, swatch: Locator, oklchCss: string): Promise<Rgb> {
+	const backdrop = await swatch.evaluate((element) => {
+		for (let node = element.parentElement; node; node = node.parentElement) {
+			const color = getComputedStyle(node).backgroundColor;
+			if (color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') return color;
+		}
+		return 'rgb(255, 255, 255)';
+	});
+
+	await page.evaluate(
+		([fill, behind]) => {
+			const frame = document.createElement('div');
+			frame.setAttribute('data-paint-reference', '');
+			Object.assign(frame.style, {
+				position: 'fixed',
+				top: '0',
+				left: '0',
+				width: '16px',
+				height: '16px',
+				zIndex: '2147483647',
+				backgroundColor: behind,
+			});
+			const chip = document.createElement('div');
+			Object.assign(chip.style, { width: '100%', height: '100%', backgroundColor: fill });
+			frame.appendChild(chip);
+			document.body.appendChild(frame);
+		},
+		[oklchCss, backdrop] as const,
+	);
+
+	const reference = page.locator('[data-paint-reference]');
+
+	try {
+		return await paintedCentre(reference);
+	} finally {
+		await reference.evaluate((element) => element.remove());
+	}
+}
+
+/**
+ * The largest per-channel gap between two paints. Two renders of one colour can land a unit apart
+ * after rounding, so a scenario allows 1.
+ */
+function paintDistance(actual: Rgb, expected: Rgb): number {
+	return Math.max(...actual.map((channel, index) => Math.abs(channel - expected[index]!)));
 }
 
 test('every category is grouped, and every row carries a value control, a provenance label and a rationale', async ({
@@ -259,7 +309,7 @@ test('every category is grouped, and every row carries a value control, a proven
 	await expect(primaryRow.locator('p').first()).toHaveText(primaryProvenance.rationale);
 });
 
-test('the primary swatch renders the resolved brand colour, measured as the browser composites it', async ({
+test('the primary swatch paints the brand step its alias names, measured in screen pixels', async ({
 	page,
 }) => {
 	const record = buildRecordWithSeed(SEED);
@@ -270,19 +320,20 @@ test('the primary swatch renders the resolved brand colour, measured as the brow
 	const swatch = page.locator('[data-token="semantic.primary"] [data-swatch]');
 	await expect(swatch).toBeVisible();
 
-	const expectedCss = toOklchCss(RESOLVED_LIGHT.primary!);
-	const [actualColor, expectedColor] = await Promise.all([
-		swatch.evaluate((element) => getComputedStyle(element).backgroundColor),
-		computedColorOf(page, expectedCss),
-	]);
+	// Read straight off the ramp rather than through `resolveScheme`, which is the code under test's
+	// own route from alias to colour. `primary` is a fixed alias in the semantic map.
+	expect(LIGHT.semantic.primary!.alias).toBe('brand.9');
+	const brand9 = LIGHT.primitives.brand!.find((step) => step.step === 9)!;
+	const expectedCss = toOklchCss({ l: brand9.l, c: brand9.c, h: brand9.h });
 
-	expect(actualColor).toBe(expectedColor);
+	const expected = await referencePaint(page, swatch, expectedCss);
+	expect(paintDistance(await paintedCentre(swatch), expected)).toBeLessThanOrEqual(1);
 	await expect(page.locator('[data-token="semantic.primary"] [data-swatch-value]')).toHaveText(
 		expectedCss,
 	);
 });
 
-test("a dark-scheme shadow swatch renders that scheme's own shadow colour, alpha included", async ({
+test("a dark-scheme shadow swatch paints that scheme's own shadow colour, alpha included", async ({
 	page,
 }) => {
 	const record = buildRecordWithSeed(SEED);
@@ -300,10 +351,10 @@ test("a dark-scheme shadow swatch renders that scheme's own shadow colour, alpha
 	const swatch = page.locator('[data-token="shadow.md"] [data-swatch]');
 	await expect(swatch).toBeVisible();
 
-	const expectedColor = await computedColorOf(page, toOklchCss(darkColor));
+	const expected = await referencePaint(page, swatch, toOklchCss(darkColor));
 	await expect
-		.poll(() => swatch.evaluate((element) => getComputedStyle(element).backgroundColor))
-		.toBe(expectedColor);
+		.poll(async () => paintDistance(await paintedCentre(swatch), expected))
+		.toBeLessThanOrEqual(1);
 });
 
 test('a field that blurs unchanged stores nothing, and a cleared field is rejected with an issue', async ({
@@ -351,14 +402,33 @@ test('the full rationale stays closed on load and opens on demand', async ({ pag
 
 	// Not merely hidden: `TokenRow` renders the expanded block conditionally, so on load it is absent
 	// from the DOM rather than present and collapsed.
-	await expect(row.getByText(expandedTrace)).toHaveCount(0);
-	await expect(row.getByText(stepRole)).toHaveCount(0);
+	const expandedBlock = row.locator('[data-rationale-expanded]');
+	await expect(expandedBlock).toHaveCount(0);
 
 	await toggle.click();
 
 	await expect(row.getByRole('button', { name: 'Less' })).toHaveAttribute('aria-expanded', 'true');
-	await expect(row.getByText(expandedTrace)).toBeVisible();
-	await expect(row.getByText(stepRole)).toBeVisible();
+	await expect(expandedBlock).toBeVisible();
+	await expect(expandedBlock.getByText(expandedTrace)).toBeVisible();
+	await expect(expandedBlock.getByText(stepRole)).toBeVisible();
+
+	// The one-line rationale above is already the whole string, cut by CSS. What makes this block the
+	// full one is that nothing clips it, so the check is on the element holding the text.
+	const fullRationale = expandedBlock.getByText(provenance.rationale, { exact: true });
+	await expect(fullRationale).toBeVisible();
+
+	const layout = await fullRationale.evaluate((element) => {
+		const style = getComputedStyle(element);
+		return {
+			whiteSpace: style.whiteSpace,
+			textOverflow: style.textOverflow,
+			clipped: element.scrollWidth > element.clientWidth,
+		};
+	});
+
+	expect(layout.whiteSpace).not.toBe('nowrap');
+	expect(layout.textOverflow).not.toBe('ellipsis');
+	expect(layout.clipped).toBe(false);
 });
 
 test('every system-constant category is labelled an untouched default, and no derived category is', async ({
@@ -402,9 +472,8 @@ test("re-aliasing primary to another step marks the row overridden and repaints 
 	// The first assertion checks the two really differ for this seed, so the scenario can't pass on
 	// an implementation that ignores the override.
 	const targetStep = LIGHT.primitives.brand![0]!;
-	const beforeColor = await swatch.evaluate((element) => getComputedStyle(element).backgroundColor);
-	const targetColor = await computedColorOf(page, toOklchCss(targetStep));
-	expect(beforeColor).not.toBe(targetColor);
+	const target = await referencePaint(page, swatch, toOklchCss(targetStep));
+	expect(paintDistance(await paintedCentre(swatch), target)).toBeGreaterThan(1);
 
 	await expect(row).not.toHaveAttribute('data-overridden', '');
 
@@ -412,8 +481,8 @@ test("re-aliasing primary to another step marks the row overridden and repaints 
 
 	await expect(row).toHaveAttribute('data-overridden', '');
 	await expect
-		.poll(() => swatch.evaluate((element) => getComputedStyle(element).backgroundColor))
-		.toBe(targetColor);
+		.poll(async () => paintDistance(await paintedCentre(swatch), target))
+		.toBeLessThanOrEqual(1);
 });
 
 test('an override survives a preset switch', async ({ page }) => {
@@ -425,13 +494,13 @@ test('an override survives a preset switch', async ({ page }) => {
 	const row = page.locator('[data-token="semantic.primary"]');
 	const swatch = row.locator('[data-swatch]');
 	const targetStep = LIGHT.primitives.brand![0]!;
-	const targetColor = await computedColorOf(page, toOklchCss(targetStep));
+	const target = await referencePaint(page, swatch, toOklchCss(targetStep));
 
 	await page.getByLabel('primary alias', { exact: true }).selectOption('brand.1');
 	await expect(row).toHaveAttribute('data-overridden', '');
 	await expect
-		.poll(() => swatch.evaluate((element) => getComputedStyle(element).backgroundColor))
-		.toBe(targetColor);
+		.poll(async () => paintDistance(await paintedCentre(swatch), target))
+		.toBeLessThanOrEqual(1);
 
 	// `PRESET_PARAMS` in `app/state/workspace-store.ts` maps every preset to `BALANCED` until #37, so
 	// this switch can't move a derived value on its own, and this scenario can't show an override
@@ -441,15 +510,15 @@ test('an override survives a preset switch', async ({ page }) => {
 	await expect(page.getByLabel('Interpretation')).toHaveValue('faithful');
 	await expect(row).toHaveAttribute('data-overridden', '');
 	await expect
-		.poll(() => swatch.evaluate((element) => getComputedStyle(element).backgroundColor))
-		.toBe(targetColor);
+		.poll(async () => paintDistance(await paintedCentre(swatch), target))
+		.toBeLessThanOrEqual(1);
 
 	await page.getByLabel('Interpretation').selectOption('balanced');
 	await expect(page.getByLabel('Interpretation')).toHaveValue('balanced');
 	await expect(row).toHaveAttribute('data-overridden', '');
 	await expect
-		.poll(() => swatch.evaluate((element) => getComputedStyle(element).backgroundColor))
-		.toBe(targetColor);
+		.poll(async () => paintDistance(await paintedCentre(swatch), target))
+		.toBeLessThanOrEqual(1);
 });
 
 test('every semantic row resolves to a real primitive step, checked against the token set rather than the map that proposed it', async ({
@@ -460,29 +529,110 @@ test('every semantic row resolves to a real primitive step, checked against the 
 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
-	const tokensSection = page.getByRole('region', { name: 'Tokens' });
-	await expect(tokensSection.getByRole('listitem').first()).toBeVisible();
+	const semanticSection = page
+		.getByRole('region', { name: 'Tokens' })
+		.locator('section[data-category="semantic"]');
+	await expect(semanticSection.locator('li[data-token]').first()).toBeVisible();
 
-	// A mix of fixed aliases and the one kind of entry `semantic-layer.ts` resolves at build time
-	// rather than declares outright (a `ContrastingPair`). A row that echoes the static `SEMANTIC_MAP`
-	// instead of the alias the built set holds fails on the second kind without failing on the first.
-	const sampledTokens = [
-		'primary',
-		'border',
-		'destructive',
-		'foreground',
-		'primary-foreground',
-		'sidebar-primary-foreground',
-	];
+	// Every row in one round trip. The expectation comes from the built set rather than the static
+	// `SEMANTIC_MAP`, because a `ContrastingPair` entry is only settled at build time: a row echoing
+	// the map would pass on the fixed aliases and fail on those.
+	const rendered = Object.fromEntries(
+		await semanticSection
+			.locator('li[data-token]')
+			.evaluateAll((elements) =>
+				elements.map((element) => [
+					element.getAttribute('data-token'),
+					element.querySelector('[data-resolves-to]')?.getAttribute('data-resolves-to') ?? null,
+				]),
+			),
+	) as Record<string, string | null>;
 
-	for (const token of sampledTokens) {
-		const expectedAlias = LIGHT.semantic[token]?.alias;
-		if (!expectedAlias) throw new Error(`fixture token set has no semantic entry for "${token}"`);
+	expect(Object.keys(rendered)).toHaveLength(SEMANTIC_TOKENS.length);
+	expect(new Set(Object.keys(rendered))).toEqual(
+		new Set(SEMANTIC_TOKENS.map((token) => `semantic.${token}`)),
+	);
 
-		// Confirms the alias names a step the ramp actually holds, not just a string shaped like one.
-		expect(stepForAlias(LIGHT.primitives, expectedAlias)).toBeDefined();
+	for (const token of SEMANTIC_TOKENS) {
+		const shown = rendered[`semantic.${token}`];
 
-		const row = tokensSection.locator(`[data-token="semantic.${token}"]`);
-		await expect(row.locator(`[data-resolves-to="${expectedAlias}"]`)).toBeVisible();
+		expect(shown, `semantic.${token}`).toBe(LIGHT.semantic[token]!.alias);
+		// The alias has to name a step the ramp holds, not just a string shaped like one.
+		expect(stepForAlias(LIGHT.primitives, shown!), `semantic.${token}`).toBeDefined();
 	}
+});
+
+/** The issue items a row lists under its controls, from a rejected edit or a held override. */
+function issueItems(row: Locator): Locator {
+	return row.locator('[data-issues] li');
+}
+
+test('a rejected edit retyped back to the shown value leaves no issue behind', async ({ page }) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const shown = TOKEN_SET.opacity.values.overlay!.value;
+	const row = page.locator('[data-token="opacity.overlay"]');
+	const field = page.getByLabel('opacity.overlay value', { exact: true });
+
+	// Opacity tops out at 1, so the store refuses this and keeps nothing.
+	await field.fill('9');
+	await field.blur();
+	await expect(issueItems(row)).not.toHaveCount(0);
+
+	await field.fill(String(shown));
+	await field.blur();
+
+	await expect(field).toHaveValue(String(shown));
+	await expect(row).not.toHaveAttribute('data-overridden', '');
+	await expect(issueItems(row)).toHaveCount(0);
+});
+
+test('reset clears a rejected edit made on top of a held override', async ({ page }) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const shown = TOKEN_SET.opacity.values.overlay!.value;
+	const row = page.locator('[data-token="opacity.overlay"]');
+	const field = () => page.getByLabel('opacity.overlay value', { exact: true });
+
+	await field().fill('0.5');
+	await field().blur();
+	await expect(row).toHaveAttribute('data-overridden', '');
+
+	await field().fill('9');
+	await field().blur();
+	await expect(issueItems(row)).not.toHaveCount(0);
+
+	await row.getByRole('button', { name: 'Reset' }).click();
+
+	await expect(row).not.toHaveAttribute('data-overridden', '');
+	await expect(field()).toHaveValue(String(shown));
+	await expect(issueItems(row)).toHaveCount(0);
+});
+
+test("a field issue raised in the light scheme doesn't follow the row into dark", async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const row = page.locator('[data-token="primitive.brand.1"]');
+	const lightness = () => page.getByLabel('primitive.brand.1 l', { exact: true });
+
+	await lightness().fill('');
+	await lightness().blur();
+	await expect(issueItems(row)).toHaveText(['Enter a number.']);
+
+	await page.getByRole('button', { name: 'dark', exact: true }).click();
+
+	const darkStep = TOKEN_SET.schemes.dark.primitives.brand!.find((step) => step.step === 1)!;
+	await expect(lightness()).toHaveValue(String(darkStep.l));
+	await expect(issueItems(row)).toHaveCount(0);
 });
