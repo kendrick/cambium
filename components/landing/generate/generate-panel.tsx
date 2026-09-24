@@ -1,0 +1,400 @@
+'use client';
+
+import { useRouter } from 'next/navigation';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+
+import { RECORD_PARAM } from '@/components/stored-record';
+import { Button } from '@/components/ui/button';
+
+import type { ReferenceImage } from '../../../core/brand-record';
+import type { CostEstimate } from '../../../app/generation/cost-estimate';
+import type { FailureDescriptor } from '../../../app/generation/describe-failure';
+import type { SaveGeneratedVersionInput } from '../../../app/generation/generate';
+import type { SeedRepair } from '../../../app/readers/anthropic-reader';
+import { getSessionKey, setSessionKey } from '../../../app/generation/session-key';
+
+// Loaded when the person first needs it. base-ui's dialog is weight this panel has no use for until
+// then.
+const KeyDialog = lazy(() => import('./key-dialog'));
+
+export type GeneratePanelProps = {
+	recordId: string;
+	images: ReferenceImage[];
+	/** Told whether a key is now in session storage, so the route's indicator stays true. */
+	onKeyStored: (stored: boolean) => void;
+};
+
+type Estimate = { kind: 'pending' } | { kind: 'ready'; value: CostEstimate } | { kind: 'failed' };
+
+/**
+ * The seed and provenance a storage failure hands back. Kept so "Save again" can commit them
+ * without a second paid read; neither holds the key.
+ */
+type Held = Pick<SaveGeneratedVersionInput, 'seed' | 'provenance'>;
+
+type Shown =
+	| { kind: 'described'; descriptor: FailureDescriptor; held: Held | null }
+	| { kind: 'unexpected' };
+
+/** Why the dialog is open decides what submitting it does. Only `generate` runs a model call. */
+type DialogIntent = 'generate' | 'update';
+
+type Attempt =
+	| { kind: 'generate'; key: string; repair?: SeedRepair }
+	| { kind: 'save-again'; held: Held };
+
+const usd = (amount: number) => `$${(Math.ceil(amount * 100) / 100).toFixed(2)}`;
+
+const count = new Intl.NumberFormat('en-US');
+
+/**
+ * `cost-estimate.ts` takes dimensions, and `ReferenceImage` stores none, so each downscaled image
+ * is decoded once here. The bitmap is closed straight away because only its size is wanted.
+ */
+async function measure(dataUrl: string): Promise<{ width: number; height: number }> {
+	const bitmap = await createImageBitmap(await (await fetch(dataUrl)).blob());
+
+	try {
+		return { width: bitmap.width, height: bitmap.height };
+	} finally {
+		bitmap.close();
+	}
+}
+
+export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelProps) {
+	const router = useRouter();
+	const [estimate, setEstimate] = useState<Estimate>({ kind: 'pending' });
+	const [running, setRunning] = useState(false);
+	const [shown, setShown] = useState<Shown | null>(null);
+	const [dialog, setDialog] = useState<DialogIntent | null>(null);
+	const [keyNotKept, setKeyNotKept] = useState(false);
+
+	/**
+	 * The same guard `UploadForm.save()` uses, for the same reason: `running` isn't visible until the
+	 * next render, so two clicks in one tick would both start a run, and the second would commit a
+	 * second version behind the first. This flips synchronously.
+	 *
+	 * Left set after a success, because the route is navigating away and a version already landed.
+	 */
+	const inFlight = useRef(false);
+
+	// A run that finishes after the person left the page mustn't drag them to the workspace.
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
+
+	useEffect(() => {
+		let live = true;
+
+		void (async () => {
+			try {
+				// Dynamic because the prompt module pulls in zod through `core/brand-seed`.
+				const [{ estimateGenerationCost }, prompt, dimensions] = await Promise.all([
+					import('../../../app/generation/cost-estimate'),
+					import('../../../app/readers/seed-prompt'),
+					Promise.all(images.map((image) => measure(image.downscaled))),
+				]);
+
+				const promptChars =
+					prompt.SEED_SYSTEM_PROMPT.length +
+					prompt.SEED_USER_DIRECTIVE.length +
+					JSON.stringify(prompt.SEED_JSON_SCHEMA).length;
+
+				if (live) {
+					setEstimate({
+						kind: 'ready',
+						value: estimateGenerationCost({ images: dimensions, promptChars }),
+					});
+				}
+			} catch {
+				if (live) setEstimate({ kind: 'failed' });
+			}
+		})();
+
+		return () => {
+			live = false;
+		};
+	}, [images]);
+
+	/**
+	 * Every path into a model call or a commit goes through here, and each one starts from a click.
+	 * Nothing schedules a run. A rate limit's retry window is shown as text and left to the person,
+	 * because every read spends their money.
+	 *
+	 * The record is read fresh from storage each time rather than taken from props. A stale-record
+	 * failure says "save again to add it to the latest copy", and only a fresh read makes that true.
+	 */
+	async function run(attempt: Attempt) {
+		if (inFlight.current) return;
+		inFlight.current = true;
+		setRunning(true);
+
+		let next: Shown;
+
+		try {
+			const [generation, { describeFailure }, storage, { createOklchScaleEngine }] =
+				await Promise.all([
+					import('../../../app/generation/generate'),
+					import('../../../app/generation/describe-failure'),
+					import('../../../app/storage/indexed-db-record-store'),
+					import('../../../core/oklch-scale-engine'),
+				]);
+
+			const recordStore = await storage.createIndexedDbRecordStore();
+			let result: Awaited<ReturnType<typeof generation.generate>>;
+
+			try {
+				const record = await recordStore.get(recordId);
+
+				if (!record) throw new Error('the record is no longer stored');
+
+				const engine = createOklchScaleEngine();
+
+				result =
+					attempt.kind === 'generate'
+						? await generation.generate({
+								record,
+								key: attempt.key,
+								reader: generation.createGenerationReader(),
+								recordStore,
+								engine,
+								repair: attempt.repair,
+							})
+						: await generation.saveGeneratedVersion({
+								record,
+								...attempt.held,
+								recordStore,
+								engine,
+							});
+			} finally {
+				// Same reason as the route's read-back: an open connection is what an upgrade in another tab
+				// waits on forever.
+				storage.closeIndexedDbRecordStore(recordStore);
+			}
+
+			if (result.ok) {
+				if (mounted.current) router.push(`/workspace?${RECORD_PARAM}=${result.record.id}`);
+				return;
+			}
+
+			const { failure } = result;
+
+			next = {
+				kind: 'described',
+				// A repair gets one go per answer. The run that just failed was that go if it carried one.
+				descriptor: describeFailure(failure, {
+					repairUsed: attempt.kind === 'generate' && attempt.repair !== undefined,
+				}),
+				held: 'seed' in failure ? { seed: failure.seed, provenance: failure.provenance } : null,
+			};
+		} catch {
+			// `generate` throws only for failures it has no recovery for, and a chunk or the database can
+			// fail before it runs. Nothing is logged, because the thrown value could be anything and the
+			// key must never reach the console.
+			next = { kind: 'unexpected' };
+		}
+
+		inFlight.current = false;
+		setRunning(false);
+		setShown(next);
+	}
+
+	function startGenerate() {
+		const key = getSessionKey();
+
+		// #23 asks for the key at first generation, never on arrival.
+		if (!key) {
+			setDialog('generate');
+			return;
+		}
+
+		void run({ kind: 'generate', key });
+	}
+
+	function acceptKey(key: string) {
+		const kept = setSessionKey(key);
+		setKeyNotKept(!kept);
+		onKeyStored(kept);
+
+		const intent = dialog;
+		setDialog(null);
+
+		if (intent === 'generate') {
+			// Passed on directly rather than re-read, so a browser that refused to keep it still gets this
+			// one generation out of it.
+			void run({ kind: 'generate', key });
+		} else {
+			// Updating the key after a rejection runs nothing, since #23 forbids an automatic retry.
+			// Generate comes back and the person decides.
+			setShown(null);
+		}
+	}
+
+	const estimateReady = estimate.kind !== 'pending';
+
+	// While a failure is showing, its own control is the way forward, and a second button doing the
+	// same thing would muddle which one to press. A recovery of `none` means there isn't one.
+	const generateDisabled = running || !estimateReady || shown !== null;
+
+	return (
+		<div className="flex w-full flex-col items-start gap-4">
+			<p className="text-muted-foreground text-sm" data-estimate>
+				{estimate.kind === 'pending' && 'Working out what this will cost…'}
+				{estimate.kind === 'ready' &&
+					`Generating costs at most ${usd(estimate.value.maxUsd)} on your Anthropic account: about ${count.format(estimate.value.inputTokens)} input tokens and at most ${count.format(estimate.value.maxOutputTokens)} output tokens.`}
+				{estimate.kind === 'failed' &&
+					"Cambium couldn't read these images back to estimate the cost, so it can't say what generating will spend."}
+			</p>
+
+			<Button disabled={generateDisabled} onClick={startGenerate}>
+				Generate
+			</Button>
+
+			{running && (
+				<p aria-live="polite" className="text-muted-foreground text-sm">
+					Generating. This usually takes under a minute.
+				</p>
+			)}
+
+			{keyNotKept && (
+				<p className="text-muted-foreground text-sm">
+					This browser wouldn&apos;t keep the key for the tab, so Cambium will ask for it again next
+					time.
+				</p>
+			)}
+
+			{shown && (
+				<FailureNotice
+					disabled={running}
+					onRepair={(repair) => {
+						const key = getSessionKey();
+						if (!key) {
+							setDialog('generate');
+							return;
+						}
+						void run({ kind: 'generate', key, repair });
+					}}
+					onRetry={startGenerate}
+					onSaveAgain={(held) => void run({ kind: 'save-again', held })}
+					onUpdateKey={() => setDialog('update')}
+					shown={shown}
+				/>
+			)}
+
+			{dialog && (
+				<Suspense fallback={null}>
+					<KeyDialog
+						onOpenChange={(open) => {
+							if (!open) setDialog(null);
+						}}
+						onSubmit={acceptKey}
+						open
+					/>
+				</Suspense>
+			)}
+		</div>
+	);
+}
+
+type FailureNoticeProps = {
+	shown: Shown;
+	disabled: boolean;
+	onUpdateKey: () => void;
+	onRetry: () => void;
+	onRepair: (repair: SeedRepair) => void;
+	onSaveAgain: (held: Held) => void;
+};
+
+/**
+ * One failure and the one control its descriptor names. The copy is `describeFailure`'s alone, so
+ * the words and the recovery can't drift apart here.
+ */
+function FailureNotice({
+	shown,
+	disabled,
+	onUpdateKey,
+	onRetry,
+	onRepair,
+	onSaveAgain,
+}: FailureNoticeProps) {
+	if (shown.kind === 'unexpected') {
+		// No retry, because whatever threw may have thrown after a write. A reload shows what storage
+		// holds.
+		return (
+			<div
+				className="flex w-full flex-col items-start gap-3"
+				data-outcome="unexpected"
+				role="alert"
+			>
+				<p className="text-destructive text-sm">
+					Generation stopped on an error Cambium didn&apos;t expect. Reload the page to see whether
+					anything was saved.
+				</p>
+			</div>
+		);
+	}
+
+	const { descriptor, held } = shown;
+
+	return (
+		<div
+			className="flex w-full flex-col items-start gap-3"
+			data-outcome={descriptor.kind}
+			role="alert"
+		>
+			<p className="text-destructive text-sm">{descriptor.message}</p>
+
+			{descriptor.requestId && (
+				<p className="text-muted-foreground text-xs">
+					Anthropic request id:{' '}
+					<code className="bg-muted rounded px-1 py-0.5">{descriptor.requestId}</code>
+				</p>
+			)}
+
+			{descriptor.raw && (
+				<details className="w-full text-sm">
+					<summary className="text-muted-foreground cursor-pointer">
+						What Anthropic sent back
+					</summary>
+					<pre className="bg-muted mt-2 max-h-64 overflow-auto rounded-md p-3 text-xs whitespace-pre-wrap">
+						{descriptor.raw}
+					</pre>
+				</details>
+			)}
+
+			{descriptor.recovery === 'reopen-key-dialog' && (
+				<Button disabled={disabled} onClick={onUpdateKey} variant="outline">
+					Update API key
+				</Button>
+			)}
+
+			{descriptor.recovery === 'manual-retry' && (
+				<Button disabled={disabled} onClick={onRetry} variant="outline">
+					Retry
+				</Button>
+			)}
+
+			{descriptor.recovery === 'repair-retry' && descriptor.repair && (
+				<Button
+					disabled={disabled}
+					onClick={() => {
+						if (descriptor.repair) onRepair(descriptor.repair);
+					}}
+					variant="outline"
+				>
+					Ask for a repair
+				</Button>
+			)}
+
+			{descriptor.recovery === 'save-again' && held && (
+				<Button disabled={disabled} onClick={() => onSaveAgain(held)} variant="outline">
+					Save again
+				</Button>
+			)}
+		</div>
+	);
+}

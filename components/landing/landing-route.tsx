@@ -2,10 +2,22 @@
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 
+import { KeyIndicator } from '@/components/landing/generate/key-indicator';
 import { UploadForm } from '@/components/landing/upload-form';
 import { isSchemaRejection, Outcome, RECORD_PARAM } from '@/components/stored-record';
+
+import type { BrandRecord } from '../../core/brand-record';
+import { getSessionKey } from '../../app/generation/session-key';
+
+// Lazy because `/` sits within a few kB of `FIRST_LOAD_BUDGET_BYTES`, and the panel is wanted only
+// after a record has been read back.
+const GeneratePanel = lazy(() =>
+	import('@/components/landing/generate/generate-panel').then((module) => ({
+		default: module.GeneratePanel,
+	})),
+);
 
 /**
  * Four outcomes rather than two, because each one licenses a different sentence and the wrong
@@ -28,12 +40,30 @@ import { isSchemaRejection, Outcome, RECORD_PARAM } from '@/components/stored-re
  */
 type SavedRecord =
 	| { kind: 'loading' }
-	| { kind: 'found'; imageCount: number }
+	| { kind: 'found'; record: BrandRecord }
 	| { kind: 'missing' }
 	| { kind: 'unreadable' }
 	| { kind: 'unavailable' };
 
+/**
+ * The key indicator sits above every outcome, the upload form included, because a key loaded in
+ * this tab is true of the whole page and the person should be able to clear it from anywhere.
+ */
 export function LandingRoute() {
+	// Read in the initializer, which is safe only because `useSearchParams` below keeps this whole
+	// subtree out of the prerender, so there's no server HTML for it to disagree with. Only whether a
+	// key exists is kept, never the key.
+	const [keyStored, setKeyStored] = useState(() => getSessionKey() !== null);
+
+	return (
+		<>
+			{keyStored && <KeyIndicator onCleared={() => setKeyStored(false)} />}
+			<LandingOutcome onKeyStored={setKeyStored} />
+		</>
+	);
+}
+
+function LandingOutcome({ onKeyStored }: { onKeyStored: (stored: boolean) => void }) {
 	const router = useRouter();
 	const recordId = useSearchParams().get(RECORD_PARAM);
 	const [loaded, setLoaded] = useState<{ id: string; result: SavedRecord } | null>(null);
@@ -77,9 +107,7 @@ export function LandingRoute() {
 					const record = await store.get(recordId);
 
 					// A resolved null is the one answer storage gives that is actually about absence.
-					result = record
-						? { kind: 'found', imageCount: record.images.length }
-						: { kind: 'missing' };
+					result = record ? { kind: 'found', record } : { kind: 'missing' };
 				} catch (error) {
 					// A rejection here is not proof a record exists. `get` reads the row and parses it in
 					// one promise, so an aborted transaction rejects exactly like a row that will not
@@ -158,8 +186,17 @@ export function LandingRoute() {
 		);
 	}
 
+	const { images, versions } = saved.record;
 	const count =
-		saved.imageCount === 1 ? 'One reference image is' : `${saved.imageCount} reference images are`;
+		images.length === 1 ? 'One reference image is' : `${images.length} reference images are`;
+	const workspaceLink = (
+		<Link
+			className="text-primary underline-offset-4 hover:underline"
+			href={`/workspace?${RECORD_PARAM}=${recordId}`}
+		>
+			workspace
+		</Link>
+	);
 
 	return (
 		<Outcome action="Add another brand">
@@ -176,17 +213,25 @@ export function LandingRoute() {
 				The images are stored. Image tags and the brand site are not stored yet, so they do not
 				outlive this page.
 			</p>
-			<p className="text-muted-foreground text-sm">
-				Nothing has been generated from them yet. That takes an API key and a model call, and
-				Cambium can&apos;t collect a key yet. You can already open the record in the{' '}
-				<Link
-					className="text-primary underline-offset-4 hover:underline"
-					href={`/workspace?${RECORD_PARAM}=${recordId}`}
-				>
-					workspace
-				</Link>
-				.
-			</p>
+			{versions.length === 0 ? (
+				<>
+					<p className="text-muted-foreground text-sm">
+						Nothing has been generated from them yet. Generating sends the images to Anthropic with
+						your own API key and saves what comes back as this brand&apos;s first version. You can
+						already open the record in the {workspaceLink}.
+					</p>
+					<Suspense fallback={null}>
+						<GeneratePanel images={images} onKeyStored={onKeyStored} recordId={recordId} />
+					</Suspense>
+				</>
+			) : (
+				// Generate here produces only the first version. Once one exists, a button here would append
+				// to a record the person can't see from this page.
+				<p className="text-muted-foreground text-sm">
+					{versions.length === 1 ? 'One version has' : `${versions.length} versions have`} been
+					generated from them. Open the record in the {workspaceLink}.
+				</p>
+			)}
 		</Outcome>
 	);
 }
