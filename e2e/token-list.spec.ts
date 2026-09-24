@@ -101,21 +101,67 @@ const EXPECTED_ROWS: Record<(typeof NON_COLOUR_CATEGORIES)[number], number> = {
 
 /** What one row should show, read off the DTCG export rather than off the token set's own shape. */
 type ExportedRow = {
-	/** A semantic row's alias as its `<select>` holds it, or every number a row's inputs hold. */
-	values: (number | string)[];
+	/** Each control's accessible name, mapped to the alias or number the export holds for it. */
+	controls: Record<string, number | string>;
 	provenance: string;
 };
 
-function numbersIn(value: unknown): number[] {
-	if (typeof value === 'number') return [value];
-	if (typeof value !== 'object' || value === null) return [];
-	return Object.values(value).flatMap(numbersIn);
+/** DTCG fixes a cubic-bezier's `$value` as the tuple `[x1, y1, x2, y2]`. */
+const BEZIER_PARAMS = ['x1', 'y1', 'x2', 'y2'] as const;
+
+/**
+ * The editable numbers in one exported `$value`, each under the name its input should carry after
+ * the row id. Dispatched on `$type` and written from the DTCG shapes rather than from the list's
+ * own labelling, so a row that shows the right number under the wrong name fails. The strings a
+ * `$value` also carries (`unit`, `hex`, `colorSpace`) aren't editable and aren't listed. A `$type`
+ * nobody mapped throws, so a new family can't slip through with nothing checked.
+ */
+function exportedLeaves(type: string, value: unknown): Record<string, number> {
+	switch (type) {
+		case 'number':
+		case 'fontWeight':
+			return { value: value as number };
+		case 'dimension':
+		case 'duration':
+			return { value: (value as { value: number }).value };
+		case 'cubicBezier':
+			return Object.fromEntries(
+				BEZIER_PARAMS.map((name, index) => [name, (value as number[])[index]!]),
+			);
+		case 'color': {
+			const { components, alpha } = value as { components: number[]; alpha?: number };
+			const [l, c, h] = components;
+			return alpha === undefined ? { l: l!, c: c!, h: h! } : { l: l!, c: c!, h: h!, alpha };
+		}
+		case 'shadow': {
+			type Length = { value: number };
+			const shadow = value as {
+				color: unknown;
+				offsetX: Length;
+				offsetY: Length;
+				blur: Length;
+				spread: Length;
+			};
+			const color = Object.entries(exportedLeaves('color', shadow.color)).map(
+				([name, number]) => [`color.${name}`, number] as const,
+			);
+			return {
+				offsetX: shadow.offsetX.value,
+				offsetY: shadow.offsetY.value,
+				blur: shadow.blur.value,
+				spread: shadow.spread.value,
+				...Object.fromEntries(color),
+			};
+		}
+		default:
+			throw new Error(`no control mapping for DTCG $type "${type}"`);
+	}
 }
 
 /**
  * How many times each value occurs. Two tallies are equal when the lists hold the same values the
- * same number of times in any order, which is the comparison a row's controls need: the inputs
- * follow no order the export promises, and a repeated row or a dropped input changes a count.
+ * same number of times in any order, which is the comparison a section's row ids need: the list
+ * follows no order the export promises, and a repeated row or a dropped one changes a count.
  */
 function tally<T>(values: Iterable<T>): Map<T, number> {
 	const counts = new Map<T, number>();
@@ -127,9 +173,8 @@ function tally<T>(values: Iterable<T>): Map<T, number> {
  * Every row the light scheme should render, keyed by the list's `data-token` id and built from
  * `serializeDtcg`'s light document. The list finds its tokens by walking to each `$extensions`;
  * the export finds them by where DTCG puts a `$value`, so the two only agree when the list shows
- * exactly the tokens a consumer of the export would read. Every number under a `$value` is one
- * input's worth: a shadow's four lengths plus its colour's three components and alpha, an easing's
- * four, a dimension's one. The strings beside them (`unit`, `hex`, `colorSpace`) aren't editable.
+ * exactly the tokens a consumer of the export would read. Every editable number under a `$value`
+ * is one input's worth, named as `exportedLeaves` says.
  */
 const EXPORTED_ROWS: ReadonlyMap<string, ExportedRow> = (() => {
 	const rows = new Map<string, ExportedRow>();
@@ -152,15 +197,16 @@ const EXPORTED_ROWS: ReadonlyMap<string, ExportedRow> = (() => {
 
 		// The export nests both colour groups under `color`; the list names them on their own.
 		if (path[0] === 'color' && path[1] === 'semantic') {
+			const token = path.slice(2).join('.');
 			const alias = String(value).replace(/^\{color\.primitive\.(.+)\}$/, '$1');
-			rows.set(`semantic.${path.slice(2).join('.')}`, { values: [alias], provenance });
+			rows.set(`semantic.${token}`, { controls: { [`${token} alias`]: alias }, provenance });
 			return;
 		}
 
 		const id = path[0] === 'color' ? path.slice(1).join('.') : path.join('.');
-		const components = (value as { components?: number[] }).components;
+		const leaves = Object.entries(exportedLeaves(String(record.$type), value));
 		rows.set(id, {
-			values: path[0] === 'color' && components ? components : numbersIn(value),
+			controls: Object.fromEntries(leaves.map(([name, number]) => [`${id} ${name}`, number])),
 			provenance,
 		});
 	}
@@ -388,8 +434,14 @@ test('every category is grouped, and every row carries a value control, a proven
 
 			return {
 				id: element.getAttribute('data-token') ?? '',
-				inputs: Array.from(element.querySelectorAll('input'), (input) => input.value),
-				selects: Array.from(element.querySelectorAll('select'), (select) => select.value),
+				inputs: Array.from(element.querySelectorAll('input'), (input) => ({
+					label: input.getAttribute('aria-label') ?? '',
+					raw: input.value,
+				})),
+				selects: Array.from(element.querySelectorAll('select'), (select) => ({
+					label: select.getAttribute('aria-label') ?? '',
+					raw: select.value,
+				})),
 				provenance: provenanceLabel?.textContent?.trim() ?? null,
 				rationale: element.querySelector('p')?.textContent?.trim() ?? '',
 			};
@@ -401,12 +453,23 @@ test('every category is grouped, and every row carries a value control, a proven
 
 	for (const row of rows) {
 		const exported = EXPORTED_ROWS.get(row.id)!;
-		// One control per exported number, each holding one of them. Tallied rather than paired by
-		// label, since the export has no label for a shadow's alpha. Inputs compare as numbers, so
-		// `0.5` and `.5` count as the same value.
-		const shown = [...row.selects, ...row.inputs.map(Number)];
 
-		expect(tally(shown), `${row.id} controls`).toEqual(tally(exported.values));
+		// `Number('')` is 0, so a blank input would pass wherever the export holds a 0 unless the raw
+		// text is checked first.
+		for (const input of row.inputs) {
+			expect(input.raw, `${input.label} is blank`).not.toBe('');
+		}
+
+		// Paired by accessible name, so a right number under the wrong label fails. Counted before
+		// the pairs collapse into a record, so a repeated control can't hide behind its twin. Inputs
+		// compare as numbers, so `0.5` and `.5` count as the same value.
+		const controls = [
+			...row.selects.map(({ label, raw }) => [label, raw] as const),
+			...row.inputs.map(({ label, raw }) => [label, Number(raw)] as const),
+		];
+
+		expect(controls.length, `${row.id} control count`).toBe(Object.keys(exported.controls).length);
+		expect(Object.fromEntries(controls), `${row.id} controls`).toEqual(exported.controls);
 		expect(row.provenance, `${row.id} provenance`).toBe(exported.provenance);
 		expect(row.rationale.length, `${row.id} should carry a rationale`).toBeGreaterThan(0);
 	}
@@ -853,4 +916,51 @@ test('a refused light-scheme edit lists its message once, though the store check
 	await alpha.fill('2');
 	await alpha.blur();
 	await expect(issueItems(shadow)).toHaveCount(1);
+});
+
+test('refusals in two different fields of one row list as two items, not one', async ({ page }) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	// Both leaves top out at 1, so the store refuses each with the same message. Only their paths
+	// differ, and a row that merged on the message would hide the second refused field.
+	const shadow = page.locator('[data-token="shadow.xs"]');
+	const leaf = (label: string) => page.getByLabel(`shadow.xs ${label}`, { exact: true });
+	await leaf('color.l').fill('2');
+	await leaf('color.l').blur();
+	await expect(issueItems(shadow)).toHaveCount(1);
+	await leaf('color.alpha').fill('2');
+	await leaf('color.alpha').blur();
+	await expect(issueItems(shadow)).toHaveCount(2);
+
+	// Two cleared channels never reach the store, and share one message the same way.
+	const primitive = page.locator('[data-token="primitive.brand.1"]');
+	const channel = (name: 'l' | 'c') =>
+		page.getByLabel(`primitive.brand.1 ${name}`, { exact: true });
+	await channel('l').fill('');
+	await channel('l').blur();
+	await expect(issueItems(primitive)).toHaveCount(1);
+	await channel('c').fill('');
+	await channel('c').blur();
+	await expect(issueItems(primitive)).toHaveCount(2);
+});
+
+test('two cleared fields of one shadow row list as two items, not one', async ({ page }) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	// Neither edit reaches the store: each field holds its own "not a number" issue under its own
+	// label, with the same message, so only the field tells them apart.
+	const shadow = page.locator('[data-token="shadow.xs"]');
+	const leaf = (label: string) => page.getByLabel(`shadow.xs ${label}`, { exact: true });
+	await leaf('offsetX').fill('');
+	await leaf('offsetX').blur();
+	await expect(issueItems(shadow)).toHaveCount(1);
+	await leaf('offsetY').fill('');
+	await leaf('offsetY').blur();
+	await expect(issueItems(shadow)).toHaveCount(2);
 });

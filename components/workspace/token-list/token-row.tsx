@@ -43,9 +43,15 @@ export function TokenRow({
 }) {
 	const [expanded, setExpanded] = useState(false);
 	// A light-scheme edit is checked against the scheme and the top-level copy that mirrors it, so
-	// the store refuses it once per copy under two paths with one message. The reader needs the
-	// message, not the copy count, so the row lists each distinct message once.
-	const messages = [...new Set((issues ?? []).map((issue) => issue.message))];
+	// the store refuses it once per copy, under paths that differ only by a leading
+	// `['schemes', 'light']`. Keying on the path with that prefix stripped folds the two copies into
+	// one item. Keying on the message alone would also fold two different refused fields that happen
+	// to share a message, and the row would stop saying the second one is refused.
+	const listed = new Map<string, string>();
+	for (const issue of issues ?? []) {
+		const path = issue.path[0] === 'schemes' ? issue.path.slice(2) : issue.path;
+		listed.set(JSON.stringify([path, issue.message]), issue.message);
+	}
 
 	return (
 		<li
@@ -108,10 +114,10 @@ export function TokenRow({
 				) : null}
 			</div>
 
-			{messages.length > 0 ? (
+			{listed.size > 0 ? (
 				<ul data-issues className="text-destructive text-xs">
-					{messages.map((message) => (
-						<li key={message}>{message}</li>
+					{[...listed].map(([key, message]) => (
+						<li key={key}>{message}</li>
 					))}
 				</ul>
 			) : null}
