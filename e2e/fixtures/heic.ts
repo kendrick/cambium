@@ -1,0 +1,31 @@
+/**
+ * `lib/image-intake.ts` never trusts a filename or a `File.type`; it decides format from magic
+ * bytes alone (see `sniffImageType`'s docblock there). The defect #105 exists to cover is a HEIC
+ * export that iOS or a photo picker has renamed to end in `.png`—the exact shape `describeRejectedBytes`
+ * and `sniffImageType` are built to see through. This generator produces that shape without a real
+ * HEIC encoder, because only the `ftyp` box header those two functions actually read has to be
+ * genuine.
+ */
+
+import { asciiBytes } from './png';
+
+/**
+ * A minimal ISO base media `ftyp` box: size, `ftyp`, a major brand of `heic` at byte offset 8,
+ * where `describeRejectedBytes` in `lib/image-intake.ts` reads it, a zero minor version, and two
+ * compatible-brand slots (`mif1`, `heic`) as padding—present because a real `ftyp` box always
+ * carries at least one, not because anything here reads them. Paired with a `.png` name, so
+ * the bytes and the extension disagree the way #22's defect did.
+ */
+export function makeRenamedHeic(): { bytes: Uint8Array; name: string } {
+	const box = new Uint8Array(24);
+	const view = new DataView(box.buffer);
+
+	view.setUint32(0, box.length);
+	box.set(asciiBytes('ftyp'), 4);
+	box.set(asciiBytes('heic'), 8);
+	view.setUint32(12, 0);
+	box.set(asciiBytes('mif1'), 16);
+	box.set(asciiBytes('heic'), 20);
+
+	return { bytes: box, name: 'logo.png' };
+}

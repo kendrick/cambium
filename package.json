@@ -29,7 +29,7 @@
   ],
   "packageManager": "pnpm@10.28.2",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.2.0"
   },
   "scripts": {
     "dev": "next dev",
@@ -83,6 +83,7 @@
     "@radix-ui/colors": "3.0.0",
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "26.6.1",
+    "@types/pngjs": "6.0.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "ajv": "8.20.0",
@@ -91,6 +92,7 @@
     "fake-indexeddb": "6.2.5",
     "oxfmt": "0.68.0",
     "oxlint": "1.83.0",
+    "pngjs": "7.0.0",
     "postcss": "8.5.28",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",

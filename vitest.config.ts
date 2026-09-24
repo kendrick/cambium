@@ -9,10 +9,13 @@ import { defineConfig } from 'vitest/config';
 const node = {
 	environment: 'node' as const,
 	globals: true,
-	// `e2e/**` holds Playwright specs, named `*.spec.ts` so the `unit` project's `*.test.ts`
-	// include already skips them. This is the second guard: a file mis-named `*.test.ts` under
-	// `e2e/` still cannot leak into `pnpm test`.
-	exclude: ['node_modules/**', 'out/**', '.next/**', 'e2e/**'],
+	// `e2e/` holds Playwright specs, named `*.spec.ts` so the `unit` project's `*.test.ts`
+	// include already skips them. This is the second guard: a file mis-named `*.test.ts`
+	// directly under `e2e/` or in one of its spec directories still cannot leak into `pnpm
+	// test`. The one carve-out is `e2e/fixtures/`: it holds pure byte generators (#105) with
+	// no browser dependency, checked here rather than by Playwright, so it stays included
+	// while the rest of `e2e/` stays out.
+	exclude: ['node_modules/**', 'out/**', '.next/**', 'e2e/!(fixtures)/**', 'e2e/*.*'],
 };
 
 export default defineConfig({
