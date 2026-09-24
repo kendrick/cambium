@@ -138,19 +138,20 @@ async function git(root: string, args: string[]): Promise<string> {
 	return stdout;
 }
 
-// Every `git add` writes the checkout's one shared index, so two guard runs sharing a checkout, or a
-// developer's own `git add` alongside one, can hold `index.lock` while this stages. Git exits 128
+// `git add` and `git rm --cached` both write the checkout's one shared index, so two guard runs
+// sharing a checkout, or a developer's own `git add` alongside one, can hold `index.lock` while
+// this runs. Git exits 128
 // for that and for plenty else, so contention is read off stderr, never off the exit code. The
 // cap sits well inside `TIMEOUT`. A lock that outlives it was more likely left by a crashed git
 // than held by a live one, so the error names the lock and says how to clear it. A reader then
 // sees a stuck index, and never mistakes it for the guard catching a bad script.
-async function stage(root: string, args: string[], cap = 5_000): Promise<void> {
+async function writeIndex(root: string, args: string[], cap = 5_000): Promise<void> {
 	const deadline = Date.now() + cap;
 
 	for (let wait = 25; ; wait = Math.min(wait * 2, 400)) {
 		try {
 			// oxlint-disable-next-line no-await-in-loop -- each attempt waits on the lock the last one met
-			await git(root, ['add', ...args]);
+			await git(root, args);
 
 			return;
 		} catch (error) {
@@ -455,13 +456,25 @@ async function sweepStrays(root: string): Promise<void> {
  * It reports rather than asserting so the same guard can run against a scratch repo whose `format`
  * script is an exploit, where the expected answer is a failure and the test needs to say which one.
  */
-async function formatGuard(root: string, extensions: string[]): Promise<string[]> {
+interface GuardOptions {
+	// Runs in the `finally`, just before the canaries come out of the index, so a test can hold
+	// `index.lock` at exactly that moment rather than guessing at timing.
+	beforeUnstage?: () => Promise<void>;
+	unstageCap?: number;
+}
+
+async function formatGuard(
+	root: string,
+	extensions: string[],
+	options: GuardOptions = {},
+): Promise<string[]> {
 	await sweepStrays(root);
 
 	const failures: string[] = [];
 	const guard = await startRun(root);
 	const outside = await mkdtemp(join(tmpdir(), 'cambium-format-'));
 	let canaries: string[] = [];
+	let thrown: { error: unknown } | undefined;
 
 	try {
 		const target = join(outside, 'messy.ts');
@@ -500,8 +513,10 @@ async function formatGuard(root: string, extensions: string[]): Promise<string[]
 		// ignores. Without it `git add` refuses the whole batch over one such path.
 		const [added, ...intended] = canaries;
 
-		if (intended.length > 0) await stage(root, ['-f', '--intent-to-add', '--', ...intended]);
-		await stage(root, ['-f', '--', added]);
+		if (intended.length > 0) {
+			await writeIndex(root, ['add', '-f', '--intent-to-add', '--', ...intended]);
+		}
+		await writeIndex(root, ['add', '-f', '--', added]);
 
 		const touched = filesTouched(await runScript(root, 'format', target));
 
@@ -516,38 +531,55 @@ async function formatGuard(root: string, extensions: string[]): Promise<string[]
 		});
 
 		return failures;
+	} catch (error) {
+		thrown = { error };
+		throw error;
 	} finally {
 		// Only what this run planted. A leftover is still mis-formatted in every case except one, so
 		// it fails `pnpm format:check` on the next call rather than lurking. The exception is a run
 		// killed after a tree-wide write already tidied the canaries, and the sweep at the top of
 		// the next run clears those.
 		//
-		// Files first, index second, and the index call cannot take the run down with it. A
-		// concurrent `git add` holding `index.lock` is enough to make it throw, and a throw here
-		// would both strand hundreds of files in the tree and replace the failure this guard exists
-		// to report. The manifest goes only once the index is clear, so entries a failed call left
-		// behind are still listed, and the next sweep clears them once the manifest ages out.
+		// Files first, index second. The unstaging waits out a peer's `index.lock` the same way
+		// staging does, because the fully added canary is a real blob in the shared index: left
+		// there, the next plain `git commit` in this checkout takes a fixture with it.
+		//
+		// A lock that outlasts the cap keeps the manifest, so a later sweep can finish the job,
+		// and the run fails naming the lock rather than passing over a staged canary. When the
+		// body already threw, both errors surface in one AggregateError. Throwing only the cleanup
+		// error would hide the failure the guard exists to report, and throwing only the original
+		// would hide a canary still sitting in the index.
 		await Promise.all([
 			rm(outside, { recursive: true, force: true }),
 			...guard.planted.map((path) => rm(path, { force: true })),
 		]);
 
-		const cleared =
-			canaries.length === 0 ||
-			(await git(root, [
-				'rm',
-				'--cached',
-				'-f',
-				'--quiet',
-				'--ignore-unmatch',
-				'--',
-				...canaries,
-			]).then(
-				() => true,
-				() => false,
-			));
+		await options.beforeUnstage?.();
 
-		if (cleared) await rm(guard.manifest, { force: true });
+		const stuck =
+			canaries.length === 0
+				? undefined
+				: await writeIndex(
+						root,
+						['rm', '--cached', '-f', '--quiet', '--ignore-unmatch', '--', ...canaries],
+						options.unstageCap,
+					).then(
+						() => undefined,
+						(error: unknown) => error,
+					);
+
+		if (stuck === undefined) {
+			await rm(guard.manifest, { force: true });
+		} else if (thrown) {
+			// oxlint-disable-next-line no-unsafe-finally -- a canary left staged must fail the run
+			throw new AggregateError(
+				[thrown.error, stuck],
+				'format guard failed, then could not unstage its canaries',
+			);
+		} else {
+			// oxlint-disable-next-line no-unsafe-finally -- a canary left staged must fail the run
+			throw stuck;
+		}
 	}
 }
 
@@ -934,7 +966,7 @@ describe('pnpm format guard, against scripts built to evade it', () => {
 				await writeFile(path, MESSY['.ts']);
 				await writeFile(lock, '');
 
-				const staging = stage(root, ['--', path]);
+				const staging = writeIndex(root, ['add', '--', path]);
 
 				await new Promise((settle) => setTimeout(settle, 200));
 				await rm(lock);
@@ -955,9 +987,52 @@ describe('pnpm format guard, against scripts built to evade it', () => {
 				await writeFile(path, MESSY['.ts']);
 				await writeFile(join(root, '.git', 'index.lock'), '');
 
-				await expect(stage(root, ['--', path], 300)).rejects.toThrow(
+				await expect(writeIndex(root, ['add', '--', path], 300)).rejects.toThrow(
 					/index\.lock still held after 300ms/,
 				);
+			});
+		},
+		TIMEOUT,
+	);
+
+	it(
+		'unstages once a peer lets go of the index',
+		async () => {
+			await inScratch('oxfmt --write', async (root) => {
+				const committed = await indexed(root);
+				const lock = join(root, '.git', 'index.lock');
+				const failures = await formatGuard(root, ['.ts'], {
+					beforeUnstage: async () => {
+						await writeFile(lock, '');
+						setTimeout(() => void rm(lock, { force: true }), 200);
+					},
+				});
+
+				expect(failures).toEqual([]);
+				expect(await indexed(root)).toEqual(committed);
+				expect(await readdir(await manifestDirectory(root))).toEqual([]);
+			});
+		},
+		TIMEOUT,
+	);
+
+	it(
+		'fails the run and keeps the manifest when the index never comes free',
+		async () => {
+			await inScratch('oxfmt --write', async (root) => {
+				const committed = await indexed(root);
+				const lock = join(root, '.git', 'index.lock');
+
+				await expect(
+					formatGuard(root, ['.ts'], {
+						beforeUnstage: () => writeFile(lock, ''),
+						unstageCap: 300,
+					}),
+				).rejects.toThrow(/index\.lock still held after 300ms/);
+
+				await rm(lock);
+				expect(await readdir(await manifestDirectory(root))).toHaveLength(1);
+				expect((await indexed(root)).length).toBeGreaterThan(committed.length);
 			});
 		},
 		TIMEOUT,
