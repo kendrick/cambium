@@ -1,7 +1,7 @@
 /**
  * Collapsed by default because the raw response is evidence to check the seed against, not
- * something anyone reads first. A `<details>` rather than a disclosure component keeps it working
- * before hydration and costs nothing in the bundle.
+ * something anyone reads first. A native `<details>` opens and closes without any script, so it
+ * adds nothing to the bundle.
  */
 export function RawResponse({ rawResponse }: { rawResponse: string | null }) {
 	return (

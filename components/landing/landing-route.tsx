@@ -177,14 +177,15 @@ export function LandingRoute() {
 				outlive this page.
 			</p>
 			<p className="text-muted-foreground text-sm">
-				Nothing has been generated from them yet. That takes an API key and a model call, which the{' '}
+				Nothing has been generated from them yet. That takes an API key and a model call, and
+				Cambium can&apos;t collect a key yet. You can already open the record in the{' '}
 				<Link
 					className="text-primary underline-offset-4 hover:underline"
 					href={`/workspace?${RECORD_PARAM}=${recordId}`}
 				>
 					workspace
-				</Link>{' '}
-				asks for.
+				</Link>
+				.
 			</p>
 		</Outcome>
 	);
