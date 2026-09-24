@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/brand-record';
 import type { BrandSeed } from '../../core/brand-seed';
+import { BALANCED } from '../../core/interpretation';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
 import type { ScaleEngine, ScaleEngineResult } from '../../core/scale-engine';
 import { createInMemoryRecordStore } from '../storage/in-memory-record-store';
@@ -308,6 +309,92 @@ describe('the workspace store', () => {
 		});
 		expect(recordStore.puts).toEqual([next]);
 		expect(store.getState().activeOrdinal).toBe(2);
+	});
+
+	// `BrandSeedSchema` has two spellings of one hue, and the workspace has to hold storage's
+	// spelling, not its own.
+	it('adopts the record storage holds, hue and all, rather than the one it proposed', async () => {
+		const { store, recordStore } = openWorkspace();
+
+		store.getState().editSeed({ keyColors: seedWith(360).keyColors });
+
+		const returned = await store.getState().commit(PROVENANCE);
+		const stored = await recordStore.get(returned.id);
+
+		expect(store.getState().record).toEqual(stored);
+		expect(returned).toEqual(stored);
+		// Asserted directly, not just through the equality above: if `HueSchema` ever stopped
+		// canonicalising, both sides would still hold 360 and the equality would pass vacuously.
+		expect(store.getState().record?.versions[1]?.seed?.keyColors?.[0]?.oklch[2]).toBe(0);
+	});
+
+	it('carries provenance forward on an immediate second commit, once a canonicalised hue is adopted into the draft', async () => {
+		const { store } = openWorkspace();
+
+		store.getState().editSeed({ keyColors: seedWith(360).keyColors });
+
+		const first = await store.getState().commit(PROVENANCE);
+
+		// The draft has to hold the same spelling storage does, or a provenance-free commit right
+		// after this one reads as an edit nobody explained, even though nothing was edited.
+		expect(store.getState().draftSeed).toEqual(first.versions[1]?.seed);
+		expect(store.getState().draftSeed?.keyColors?.[0]?.oklch[2]).toBe(0);
+
+		const second = await store.getState().commit();
+
+		expect(second.versions[2]).toMatchObject({ seed: first.versions[1]?.seed, rawResponse: null });
+	});
+
+	it('keeps a mid-write edit’s seed rather than the just-committed version’s', async () => {
+		const { store, writeInFlight, releaseWrite } = gatedWorkspace();
+
+		store.getState().open(makeRecord());
+
+		const pending = store.getState().commit();
+
+		// `editSeed` can land mid-write, the same window adoption reaches into to sync the draft with
+		// what storage canonicalised. An edit that lands there has to win over the version just
+		// written, or the user's keystroke gets silently replaced by the record they committed before it.
+		await writeInFlight;
+		store.getState().editSeed({ keyColors: seedWith(45).keyColors });
+		releaseWrite();
+
+		await pending;
+
+		expect(store.getState().activeOrdinal).toBe(2);
+		expect(store.getState().draftSeed).toEqual(seedWith(45));
+	});
+
+	it('leaves the draft the same object when a commit needs no canonicalising', async () => {
+		const { store } = openWorkspace();
+		const draftBefore = store.getState().draftSeed;
+
+		const next = await store.getState().commit();
+
+		expect(store.getState().draftSeed).toBe(draftBefore);
+		expect(next.versions[1]).toMatchObject({ seed: draftBefore });
+	});
+
+	it('recomputes derived from the adopted seed, so the anchor reports the hue the draft now holds', async () => {
+		const { store, engine } = openWorkspace();
+
+		store.getState().editSeed({ keyColors: seedWith(360).keyColors });
+
+		await store.getState().commit(PROVENANCE);
+
+		const draft = store.getState().draftSeed;
+		const derived = store.getState().derived;
+		const fresh = engine.generate(draft!, BALANCED);
+
+		expect(derived).toEqual(fresh);
+
+		if (!derived?.ok) {
+			throw new Error(`expected a derived ramp set, got ${derived?.error.kind ?? 'nothing'}`);
+		}
+
+		// The ramps built from either spelling match, but the anchor records the hue actually
+		// requested—the clearest place a `derived` still built from the pre-adoption seed would show.
+		expect(derived.anchor.requested[2]).toBe(0);
 	});
 
 	it('serialises overlapping commits so the second builds on the first', async () => {

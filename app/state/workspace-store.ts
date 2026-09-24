@@ -468,12 +468,33 @@ export function createWorkspaceStore({
 				// seed and preset of the version the user actually chose.
 				const reselected = selection !== request.selection;
 
-				// A partial `set` rather than `workspaceFor`, which every other path here uses. That helper
-				// rebuilds the draft from a version, and `editSeed` can land mid-write, so rebuilding
-				// would throw away an edit the user made while the write was in flight. The draft and
-				// the derived tokens already say what was written, so a commit nobody navigated away
-				// from moves the record and the active version and nothing else.
-				set(reselected ? { record: next } : { record: next, activeOrdinal: version.ordinal });
+				if (reselected) {
+					set({ record: next });
+				} else {
+					// Identity, not `sameSeed`: asks whether `editSeed` landed mid-write. `editSeed`
+					// always builds a new object, so identity catches a real edit even when its values
+					// happen to match what was there before.
+					const editedMidWrite = get().draftSeed !== request.draftSeed;
+					const newVersion = editedMidWrite ? null : versionAt(next, version.ordinal);
+
+					// Storage can hand back a canonical spelling of the seed, so a hue committed as 360 is
+					// held as 0. Left at 360, the draft would make the next provenance-free commit read a
+					// no-op as an edit and refuse it. So the draft takes the stored seed, but only when the
+					// two differ, and never over an edit that landed mid-write, which is the user's. The
+					// ramps built from either spelling match, but the anchor report records the hue
+					// actually requested—so `derived` is recomputed from the adopted seed too, to keep the
+					// two consistent.
+					const adopted =
+						newVersion && !sameSeed(newVersion.seed, request.draftSeed) ? newVersion.seed : null;
+
+					set({
+						record: next,
+						activeOrdinal: version.ordinal,
+						...(adopted
+							? { draftSeed: adopted, derived: derive(engine, adopted, get().preset) }
+							: {}),
+					});
+				}
 			}
 
 			return next;
