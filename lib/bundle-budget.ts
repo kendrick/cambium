@@ -2,8 +2,12 @@
  * The ceiling on what a visitor downloads.
  *
  * Measured baseline when these numbers were set: the scaffold build shipped 176.0 kB gzipped JS
- * across seven chunks plus 5.8 kB of CSS, and every chunk is first-load because there is one
+ * across seven chunks plus 5.8 kB of CSS, and every chunk was first-load because there was one
  * route.
+ *
+ * First-load applies to each exported route on its own, since any of them can be somebody's first
+ * visit. At #24, `/` measured 196.6 kB and `/workspace` 193.2 kB, the latter only after its shell
+ * moved behind a dynamic import. Shipped with the page, the shell put it at 205.1 kB.
  *
  * First-load sits at 200 kB against that 176 kB, and the 24 kB of headroom is the point. The
  * research notes project the full library set at roughly 185 kB gzipped if everything were

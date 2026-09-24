@@ -25,15 +25,32 @@ function overBudget(label: string, actual: number, budget: number): string[] {
  * statement about nothing, and this check has one job.
  */
 describe('the shipped bundle', () => {
-	it('stays inside both budgets', () => {
+	it('keeps every route inside the first-load budget and the build inside the total', () => {
 		if (!existsSync(new URL('index.html', outDir))) {
 			throw new Error('out/index.html is missing. Run pnpm build before pnpm test:bundle.');
 		}
 
 		const measurement = measureBundle(readStaticExport(outDir));
 
+		// Logged on a pass too, so the headroom each route has left can be read before it runs out. The
+		// default reporter shows it only on a failure; `pnpm test:bundle --reporter=verbose` shows it always.
+		console.info(
+			[
+				...measurement.routes.map(({ route, firstLoadBytes }) => `${route}: ${kB(firstLoadBytes)}`),
+				`total: ${kB(measurement.totalBytes)}`,
+			].join('\n'),
+		);
+
+		// Named from the app's routes rather than read back from out/, so a glob that stopped finding
+		// pages fails here instead of passing over fewer of them.
+		expect(measurement.routes.map(({ route }) => route)).toEqual(
+			expect.arrayContaining(['/', '/workspace']),
+		);
+
 		expect([
-			...overBudget('first-load JS', measurement.firstLoadBytes, FIRST_LOAD_BUDGET_BYTES),
+			...measurement.routes.flatMap(({ route, firstLoadBytes }) =>
+				overBudget(`first-load JS on ${route}`, firstLoadBytes, FIRST_LOAD_BUDGET_BYTES),
+			),
 			...overBudget('total JS', measurement.totalBytes, TOTAL_JS_BUDGET_BYTES),
 		]).toEqual([]);
 	});

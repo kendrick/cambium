@@ -13,10 +13,9 @@ import {
 import { expect, test } from './fixtures';
 
 /**
- * The query parameter `components/workspace/workspace-route.tsx` reads, mirrored here because the
- * component keeps it private. Wave 0's own doc comment ties it to the same name
- * `components/landing/landing-route.tsx` writes, so hardcoding the string is what that route
- * already does, not a guess about it.
+ * Spelled out rather than imported from `components/stored-record.tsx`. The address is a contract
+ * with every link and bookmark already out there, so a rename of that constant should fail here
+ * rather than move this test along with it.
  */
 const RECORD_PARAM = 'record';
 
@@ -126,9 +125,9 @@ async function seedWorkspaceRecord(page: Page, record: BrandRecord): Promise<voi
 }
 
 /**
- * `Locator.boundingBox()` types its result nullable for an element that isn't rendered, which the
- * geometry scenario below has already ruled out with a `toBeVisible()` wait. This just gives that
- * guarantee a type the two viewport comparisons can read without repeating the null check twice.
+ * `Locator.boundingBox()` types its result nullable for an element that isn't rendered, which each
+ * geometry scenario below has already ruled out with a `toBeVisible()` wait. This gives that
+ * guarantee a type the comparisons can read without repeating the null check at every call.
  */
 async function requireBox(
 	locator: Locator,
@@ -216,7 +215,9 @@ test('switching the interpretation preset re-derives tokens and makes no network
 	expect(requestUrls.length).toBe(requestsBeforeSwitch);
 });
 
-test('the raw response details is closed on load, wherever it renders', async ({ page }) => {
+test('the raw response sits closed at the bottom of the page, below both columns', async ({
+	page,
+}) => {
 	const record = buildRecordWithOneVersion();
 	await seedWorkspaceRecord(page, record);
 
@@ -224,13 +225,27 @@ test('the raw response details is closed on load, wherever it renders', async ({
 
 	// `components/workspace/raw-response.tsx` renders one `<details>` with no `open` attribute.
 	// Located by tag rather than by role: HTML's own accessibility mapping for `<details>` is not a
-	// stable enough target, where the `open` DOM property is. Wave 0 put this element in the left
-	// rail rather than at the bottom of the page as planned; this scenario deliberately does not
-	// assert where it sits; see `plan_concerns` in the task report for that gap.
+	// stable enough target, where the `open` DOM property is.
 	const details = page.locator('details');
+	const rail = page.getByRole('complementary', { name: 'Seed and tokens' });
+	const output = page.getByRole('region', { name: 'Output' });
 
 	await expect(details).toBeVisible();
 	await expect(details).toHaveJSProperty('open', false);
+
+	// The issue puts it "at the bottom", apart from the rail's two sections, so its top edge has to
+	// clear the bottom of both columns at either width. Inside the rail it would start above the
+	// rail's bottom edge, and inside the output column above that column's.
+	for (const width of [1280, 375]) {
+		await page.setViewportSize({ width, height: 900 });
+
+		const detailsBox = await requireBox(details);
+		const railBox = await requireBox(rail);
+		const outputBox = await requireBox(output);
+
+		expect(detailsBox.y).toBeGreaterThanOrEqual(railBox.y + railBox.height - 1);
+		expect(detailsBox.y).toBeGreaterThanOrEqual(outputBox.y + outputBox.height - 1);
+	}
 });
 
 test('the layout collapses to one column narrow and sits side by side from md up', async ({
@@ -247,8 +262,8 @@ test('the layout collapses to one column narrow and sits side by side from md up
 	await expect(rail).toBeVisible();
 	await expect(output).toBeVisible();
 
-	// Below Tailwind's `md` breakpoint (768px), `app/workspace/page.tsx`'s grid is `grid-cols-1`, so
-	// the two boxes stack.
+	// Below Tailwind's `md` breakpoint (768px), `components/workspace/shell.tsx`'s grid is
+	// `grid-cols-1`, so the two boxes stack.
 	await page.setViewportSize({ width: 375, height: 900 });
 	const narrowRail = await requireBox(rail);
 	const narrowOutput = await requireBox(output);
@@ -307,8 +322,8 @@ test('a saved record links to its workspace, which opens reporting no versions y
 
 	// No versions yet: `components/workspace/seed-rail.tsx` renders no `<dl>` when the seed is null,
 	// `components/workspace/token-list.tsx` renders no list rows when `derived` is null, and
-	// `components/workspace/workspace-route.tsx`'s `Shell` renders no `RawResponse` at all when
-	// there is no active version. Each is a presence check, not a reading of what any of them say.
+	// `components/workspace/shell.tsx` renders no `RawResponse` at all when there is no active
+	// version. Each is a presence check, not a reading of what any of them say.
 	await expect(page.locator('dl')).toHaveCount(0);
 	await expect(page.getByRole('region', { name: 'Tokens' }).getByRole('listitem')).toHaveCount(0);
 	await expect(page.locator('details')).toHaveCount(0);
