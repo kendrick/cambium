@@ -20,6 +20,11 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const draftSeed = useStore(store, (state) => state.draftSeed);
 	const preset = useStore(store, (state) => state.preset);
 	const derived = useStore(store, (state) => state.derived);
+	const tokenSet = useStore(store, (state) => state.tokenSet);
+	const overrides = useStore(store, (state) => state.overrides);
+	const overrideIssues = useStore(store, (state) => state.overrideIssues);
+	const setOverride = useStore(store, (state) => state.setOverride);
+	const clearOverride = useStore(store, (state) => state.clearOverride);
 	const selectPreset = useStore(store, (state) => state.selectPreset);
 
 	const active =
@@ -46,7 +51,14 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 						aria-labelledby="tokens-heading"
 						className="max-h-[60vh] min-h-0 flex-1 overflow-y-auto rounded border p-2 md:max-h-none"
 					>
-						<TokenList derived={derived} />
+						<TokenList
+							tokenSet={tokenSet}
+							derived={derived}
+							overrides={overrides}
+							overrideIssues={overrideIssues}
+							setOverride={setOverride}
+							clearOverride={clearOverride}
+						/>
 					</section>
 				</div>
 			</aside>
