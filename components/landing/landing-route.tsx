@@ -5,14 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 
 import { UploadForm } from '@/components/landing/upload-form';
-import { buttonVariants } from '@/components/ui/button';
-
-/**
- * A saved record is addressed by query parameter, never by a path segment. Static export cannot
- * prerender a page for a record that does not exist at build time, and `generateStaticParams` has
- * nothing to enumerate when the ids are made in the browser.
- */
-const RECORD_PARAM = 'record';
+import { isSchemaRejection, Outcome, RECORD_PARAM } from '@/components/stored-record';
 
 /**
  * Four outcomes rather than two, because each one licenses a different sentence and the wrong
@@ -39,48 +32,6 @@ type SavedRecord =
 	| { kind: 'missing' }
 	| { kind: 'unreadable' }
 	| { kind: 'unavailable' };
-
-/**
- * Whether a read failed because a row came back and would not parse.
- *
- * `RecordStore.get` awaits the row and then runs `BrandRecordSchema.parse` on it inside one
- * promise, so a rejection on its own says nothing about whether a row exists: an aborted
- * transaction rejects the same way. Only a schema rejection is evidence that storage handed
- * something over, and that evidence is exactly what `unreadable` spends when it tells somebody
- * their record is still there and not to clear it.
- *
- * Recognised by the `issues` array a `ZodError` carries, which is the shape callers are meant to
- * read a validation failure out of. Importing zod to use `instanceof` would put 93 kB into a bundle
- * ADR-0002 leaves about 5 kB in, so that is not available. Matching the class name instead was the
- * first attempt and rests on two of the library's internals at once, its error name and its
- * inheritance, either of which can move in a minor release with nothing here failing loudly.
- * Nothing else that can reach this catch carries `issues`: an `idb` or IndexedDB rejection is a
- * `DOMException`.
- *
- * It fails toward claiming less, whichever way it is written. If this stops recognising a schema
- * rejection, every read failure reads as `unavailable`, which says nothing about existence rather
- * than saying something false.
- */
-function isSchemaRejection(error: unknown): boolean {
-	return Array.isArray((error as { issues?: unknown } | null | undefined)?.issues);
-}
-
-/**
- * The shape every terminal outcome renders: something to read, and the one way back.
- *
- * Extracted at the fifth branch rather than the fourth, which is where the repetition stopped being
- * cheaper than the indirection.
- */
-function Outcome({ action, children }: { action: string; children: React.ReactNode }) {
-	return (
-		<div className="flex flex-col items-start gap-4">
-			{children}
-			<Link className={buttonVariants({ variant: 'outline' })} href="/">
-				{action}
-			</Link>
-		</div>
-	);
-}
 
 export function LandingRoute() {
 	const router = useRouter();
@@ -226,8 +177,15 @@ export function LandingRoute() {
 				outlive this page.
 			</p>
 			<p className="text-muted-foreground text-sm">
-				Nothing has been generated from them yet. That takes an API key and a model call, and the
-				workspace that asks for one is still being built.
+				Nothing has been generated from them yet. That takes an API key and a model call, and
+				Cambium can&apos;t collect a key yet. You can already open the record in the{' '}
+				<Link
+					className="text-primary underline-offset-4 hover:underline"
+					href={`/workspace?${RECORD_PARAM}=${recordId}`}
+				>
+					workspace
+				</Link>
+				.
 			</p>
 		</Outcome>
 	);

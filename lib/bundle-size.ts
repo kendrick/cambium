@@ -17,11 +17,14 @@ import { gzipSync } from 'node:zlib';
  * The build output, as data. Injected the way lib/deploy-paths.ts takes an EnvSource, so the unit
  * tests measure fixtures instead of needing a real build on disk.
  *
+ * Every exported page is here, because each is a first load of its own: a visitor can open any of
+ * them cold. Measuring `index.html` alone once let `/workspace` sit over the budget unseen.
+ *
  * Paths are relative to the export directory, matching the shape a `<script src>` reduces to:
  * `_next/static/chunks/13a-fmo859pu-.js`.
  */
 export type BuildOutput = {
-	entryHtml: string;
+	pages: readonly { route: string; html: string }[];
 	scriptPaths: readonly string[];
 	read: (path: string) => Uint8Array;
 };
@@ -32,15 +35,20 @@ export type MeasuredFile = {
 	firstLoad: boolean;
 };
 
-export type BundleMeasurement = {
+export type RouteMeasurement = {
+	route: string;
 	firstLoadBytes: number;
+};
+
+export type BundleMeasurement = {
+	routes: RouteMeasurement[];
 	totalBytes: number;
 	files: MeasuredFile[];
 };
 
 /**
- * Turbopack content-hashes chunk names with no stable prefix, so the entry document is the only
- * thing that knows which chunks a visitor fetches before the page is interactive.
+ * Turbopack content-hashes chunk names with no stable prefix, so a page's HTML is the only thing
+ * that knows which chunks a visitor fetches before that page is interactive.
  */
 const SCRIPT_SRC = /<script\b[^>]*?\ssrc="([^"]+)"/g;
 
@@ -79,17 +87,39 @@ function gzippedSize(bytes: Uint8Array): number {
 	return gzipSync(bytes, { level: 9 }).byteLength;
 }
 
-export function measureBundle(output: BuildOutput): BundleMeasurement {
-	const firstLoad = new Set(firstLoadScripts(output.entryHtml));
+/**
+ * The path a visitor requests for an exported HTML file, which is what a budget failure should
+ * name. Mirrors how `scripts/serve-out.mjs` and GitHub Pages resolve `/workspace` to
+ * `workspace.html` and `/docs` to `docs/index.html`.
+ */
+export function routeOf(htmlPath: string): string {
+	const route = htmlPath.replace(/\.html$/, '').replace(/(^|\/)index$/, '');
 
-	const missing = [...firstLoad].filter((path) => !output.scriptPaths.includes(path));
-	if (missing.length > 0) {
-		// Counting an unresolvable script as zero would quietly shrink first-load, which is the
-		// number the budget exists to hold.
-		throw new Error(
-			`the entry document references scripts that are not in the build output: ${missing.join(', ')}`,
-		);
+	return `/${route}`;
+}
+
+export function measureBundle(output: BuildOutput): BundleMeasurement {
+	if (output.pages.length === 0) {
+		// Every per-route budget passes vacuously over no routes.
+		throw new Error('the build output has no routes to measure');
 	}
+
+	const routeScripts = output.pages.map(({ route, html }) => {
+		const scripts = new Set(firstLoadScripts(html));
+		const missing = [...scripts].filter((path) => !output.scriptPaths.includes(path));
+
+		if (missing.length > 0) {
+			// Counting an unresolvable script as zero would quietly shrink first-load, which is the
+			// number the budget exists to hold.
+			throw new Error(
+				`${route} references scripts that are not in the build output: ${missing.join(', ')}`,
+			);
+		}
+
+		return { route, scripts };
+	});
+
+	const firstLoad = new Set(routeScripts.flatMap(({ scripts }) => [...scripts]));
 
 	// Sorted so the breakdown reads the same on every run. `toSorted` would say this better, but
 	// it is ES2023 and tsconfig targets ES2022; the spread already makes the copy the rule wants.
@@ -100,10 +130,15 @@ export function measureBundle(output: BuildOutput): BundleMeasurement {
 		firstLoad: firstLoad.has(path),
 	}));
 
+	const sizes = new Map(files.map((file) => [file.path, file.gzippedBytes]));
+
 	return {
-		firstLoadBytes: files
-			.filter((file) => file.firstLoad)
-			.reduce((total, file) => total + file.gzippedBytes, 0),
+		// Shared chunks count on every route that fetches them, because each route is somebody's
+		// first visit and pays for them in full.
+		routes: routeScripts.map(({ route, scripts }) => ({
+			route,
+			firstLoadBytes: [...scripts].reduce((total, path) => total + (sizes.get(path) ?? 0), 0),
+		})),
 		totalBytes: files.reduce((total, file) => total + file.gzippedBytes, 0),
 		files,
 	};
@@ -120,13 +155,23 @@ export function readStaticExport(outDir: URL): BuildOutput {
 	const root = fileURLToPath(outDir);
 	const staticDir = join(root, '_next', 'static');
 
+	// Every HTML file outside `_next` is a page a visitor can land on, including `404.html`, which
+	// GitHub Pages serves for any unknown path.
+	const pages = readdirSync(root, { recursive: true, withFileTypes: true })
+		.filter((entry) => entry.isFile() && entry.name.endsWith('.html'))
+		.map((entry) => relative(root, join(entry.parentPath, entry.name)).split(sep).join('/'))
+		.filter((path) => !path.startsWith('_next/'))
+		// oxlint-disable-next-line unicorn/no-array-sort
+		.sort()
+		.map((path) => ({ route: routeOf(path), html: readFileSync(join(root, path), 'utf8') }));
+
 	const scriptPaths = readdirSync(staticDir, { recursive: true, withFileTypes: true })
 		.filter((entry) => entry.isFile() && entry.name.endsWith('.js'))
 		// Separators normalise to `/` because these keys are compared against `<script src>`.
 		.map((entry) => relative(root, join(entry.parentPath, entry.name)).split(sep).join('/'));
 
 	return {
-		entryHtml: readFileSync(join(root, 'index.html'), 'utf8'),
+		pages,
 		scriptPaths,
 		read: (path) => readFileSync(join(root, path)),
 	};
