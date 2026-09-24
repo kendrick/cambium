@@ -421,18 +421,18 @@ test('a workspace pointed at a row that fails BrandRecordSchema reports the unre
 test('a workspace that cannot open its database at all reports the unavailable outcome', async ({
 	page,
 }) => {
-	// `WorkspaceRoute`'s dynamic import calls `createIndexedDbRecordStore`, which opens at
-	// `DATABASE_VERSION`, `1`. Opening the same database at a higher version first, ahead of that
-	// call, bumps the version IndexedDB has on record for this origin—a fact storage keeps, not a
-	// fact this connection holds. The connection itself does not need to outlive this call, and does
-	// not: `page.goto` below replaces the document, which tears down the JS heap this closure ran in
-	// along with any object it stashed on `window`, so it is closed here explicitly instead. What
-	// survives the navigation is the version number. `createIndexedDbRecordStore`'s own `openDB`
-	// call then asks to open at a version lower than the one storage now has on record, which the
-	// spec refuses; the refusal is a `VersionError` delivered as an async `error` event on the
-	// request, not a synchronous throw, so it rejects `createIndexedDbRecordStore`'s promise instead
-	// of throwing into its caller directly, and `WorkspaceRoute`'s outer `catch` is what turns that
-	// rejection into `unavailable`.
+	// `WorkspaceRoute` loads the storage module through a dynamic import, then calls
+	// `createIndexedDbRecordStore`, which opens at `DATABASE_VERSION`, `1`. Opening the same database
+	// at a higher version first, ahead of that call, bumps the version IndexedDB has on record for
+	// this origin—a fact storage keeps, not a fact this connection holds. The connection itself does
+	// not need to outlive this call, and does not: `page.goto` below replaces the document, which
+	// tears down the JS heap this closure ran in along with any object it stashed on `window`, so it
+	// is closed here explicitly instead. What survives the navigation is the version number.
+	// `createIndexedDbRecordStore`'s own `openDB` call then asks to open at a version lower than the
+	// one storage now has on record, which the spec refuses; the refusal is a `VersionError`
+	// delivered as an async `error` event on the request, not a synchronous throw, so it rejects
+	// `createIndexedDbRecordStore`'s promise instead of throwing into its caller directly, and
+	// `WorkspaceRoute`'s outer `catch` is what turns that rejection into `unavailable`.
 	await page.evaluate(async (databaseName) => {
 		const request = indexedDB.open(databaseName, 2);
 		await new Promise<void>((resolve, reject) => {
