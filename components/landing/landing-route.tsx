@@ -226,8 +226,14 @@ export function LandingRoute() {
 				outlive this page.
 			</p>
 			<p className="text-muted-foreground text-sm">
-				Nothing has been generated from them yet. That takes an API key and a model call, and the
-				workspace that asks for one is still being built.
+				Nothing has been generated from them yet. That takes an API key and a model call, which the{' '}
+				<Link
+					className="text-primary underline-offset-4 hover:underline"
+					href={`/workspace?${RECORD_PARAM}=${recordId}`}
+				>
+					workspace
+				</Link>{' '}
+				asks for.
 			</p>
 		</Outcome>
 	);
