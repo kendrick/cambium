@@ -311,6 +311,9 @@ test('the output column exposes preview, accessibility and export as tabs', asyn
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	await expect(page.getByRole('tablist')).toBeVisible();
+	// `components/workspace/shell.tsx`'s `TabsList` carries its own `aria-label`; an unnamed tab
+	// list announces as bare "tab list" to a screen reader, with nothing to say which tabs these are.
+	await expect(page.getByRole('tablist')).toHaveAccessibleName('Output');
 
 	for (const name of ['Preview', 'Accessibility', 'Export']) {
 		const tab = page.getByRole('tab', { name });
@@ -360,9 +363,16 @@ test('switching the interpretation preset re-derives tokens and makes no network
 	await expect(tokenRows.first()).toBeVisible();
 	expect(await tokenRows.count()).toBeGreaterThan(0);
 
-	// `selectPreset` recomputes synchronously, so nothing async should still be in flight after a
-	// short wait; this only gives a stray request room to show up before the count is read.
-	await page.waitForTimeout(300);
+	// A fixed wait only proves no request landed inside whatever window it measured, which is a
+	// number this test made up rather than one anything about the app promises. Switching the
+	// preset back is a real event to tie the window to instead: it forces a second re-render, and
+	// `toHaveValue` below settles only once that render has actually committed, not after a
+	// guessed duration. The listener above has been attached since before the first switch, so
+	// reading its count after this one covers both switches, the whole of what this scenario does
+	// to the store. What it still cannot see is a request slow enough to arrive after this test has
+	// already finished — this closes the gap a 300 ms guess left, not every gap there is.
+	await page.getByLabel('Interpretation').selectOption('balanced');
+	await expect(page.getByLabel('Interpretation')).toHaveValue('balanced');
 
 	expect(requestUrls.length).toBe(requestsBeforeSwitch);
 });
@@ -411,19 +421,22 @@ test('a workspace that cannot open its database at all reports the unavailable o
 	page,
 }) => {
 	// `open`'s dynamic import calls `openDB(DATABASE_NAME, 1)`. Opening the same database at a
-	// higher version first, ahead of that call and left open, makes the browser refuse the app's
-	// own open with a `VersionError` — the one spec-guaranteed way to fail an `IDBOpenDBRequest`
-	// synchronously with the database otherwise intact, no fault injection or app change needed.
-	// Held on `window` so the connection outlives this call and is still open when `WorkspaceRoute`
-	// tries to open the same name at the lower version.
+	// higher version first, ahead of that call, bumps the version IndexedDB has on record for this
+	// origin — a fact storage keeps, not a fact this connection holds. The connection itself does
+	// not need to outlive this call, and does not: `page.goto` below replaces the document, which
+	// tears down the JS heap this closure ran in along with any object it stashed on `window`, so
+	// it is closed here explicitly instead. What survives the navigation is the version number.
+	// `WorkspaceRoute`'s own `openDB(DATABASE_NAME, 1)` then asks to open at a version lower than
+	// the one storage now has on record, which the spec refuses; the refusal is a `VersionError`
+	// delivered as an async `error` event on the request, not a synchronous throw, so `RecordStore`
+	// only sees it once its own promise wrapper's `error` listener fires.
 	await page.evaluate(async (databaseName) => {
 		const request = indexedDB.open(databaseName, 2);
 		await new Promise<void>((resolve, reject) => {
 			request.addEventListener('success', () => resolve());
 			request.addEventListener('error', () => reject(request.error));
 		});
-		(window as unknown as { cambiumBlockingConnection: IDBDatabase }).cambiumBlockingConnection =
-			request.result;
+		request.result.close();
 	}, DATABASE_NAME);
 
 	await page.goto(`/workspace?${RECORD_PARAM}=${randomUUID()}`);
@@ -624,6 +637,13 @@ test('a saved record links to its workspace, which opens reporting no versions y
 	await workspaceLink.click();
 
 	await expect(page).toHaveURL(new RegExp(`${RECORD_PARAM}=${savedId}$`));
+
+	// Absence alone also passes while `WorkspaceRoute` is still on its loading state, or never
+	// resolves at all — nothing below is `<dl>`, a token row, or a `<details>` either. This asserts
+	// the shell itself actually mounted for this record before reading what it left out: the rail
+	// is the structural marker `components/workspace/shell.tsx` always renders once a record loads,
+	// with or without versions.
+	await expect(page.getByRole('complementary', { name: 'Seed and tokens' })).toBeVisible();
 
 	// No versions yet: `components/workspace/seed-rail.tsx` renders no `<dl>` when the seed is null,
 	// `components/workspace/token-list.tsx` renders no list rows when `derived` is null, and

@@ -53,7 +53,9 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 
 			<section aria-label="Output" className="flex min-h-0 flex-col">
 				<Tabs defaultValue="preview" className="min-h-0 flex-1">
-					<TabsList>
+					{/* An accessible name is an accessibility contract, not copy: without one, a screen reader
+					    announces "tab list" with nothing to say it's this page's Output tabs. */}
+					<TabsList aria-label="Output">
 						<TabsTab value="preview">Preview</TabsTab>
 						<TabsTab value="accessibility">Accessibility</TabsTab>
 						<TabsTab value="export">Export</TabsTab>
