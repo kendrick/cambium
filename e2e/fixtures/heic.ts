@@ -10,11 +10,11 @@
 import { asciiBytes } from './png';
 
 /**
- * A minimal ISO base media `ftyp` box: size, `ftyp`, a major brand of `heic` at the offset
- * `lib/image-intake.ts` reads (`:150`-`:152`), a zero minor version, and two compatible-brand
- * slots (`mif1`, `heic`) as padding—present because a real `ftyp` box always carries at least
- * one, not because anything here reads them. Paired with a `.png` name, so the bytes and the
- * extension disagree the way #22's defect did.
+ * A minimal ISO base media `ftyp` box: size, `ftyp`, a major brand of `heic` at byte offset 8,
+ * where `describeRejectedBytes` in `lib/image-intake.ts` reads it, a zero minor version, and two
+ * compatible-brand slots (`mif1`, `heic`) as padding—present because a real `ftyp` box always
+ * carries at least one, not because anything here reads them. Paired with a `.png` name, so
+ * the bytes and the extension disagree the way #22's defect did.
  */
 export function makeRenamedHeic(): { bytes: Uint8Array; name: string } {
 	const box = new Uint8Array(24);

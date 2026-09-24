@@ -47,6 +47,11 @@ function chunkCrcMatches(typeAndData: Uint8Array, storedCrc: number): boolean {
 	return zlibCrc32(Buffer.from(typeAndData)) === storedCrc;
 }
 
+/** Latin-1 printable, or a newline: the only bytes PNG allows in `tEXt` text. */
+function legalTextByte(b: number): boolean {
+	return b === 0x0a || (b >= 0x20 && b <= 0x7e) || b >= 0xa1;
+}
+
 describe('crc32', () => {
 	test('matches zlib.crc32 on the IHDR of a known PNG', () => {
 		// A PNG this test never generates and never reads with png.ts's own logic: pngjs synthesizes
@@ -137,6 +142,21 @@ describe('makeFatPng', () => {
 		expect(ancillary.length).toBeGreaterThan(0);
 		const bulk = ancillary.find((c) => c.typeAndData.length > 400_000);
 		expect(bulk).toBeDefined();
+	});
+
+	// pngjs skips `tEXt` without reading it, so decoding proves nothing about the payload. A
+	// stricter decoder rejects a `tEXt` whose text holds a NUL, and would send the oversized-but-valid
+	// scenario down the malformed-file path instead. PNG 1.2 section 11.3.4.3 allows one NUL, after
+	// the keyword, and Latin-1 printable text or a newline after it.
+	test('carries a tEXt payload a strict decoder accepts', () => {
+		const text = walkChunks(makeFatPng(50_000)).find((c) => c.type === 'tEXt');
+		const data = text!.typeAndData.subarray(4);
+		const separator = data.indexOf(0);
+		const body = data.subarray(separator + 1);
+
+		expect(separator).toBeGreaterThan(0);
+		expect(body.length).toBeGreaterThan(40_000);
+		expect(body.every(legalTextByte)).toBe(true);
 	});
 });
 

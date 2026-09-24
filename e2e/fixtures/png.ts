@@ -181,7 +181,9 @@ export function makeFatPng(bytes: number): Uint8Array {
 	// of the ancillary chunk that isn't filler.
 	const ancillaryOverhead = 12 + keyword.length + 1;
 	const fillerLength = Math.max(0, bytes - baseLength - ancillaryOverhead);
-	const fatData = concatBytes([keyword, Uint8Array.of(0), new Uint8Array(fillerLength)]);
+	// `tEXt` allows one NUL, after the keyword, and printable Latin-1 after that. Zero-filled
+	// padding would be malformed text that pngjs never reads and a stricter decoder rejects.
+	const fatData = concatBytes([keyword, Uint8Array.of(0), new Uint8Array(fillerLength).fill(0x61)]);
 	const fatChunk = chunk(FAT_CHUNK_TYPE, fatData);
 
 	return concatBytes([PNG_SIGNATURE, ihdrChunk, idatChunk, fatChunk, iendChunk]);
