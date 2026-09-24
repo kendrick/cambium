@@ -66,22 +66,38 @@ async function readStoredRecords(page: Page): Promise<StoredRecordSummary[]> {
 }
 
 /**
- * Reads the store until two reads half a second apart agree on the count.
+ * How long scenario 2 keeps reading after `?record=` appears, and what it defends against.
  *
- * `?record=` appears once the first save has written, and a second save racing it can land a
- * moment later. Counting on the first read would pass a double write that had not finished yet.
+ * With the `saving` ref in place only one `save()` gets past its first line, so under the fixed
+ * code nothing more can arrive and this window only costs time. It exists for the regression: with
+ * the guard reverted, all three saves run, and the URL changes once the first one has written. The
+ * other two share its module imports and each has one connection and one `put` left to do, so they
+ * land within milliseconds of it. A single read taken the moment the URL changed could still see
+ * one record and pass.
+ *
+ * Bounded, where it used to read until two reads agreed and had no stated limit. With the guard
+ * reverted, all three records were already there on the first read, 0 ms after the URL changed. A
+ * second is wide margin over that, and it's the whole cost this adds to a green run.
  */
-async function readSettledRecords(page: Page): Promise<StoredRecordSummary[]> {
-	let previous = await readStoredRecords(page);
+const DOUBLE_WRITE_WINDOW_MS = 1000;
+
+const DOUBLE_WRITE_POLL_MS = 100;
+
+/** Fails as soon as any read in the window sees a count other than `expected`. */
+async function expectRecordCountHolds(page: Page, expected: number): Promise<void> {
+	const started = Date.now();
 
 	for (;;) {
+		const elapsed = Date.now() - started;
 		// oxlint-disable-next-line no-await-in-loop
-		await page.waitForTimeout(500);
-		// oxlint-disable-next-line no-await-in-loop
-		const next = await readStoredRecords(page);
+		const records = await readStoredRecords(page);
 
-		if (next.length === previous.length) return next;
-		previous = next;
+		expect(records, `record count ${elapsed} ms after ?record= appeared`).toHaveLength(expected);
+
+		if (elapsed >= DOUBLE_WRITE_WINDOW_MS) return;
+
+		// oxlint-disable-next-line no-await-in-loop
+		await page.waitForTimeout(DOUBLE_WRITE_POLL_MS);
 	}
 }
 
@@ -125,7 +141,7 @@ test('three submits in one tick write exactly one record', async ({ page }) => {
 
 	await expectSaved(page);
 
-	expect(await readSettledRecords(page)).toHaveLength(1);
+	await expectRecordCountHolds(page, 1);
 });
 
 test('Remove during a held save leaves the list as the record will store it', async ({ page }) => {
