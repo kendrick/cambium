@@ -327,6 +327,43 @@ describe('the workspace store', () => {
 		expect(store.getState().record?.versions[1]?.seed?.keyColors?.[0]?.oklch[2]).toBe(0);
 	});
 
+	it('carries provenance forward on an immediate second commit, once a canonicalised hue is adopted into the draft', async () => {
+		const { store } = openWorkspace();
+
+		store.getState().editSeed({ keyColors: seedWith(360).keyColors });
+
+		const first = await store.getState().commit(PROVENANCE);
+
+		// The draft has to hold the same spelling storage does, or a provenance-free commit right
+		// after this one reads as an edit nobody explained, even though nothing was edited.
+		expect(store.getState().draftSeed).toEqual(first.versions[1]?.seed);
+		expect(store.getState().draftSeed?.keyColors?.[0]?.oklch[2]).toBe(0);
+
+		const second = await store.getState().commit();
+
+		expect(second.versions[2]).toMatchObject({ seed: first.versions[1]?.seed, rawResponse: null });
+	});
+
+	it('keeps a mid-write edit’s seed rather than the just-committed version’s', async () => {
+		const { store, writeInFlight, releaseWrite } = gatedWorkspace();
+
+		store.getState().open(makeRecord());
+
+		const pending = store.getState().commit();
+
+		// `editSeed` can land mid-write, the same window adoption now reaches into to sync the draft
+		// with what storage canonicalised. An edit that lands there has to win over the version just
+		// written, or the user's keystroke gets silently replaced by the record they committed before it.
+		await writeInFlight;
+		store.getState().editSeed({ keyColors: seedWith(45).keyColors });
+		releaseWrite();
+
+		await pending;
+
+		expect(store.getState().activeOrdinal).toBe(2);
+		expect(store.getState().draftSeed).toEqual(seedWith(45));
+	});
+
 	it('serialises overlapping commits so the second builds on the first', async () => {
 		const { store, recordStore } = openWorkspace();
 
