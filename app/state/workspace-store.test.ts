@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/brand-record';
 import type { BrandSeed } from '../../core/brand-seed';
+import { BALANCED } from '../../core/interpretation';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
 import type { ScaleEngine, ScaleEngineResult } from '../../core/scale-engine';
 import { createInMemoryRecordStore } from '../storage/in-memory-record-store';
@@ -372,6 +373,28 @@ describe('the workspace store', () => {
 
 		expect(store.getState().draftSeed).toBe(draftBefore);
 		expect(next.versions[1]).toMatchObject({ seed: draftBefore });
+	});
+
+	it('recomputes derived from the adopted seed, so the anchor reports the hue the draft now holds', async () => {
+		const { store, engine } = openWorkspace();
+
+		store.getState().editSeed({ keyColors: seedWith(360).keyColors });
+
+		await store.getState().commit(PROVENANCE);
+
+		const draft = store.getState().draftSeed;
+		const derived = store.getState().derived;
+		const fresh = engine.generate(draft!, BALANCED);
+
+		expect(derived).toEqual(fresh);
+
+		if (!derived?.ok) {
+			throw new Error(`expected a derived ramp set, got ${derived?.error.kind ?? 'nothing'}`);
+		}
+
+		// The ramps built from either spelling match, but the anchor records the hue actually
+		// requested—the clearest place a `derived` still built from the pre-adoption seed would show.
+		expect(derived.anchor.requested[2]).toBe(0);
 	});
 
 	it('serialises overlapping commits so the second builds on the first', async () => {

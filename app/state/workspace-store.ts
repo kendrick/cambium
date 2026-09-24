@@ -480,16 +480,19 @@ export function createWorkspaceStore({
 					// Storage can hand back a canonical spelling of the seed, so a hue committed as 360 is
 					// held as 0. Left at 360, the draft would make the next provenance-free commit read a
 					// no-op as an edit and refuse it. So the draft takes the stored seed, but only when the
-					// two differ, and never over an edit that landed mid-write, which is the user's. Two
-					// spellings of one hue name the same angle and derive the same tokens, so `derived`
-					// already matches and stays as it is.
+					// two differ, and never over an edit that landed mid-write, which is the user's. The
+					// ramps built from either spelling match, but the anchor report records the hue
+					// actually requested—so `derived` is recomputed from the adopted seed too, to keep the
+					// two consistent.
 					const adopted =
 						newVersion && !sameSeed(newVersion.seed, request.draftSeed) ? newVersion.seed : null;
 
 					set({
 						record: next,
 						activeOrdinal: version.ordinal,
-						...(adopted ? { draftSeed: adopted } : {}),
+						...(adopted
+							? { draftSeed: adopted, derived: derive(engine, adopted, get().preset) }
+							: {}),
 					});
 				}
 			}
