@@ -118,7 +118,7 @@ export function WorkspaceRoute() {
 		};
 	}, [recordId]);
 
-	if (!recordId) return <Terminal>{MESSAGES.unnamed}</Terminal>;
+	if (!recordId) return <Terminal outcome="unnamed">{MESSAGES.unnamed}</Terminal>;
 
 	if (current.kind === 'loading') {
 		return <p className="text-muted-foreground p-8 text-sm">Opening that record…</p>;
@@ -129,13 +129,26 @@ export function WorkspaceRoute() {
 		return <Shell store={store} />;
 	}
 
-	return <Terminal>{MESSAGES[current.kind]}</Terminal>;
+	return <Terminal outcome={current.kind}>{MESSAGES[current.kind]}</Terminal>;
 }
 
-/** The landing page's outcome, centred in a page of its own because no landing layout wraps it here. */
-function Terminal({ children }: { children: React.ReactNode }) {
+/**
+ * The landing page's outcome, centred in a page of its own because no landing layout wraps it
+ * here. `data-outcome` names which of the four terminal kinds rendered: a browser test has no
+ * other way to tell them apart without reading copy, and the copy itself is free to change.
+ */
+function Terminal({
+	outcome,
+	children,
+}: {
+	outcome: keyof typeof MESSAGES;
+	children: React.ReactNode;
+}) {
 	return (
-		<main className="mx-auto flex min-h-dvh max-w-2xl flex-col items-start justify-center p-8">
+		<main
+			data-outcome={outcome}
+			className="mx-auto flex min-h-dvh max-w-2xl flex-col items-start justify-center p-8"
+		>
 			<Outcome action="Start a new brand">{children}</Outcome>
 		</main>
 	);

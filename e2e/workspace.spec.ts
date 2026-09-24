@@ -9,6 +9,7 @@ import {
 	FIRST_REVISION,
 	SCHEMA_VERSION,
 } from '../core/brand-record';
+import type { BrandSeed } from '../core/brand-seed';
 
 import { expect, test } from './fixtures';
 
@@ -54,9 +55,17 @@ const FIXTURE_SEED = {
  * has moved past fails here, loudly, rather than as a silent mismatch the app's own read-back trips
  * over later. `sourceImageId` on the seed's one key color has to name an id this record's `images`
  * actually carries, or the same schema's refinement rejects the fixture outright.
+ *
+ * `seed` and `rawResponse` are overridable: repair round 1 needs a seed with no key colors (the
+ * engine's `no-key-colors` branch) and a version with a null raw response (the re-derivation
+ * branch), and both still have to be the one non-empty version most scenarios below want.
  */
-function buildRecordWithOneVersion(): BrandRecord {
+function buildRecordWithOneVersion(
+	overrides: { seed?: BrandSeed; rawResponse?: string | null } = {},
+): BrandRecord {
 	const createdAt = new Date().toISOString();
+	const { seed = FIXTURE_SEED, rawResponse = 'raw model output held by the e2e fixture' } =
+		overrides;
 
 	return BrandRecordSchema.parse({
 		id: randomUUID(),
@@ -69,12 +78,12 @@ function buildRecordWithOneVersion(): BrandRecord {
 			{
 				createdAt,
 				ordinal: 1,
-				seed: FIXTURE_SEED,
+				seed,
 				tokenSet: null,
 				provider: 'cambium-e2e-fixture',
 				model: 'cambium-e2e-fixture',
 				promptVersion: 'cambium-e2e-fixture',
-				rawResponse: 'raw model output held by the e2e fixture',
+				rawResponse,
 				scaleEngine: 'cambium-oklch-1',
 				fontTable: { source: 'cambium-e2e-fixture', version: '1' },
 				interpretation: 'balanced',
@@ -84,7 +93,30 @@ function buildRecordWithOneVersion(): BrandRecord {
 }
 
 /**
- * Writes a record straight into the `records` object store, bypassing `RecordStore` and the app's
+ * A record with no versions at all, the state `components/landing/landing-route.tsx` leaves a
+ * fresh save in. `derived` stays null for this one (`workspace-store.ts`'s `derive` only runs
+ * against a seed), which is the branch `components/workspace/token-list.tsx` takes before any
+ * seed exists, distinct from the seed-but-no-key-colors branch `SEED_WITH_NO_KEY_COLORS` reaches.
+ */
+function buildEmptyRecord(): BrandRecord {
+	return BrandRecordSchema.parse({
+		id: randomUUID(),
+		schemaVersion: SCHEMA_VERSION,
+		revision: FIRST_REVISION,
+		images: [],
+		versions: [],
+	});
+}
+
+/**
+ * `core/oklch-scale-engine.ts` returns `{ ok: false, error: { kind: 'no-key-colors' } }` for a
+ * seed whose `keyColors` is null, which is the one `derived.ok === false` branch
+ * `components/workspace/token-list.tsx` can reach from a real seed.
+ */
+const SEED_WITH_NO_KEY_COLORS: BrandSeed = { ...FIXTURE_SEED, keyColors: null };
+
+/**
+ * Writes one row straight into the `records` object store, bypassing `RecordStore` and the app's
  * own save path entirely. `open`'s dynamic import of `app/storage/indexed-db-record-store` only
  * ever calls `openDB` without a version, so this opens at the same version `DATABASE_VERSION`
  * names, `1`, and creates the store the same way `createIndexedDbRecordStore`'s `upgrade` callback
@@ -95,10 +127,14 @@ function buildRecordWithOneVersion(): BrandRecord {
  * process. It has to be called only once `page` already sits on the served origin, which every
  * scenario below gets for free from `cleanIndexedDb` in `./fixtures.ts`, an `auto` fixture that has
  * already navigated there and back before the scenario body starts.
+ *
+ * Takes `unknown` rather than `BrandRecord`, so a caller can write a row `BrandRecordSchema` would
+ * reject — the schema-failing-row scenario needs exactly that, to reach `get`'s own
+ * `BrandRecordSchema.parse` on the way out and prove it rejects.
  */
-async function seedWorkspaceRecord(page: Page, record: BrandRecord): Promise<void> {
+async function writeIndexedDbRow(page: Page, value: unknown): Promise<void> {
 	await page.evaluate(
-		async ([databaseName, storeName, storedRecord]) => {
+		async ([databaseName, storeName, storedValue]) => {
 			const db = await new Promise<IDBDatabase>((resolve, reject) => {
 				const request = indexedDB.open(databaseName, 1);
 
@@ -112,7 +148,7 @@ async function seedWorkspaceRecord(page: Page, record: BrandRecord): Promise<voi
 			try {
 				await new Promise<void>((resolve, reject) => {
 					const tx = db.transaction(storeName, 'readwrite');
-					tx.objectStore(storeName).put(storedRecord);
+					tx.objectStore(storeName).put(storedValue);
 					tx.addEventListener('complete', () => resolve());
 					tx.addEventListener('error', () => reject(tx.error));
 				});
@@ -120,8 +156,100 @@ async function seedWorkspaceRecord(page: Page, record: BrandRecord): Promise<voi
 				db.close();
 			}
 		},
-		[DATABASE_NAME, RECORD_STORE_NAME, record] as const,
+		[DATABASE_NAME, RECORD_STORE_NAME, value] as const,
 	);
+}
+
+/** A schema-valid record, for every scenario that wants storage to read it back cleanly. */
+async function seedWorkspaceRecord(page: Page, record: BrandRecord): Promise<void> {
+	await writeIndexedDbRow(page, record);
+}
+
+/** What the init script below leaves on `window`, for a scenario to arm, read and release. */
+type OpenHold = { armed: boolean; held: number; release: () => void };
+
+type WindowWithOpenHold = Window & { cambiumOpenHold: OpenHold };
+
+/**
+ * Lets a scenario park a database open partway through, at the moment a caller is waiting on its
+ * `success` event.
+ *
+ * The record-A-to-B scenario needs record B's own open to still be in flight when it checks that
+ * record A's tree has not stayed on screen. Racing that window with a timer is what this replaces:
+ * a race is only as reliable as the gap between two measured durations, and on a slow enough host
+ * the two can close. Holding the open instead makes the window as wide as the scenario wants, no
+ * matter how fast or slow IndexedDB itself runs, because nothing here has to guess how long that
+ * takes.
+ *
+ * The hold sits on `indexedDB.open` for the named database, the one platform call
+ * `createIndexedDbRecordStore` has to make before it can do anything else, however Next splits or
+ * preloads the route's code. While armed, every `success` listener attached to a matching open
+ * request is withheld until `release`, so the request's caller never sees its connection resolve.
+ * `held` counts withheld events, which is a scenario's evidence that the hold actually caught an
+ * open rather than arming and catching nothing.
+ *
+ * It wraps listeners rather than the request because `open` has to hand back a real
+ * `IDBOpenDBRequest` synchronously, and `idb`'s `openDB` (which `createIndexedDbRecordStore` calls)
+ * subscribes with `addEventListener` rather than an `onsuccess` property.
+ */
+async function installOpenHold(page: Page, databaseName: string): Promise<void> {
+	await page.addInitScript((name) => {
+		const realOpen = IDBFactory.prototype.open;
+		let releaseAll!: () => void;
+		const released = new Promise<void>((resolve) => {
+			releaseAll = resolve;
+		});
+
+		const hold: OpenHold = {
+			armed: false,
+			held: 0,
+			release: () => {
+				hold.armed = false;
+				releaseAll();
+			},
+		};
+
+		(window as unknown as WindowWithOpenHold).cambiumOpenHold = hold;
+
+		IDBFactory.prototype.open = function open(this: IDBFactory, ...args: [string, number?]) {
+			const request = realOpen.apply(this, args);
+
+			if (!hold.armed || args[0] !== name) return request;
+
+			const realAdd = request.addEventListener.bind(request);
+
+			request.addEventListener = ((
+				type: string,
+				listener: EventListenerOrEventListenerObject | null,
+				options?: boolean | AddEventListenerOptions,
+			) => {
+				// Adding a null listener is a no-op in the platform too.
+				if (!listener) return;
+
+				if (type !== 'success') {
+					realAdd(type, listener, options);
+					return;
+				}
+
+				const deferred = listener;
+
+				realAdd(
+					type,
+					(event: Event) => {
+						hold.held += 1;
+						void (async () => {
+							await released;
+							if (typeof deferred === 'function') deferred.call(request, event);
+							else deferred.handleEvent(event);
+						})();
+					},
+					options,
+				);
+			}) as typeof request.addEventListener;
+
+			return request;
+		};
+	}, databaseName);
 }
 
 /**
@@ -156,6 +284,24 @@ test('the seed section sits above a non-empty token list in the left rail', asyn
 	// Both sections live in the same flex column, so a smaller top offset is what "above" comes
 	// down to for two boxes that never overlap in that column.
 	expect(seedBox.y).toBeLessThan(tokensBox.y);
+});
+
+test('a seed with no key colors renders the token list error branch, distinct from having no seed at all', async ({
+	page,
+}) => {
+	const record = buildRecordWithOneVersion({ seed: SEED_WITH_NO_KEY_COLORS });
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const tokensSection = page.getByRole('region', { name: 'Tokens' });
+
+	// `components/workspace/token-list.tsx`'s `!derived.ok` branch is the only one of its three
+	// that puts a `<code>` element inside the Tokens region: the no-seed branch is a bare `<p>`,
+	// and the success branch has no `<code>` at all. Structure, not the error kind's own text, is
+	// what tells this branch apart from "no seed yet" — both render one paragraph of copy.
+	await expect(tokensSection.locator('code')).toBeVisible();
+	await expect(tokensSection.getByRole('listitem')).toHaveCount(0);
 });
 
 test('the output column exposes preview, accessibility and export as tabs', async ({ page }) => {
@@ -205,6 +351,12 @@ test('switching the interpretation preset re-derives tokens and makes no network
 	// presets disagree.
 	await page.getByLabel('Interpretation').selectOption('faithful');
 
+	// A controlled `<select>` snaps back to its last-rendered `value` prop once React's event
+	// system finishes handling the change, whether or not the `onChange` handler itself did
+	// anything: `components/workspace/seed-rail.tsx` has no state of its own, so this only stays on
+	// 'faithful' if `onSelectPreset` reached the store and a re-render came back with it selected.
+	await expect(page.getByLabel('Interpretation')).toHaveValue('faithful');
+
 	await expect(tokenRows.first()).toBeVisible();
 	expect(await tokenRows.count()).toBeGreaterThan(0);
 
@@ -213,6 +365,138 @@ test('switching the interpretation preset re-derives tokens and makes no network
 	await page.waitForTimeout(300);
 
 	expect(requestUrls.length).toBe(requestsBeforeSwitch);
+});
+
+test('a workspace with no record id in the address bar reports the unnamed outcome', async ({
+	page,
+}) => {
+	await page.goto('/workspace');
+
+	// `components/workspace/workspace-route.tsx` stamps `data-outcome` on the terminal `<main>` for
+	// each of the four outcomes it can render outside `found`, since nothing else in the DOM tells
+	// them apart without reading the outcome's own prose.
+	await expect(page.locator('main[data-outcome="unnamed"]')).toBeVisible();
+});
+
+test('a workspace pointed at an id nothing is stored under reports the missing outcome', async ({
+	page,
+}) => {
+	await page.goto(`/workspace?${RECORD_PARAM}=${randomUUID()}`);
+
+	await expect(page.locator('main[data-outcome="missing"]')).toBeVisible();
+});
+
+test('a workspace pointed at a row that fails BrandRecordSchema reports the unreadable outcome', async ({
+	page,
+}) => {
+	const id = randomUUID();
+
+	// Written straight into the object store rather than through `seedWorkspaceRecord`, which
+	// parses first: this row has to reach `RecordStore.get`'s own `BrandRecordSchema.parse` and
+	// fail there. `schemaVersion: 1` predates `revision`, which `BrandRecordSchema` now requires.
+	await writeIndexedDbRow(page, {
+		id,
+		schemaVersion: 1,
+		revision: FIRST_REVISION,
+		images: [],
+		versions: [],
+	});
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${id}`);
+
+	await expect(page.locator('main[data-outcome="unreadable"]')).toBeVisible();
+});
+
+test('a workspace that cannot open its database at all reports the unavailable outcome', async ({
+	page,
+}) => {
+	// `open`'s dynamic import calls `openDB(DATABASE_NAME, 1)`. Opening the same database at a
+	// higher version first, ahead of that call and left open, makes the browser refuse the app's
+	// own open with a `VersionError` — the one spec-guaranteed way to fail an `IDBOpenDBRequest`
+	// synchronously with the database otherwise intact, no fault injection or app change needed.
+	// Held on `window` so the connection outlives this call and is still open when `WorkspaceRoute`
+	// tries to open the same name at the lower version.
+	await page.evaluate(async (databaseName) => {
+		const request = indexedDB.open(databaseName, 2);
+		await new Promise<void>((resolve, reject) => {
+			request.addEventListener('success', () => resolve());
+			request.addEventListener('error', () => reject(request.error));
+		});
+		(window as unknown as { cambiumBlockingConnection: IDBDatabase }).cambiumBlockingConnection =
+			request.result;
+	}, DATABASE_NAME);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${randomUUID()}`);
+
+	await expect(page.locator('main[data-outcome="unavailable"]')).toBeVisible();
+});
+
+test('opening record A then client-navigating to record B shows only B, never a stale frame of A', async ({
+	page,
+}) => {
+	const recordA = buildRecordWithOneVersion();
+	const recordB = buildEmptyRecord();
+
+	await seedWorkspaceRecord(page, recordA);
+	await seedWorkspaceRecord(page, recordB);
+
+	// Installed before the first navigation, so the wrap is in place for the document that
+	// navigation loads: `page.addInitScript` only reaches documents the page loads afterwards, not
+	// the one already open from `cleanIndexedDb`'s own navigation.
+	await installOpenHold(page, DATABASE_NAME);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${recordA.id}`);
+	await expect(
+		page.getByRole('region', { name: 'Tokens' }).getByRole('listitem').first(),
+	).toBeVisible();
+
+	// `history.pushState` rather than `page.goto`, because a `goto` is a hard navigation that
+	// remounts `WorkspaceRoute` and starts `loaded` over at null, which can never expose the bug:
+	// the render guard only matters while `loaded` still holds a previous record's result. Next.js's
+	// app router patches `window.history.pushState` for exactly this — see the comment above
+	// `patchHistoryMethod` in `next/dist/client/components/app-router.js` — specifically so an
+	// external call like this one is picked up as a client-side navigation, `useSearchParams()`
+	// included, the same as a same-page `<Link>` click would be.
+	//
+	// The mutant under test drops the `loaded?.id === recordId` guard to `loaded ? loaded.result :
+	// ...`. Losing the id check does not change what the very next render paints — `WorkspaceRoute`'s
+	// own re-render still has to reach the DOM before either build can differ. The two diverge from
+	// that render on: a correct build has already moved to the loading state, since `loaded.id` (A)
+	// no longer matches `recordId` (B), while the mutant keeps painting `loaded.result` — A's
+	// already-resolved, still-non-null seed — for as long as record B's own open stays unresolved.
+	// Arming the hold and pushing the new URL happen in the one call, so record B's effect (which
+	// only runs once `recordId` changes) has no gap in which to slip past an unarmed hold.
+	await page.evaluate(
+		([param, bId]) => {
+			(window as unknown as WindowWithOpenHold).cambiumOpenHold.armed = true;
+			history.pushState({}, '', `/workspace?${param}=${bId}`);
+		},
+		[RECORD_PARAM, recordB.id] as const,
+	);
+
+	// Without this, a hold that never caught record B's own open would pass having held nothing —
+	// the id guard could be missing entirely and this would still see zero.
+	await expect
+		.poll(() => page.evaluate(() => (window as unknown as WindowWithOpenHold).cambiumOpenHold.held))
+		.toBeGreaterThan(0);
+
+	await expect(page).toHaveURL(new RegExp(`${RECORD_PARAM}=${recordB.id}$`));
+	// Held here for as long as this assertion's own retries choose to wait: record B's open cannot
+	// resolve until `release` runs below, so a correct build's loading state (no `<dl>` at all) and
+	// the mutant's stale render of A (a `<dl>` that never goes away on its own) stay exactly as they
+	// are — nothing to race, because nothing changes until the test says so.
+	await expect(page.locator('dl')).toHaveCount(0);
+
+	await page.evaluate(() => {
+		(window as unknown as WindowWithOpenHold).cambiumOpenHold.release();
+	});
+
+	// Record B has no versions, so no seed once it actually settles:
+	// `components/workspace/seed-rail.tsx` renders no `<dl>`, the same presence check the
+	// landing-link scenario below uses. The rail itself has to be visible too, or this would pass
+	// with `WorkspaceRoute` stuck on the loading state forever.
+	await expect(page.getByRole('complementary', { name: 'Seed and tokens' })).toBeVisible();
+	await expect(page.locator('dl')).toHaveCount(0);
 });
 
 test('the raw response sits closed at the bottom of the page, below both columns', async ({
@@ -246,6 +530,27 @@ test('the raw response sits closed at the bottom of the page, below both columns
 		expect(detailsBox.y).toBeGreaterThanOrEqual(railBox.y + railBox.height - 1);
 		expect(detailsBox.y).toBeGreaterThanOrEqual(outputBox.y + outputBox.height - 1);
 	}
+});
+
+test('a version with no raw response renders the details element as a paragraph, not a preformatted block', async ({
+	page,
+}) => {
+	const record = buildRecordWithOneVersion({ rawResponse: null });
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const details = page.locator('details');
+	await expect(details).toBeVisible();
+
+	// Opened so the branch's own element is actually in the accessibility tree, not merely present
+	// in a collapsed `<details>`.
+	await details.locator('summary').click();
+
+	// `components/workspace/raw-response.tsx` renders a `<pre>` for a real response and a `<p>` for
+	// a null one: the tag, not either branch's wording, is what tells them apart.
+	await expect(details.locator('p')).toBeVisible();
+	await expect(details.locator('pre')).toHaveCount(0);
 });
 
 test('the layout collapses to one column narrow and sits side by side from md up', async ({
