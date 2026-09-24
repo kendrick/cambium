@@ -138,6 +138,40 @@ async function git(root: string, args: string[]): Promise<string> {
 	return stdout;
 }
 
+// Every `git add` writes the checkout's one shared index, so two guard runs sharing a checkout, or a
+// developer's own `git add` alongside one, can hold `index.lock` while this stages. Git exits 128
+// for that and for plenty else, so contention is read off stderr, never off the exit code. The
+// cap sits well inside `TIMEOUT`. A lock that outlives it was more likely left by a crashed git
+// than held by a live one, so the error names the lock and says how to clear it. A reader then
+// sees a stuck index, and never mistakes it for the guard catching a bad script.
+async function stage(root: string, args: string[], cap = 5_000): Promise<void> {
+	const deadline = Date.now() + cap;
+
+	for (let wait = 25; ; wait = Math.min(wait * 2, 400)) {
+		try {
+			// oxlint-disable-next-line no-await-in-loop -- each attempt waits on the lock the last one met
+			await git(root, ['add', ...args]);
+
+			return;
+		} catch (error) {
+			const stderr = (error as { stderr?: string }).stderr ?? '';
+
+			if (!stderr.includes('index.lock') || !stderr.includes('File exists')) throw error;
+			if (Date.now() + wait > deadline) {
+				throw new Error(
+					`index.lock still held after ${cap}ms; if no git is running, remove it:\n${stderr}`,
+					{
+						cause: error,
+					},
+				);
+			}
+
+			// oxlint-disable-next-line no-await-in-loop -- each wait gives the lock holder time to finish
+			await new Promise((settle) => setTimeout(settle, wait));
+		}
+	}
+}
+
 function filesTouched(stdout: string): number {
 	const match = FILE_COUNT.exec(stdout);
 
@@ -466,8 +500,8 @@ async function formatGuard(root: string, extensions: string[]): Promise<string[]
 		// ignores. Without it `git add` refuses the whole batch over one such path.
 		const [added, ...intended] = canaries;
 
-		if (intended.length > 0) await git(root, ['add', '-f', '--intent-to-add', '--', ...intended]);
-		await git(root, ['add', '-f', '--', added]);
+		if (intended.length > 0) await stage(root, ['-f', '--intent-to-add', '--', ...intended]);
+		await stage(root, ['-f', '--', added]);
 
 		const touched = filesTouched(await runScript(root, 'format', target));
 
@@ -885,6 +919,45 @@ describe('pnpm format guard, against scripts built to evade it', () => {
 
 				expect(await readFile(stray, 'utf8').catch(() => 'gone')).toBe('gone');
 				expect(await git(root, ['ls-files', '--', stray])).toBe('');
+			});
+		},
+		TIMEOUT,
+	);
+
+	it(
+		'stages once a peer lets go of the index',
+		async () => {
+			await inScratch('oxfmt --write', async (root) => {
+				const lock = join(root, '.git', 'index.lock');
+				const path = join(root, 'a', canaryName('.ts'));
+
+				await writeFile(path, MESSY['.ts']);
+				await writeFile(lock, '');
+
+				const staging = stage(root, ['--', path]);
+
+				await new Promise((settle) => setTimeout(settle, 200));
+				await rm(lock);
+				await staging;
+
+				expect(await git(root, ['ls-files', '--', path])).toBe(`${relative(root, path)}\n`);
+			});
+		},
+		TIMEOUT,
+	);
+
+	it(
+		'names the lock when the index never comes free',
+		async () => {
+			await inScratch('oxfmt --write', async (root) => {
+				const path = join(root, 'a', canaryName('.ts'));
+
+				await writeFile(path, MESSY['.ts']);
+				await writeFile(join(root, '.git', 'index.lock'), '');
+
+				await expect(stage(root, ['--', path], 300)).rejects.toThrow(
+					/index\.lock still held after 300ms/,
+				);
 			});
 		},
 		TIMEOUT,
