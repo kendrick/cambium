@@ -1,4 +1,4 @@
-import type { Page, Route } from '@playwright/test';
+import type { Page } from '@playwright/test';
 
 import { DATABASE_NAME, RECORD_STORE_NAME } from '../app/storage/indexed-db-record-store';
 import { MAX_ENCODED_BASE64_BYTES } from '../lib/image-intake';
@@ -101,6 +101,87 @@ async function expectRecordCountHolds(page: Page, expected: number): Promise<voi
 	}
 }
 
+/** What the init script below leaves on `window`, for the test to arm, read and release. */
+type OpenHold = { armed: boolean; held: number; release: () => void };
+
+type WindowWithOpenHold = Window & { cambiumOpenHold: OpenHold };
+
+/**
+ * Lets a scenario park a save partway through, at the moment it opens the app's database.
+ *
+ * The hold sits on `indexedDB.open` for the named database. That's a platform call the save has
+ * to make before it can write anything, however Next splits or preloads the form's code, so the
+ * hold doesn't depend on a build artifact. While armed, every `success` listener attached to an
+ * open request for that database is withheld until `release`, so the save's connection never
+ * resolves and its `put` never starts. `held` counts withheld events, and that count is the
+ * scenario's evidence that the hold actually caught a save rather than arming and catching
+ * nothing.
+ *
+ * It wraps listeners rather than the request because `open` has to hand back a real
+ * `IDBOpenDBRequest` synchronously, and `idb`'s `openDB` subscribes with `addEventListener`.
+ * Disarming on release keeps the post-save reads, the route's own and `readStoredRecords`, off the
+ * hold.
+ */
+async function installOpenHold(page: Page, databaseName: string): Promise<void> {
+	await page.addInitScript((name) => {
+		const realOpen = IDBFactory.prototype.open;
+		let releaseAll!: () => void;
+		const released = new Promise<void>((resolve) => {
+			releaseAll = resolve;
+		});
+
+		const hold: OpenHold = {
+			armed: false,
+			held: 0,
+			release: () => {
+				hold.armed = false;
+				releaseAll();
+			},
+		};
+
+		(window as unknown as WindowWithOpenHold).cambiumOpenHold = hold;
+
+		IDBFactory.prototype.open = function open(this: IDBFactory, ...args: [string, number?]) {
+			const request = realOpen.apply(this, args);
+
+			if (!hold.armed || args[0] !== name) return request;
+
+			const realAdd = request.addEventListener.bind(request);
+
+			request.addEventListener = ((
+				type: string,
+				listener: EventListenerOrEventListenerObject | null,
+				options?: boolean | AddEventListenerOptions,
+			) => {
+				// Adding a null listener is a no-op in the platform too.
+				if (!listener) return;
+
+				if (type !== 'success') {
+					realAdd(type, listener, options);
+					return;
+				}
+
+				const deferred = listener;
+
+				realAdd(
+					type,
+					(event: Event) => {
+						hold.held += 1;
+						void (async () => {
+							await released;
+							if (typeof deferred === 'function') deferred.call(request, event);
+							else deferred.handleEvent(event);
+						})();
+					},
+					options,
+				);
+			}) as typeof request.addEventListener;
+
+			return request;
+		};
+	}, databaseName);
+}
+
 function pngFile(name: string, bytes: Uint8Array) {
 	return { name, mimeType: 'image/png', buffer: Buffer.from(bytes) };
 }
@@ -144,7 +225,16 @@ test('three submits in one tick write exactly one record', async ({ page }) => {
 	await expectRecordCountHolds(page, 1);
 });
 
+/**
+ * The fix is `disabled={busy}` on Remove. `save()` sets `busy` on its first line and leaves it set
+ * until the route swaps the form out, so Remove has to stay disabled for the whole save, not only
+ * across its dynamic imports. The scenario parks the save at the point where it opens the database,
+ * which comes after those imports and before its `put`. That's a moment inside the save where the
+ * list would still accept a click if the button weren't disabled, and where the record being
+ * written already holds both images.
+ */
 test('Remove during a held save leaves the list as the record will store it', async ({ page }) => {
+	await installOpenHold(page, DATABASE_NAME);
 	await page.goto('/');
 
 	await page
@@ -154,28 +244,25 @@ test('Remove during a held save leaves the list as the record will store it', as
 	const rows = page.getByRole('listitem');
 	await expect(rows).toHaveCount(2);
 
-	// Installed after the page has loaded, so it catches only what `save()` fetches on demand: the
-	// chunks behind its dynamic imports. Holding them keeps the save parked at that `await`, which
-	// is where the list used to stay editable.
-	const held: Route[] = [];
-	let released = false;
-	await page.route('**/_next/static/chunks/**', async (route) => {
-		if (released) await route.continue();
-		else held.push(route);
+	await page.evaluate(() => {
+		(window as unknown as WindowWithOpenHold).cambiumOpenHold.armed = true;
 	});
 
 	await page.getByRole('button', { name: 'Save these references' }).click();
 
-	// Without this, a chunk served from cache would let the scenario pass having held nothing.
-	await expect.poll(() => held.length).toBeGreaterThan(0);
+	// Without this, a save that never reached the open would pass having held nothing.
+	await expect
+		.poll(() => page.evaluate(() => (window as unknown as WindowWithOpenHold).cambiumOpenHold.held))
+		.toBeGreaterThan(0);
 
 	// `dispatchEvent` rather than `click`, because `click` waits for a disabled button to enable and
 	// the fix is exactly that it stays disabled.
 	await rows.first().getByRole('button', { name: 'Remove' }).dispatchEvent('click');
 	await expect(rows).toHaveCount(2);
 
-	released = true;
-	await Promise.all(held.map((route) => route.continue()));
+	await page.evaluate(() => {
+		(window as unknown as WindowWithOpenHold).cambiumOpenHold.release();
+	});
 
 	await expectSaved(page);
 
