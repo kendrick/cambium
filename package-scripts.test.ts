@@ -29,10 +29,10 @@ const ROOT = import.meta.dirname;
 // what the reachability assertion reads.
 const FILE_COUNT = /Finished in .+ on (\d+) files/;
 
-// Every test spawns pnpm, which pays its own startup before oxfmt runs at all. The first one spawns
-// it twice and git another half dozen times, and writes a fixture into every directory in the repo.
-// That fits inside Vitest's 5s default on a warm local checkout and has no margin left on a cold or
-// loaded one.
+// Every guard run spawns pnpm twice, and pnpm pays its own startup before oxfmt runs at all. On top
+// of that come one bare `oxfmt --list-different` per level of directory depth, half a dozen git
+// calls, and a fixture in every directory oxfmt walks. That fits inside Vitest's 5s default on a warm
+// local checkout and has no margin left on a cold or loaded one.
 const TIMEOUT = 30_000;
 
 // The marker rides along so a file left behind by a killed run explains itself, and the sweep below
@@ -150,10 +150,10 @@ function filesTouched(stdout: string): number {
 }
 
 /**
- * Plants one canary of `extension` in `directory` and hands back its path. The name is random
- * because a fixed one can be excluded: `oxfmt --write . '!**\/format-canary-*\/**'` rewrites the
- * tree and steps around any canary whose path a script can predict. A plain file rather than a
- * directory, so a peer's canary never looks like somewhere this run should plant.
+ * A fresh filename for one canary or probe of `extension`. The name is random because a fixed one
+ * can be excluded: `oxfmt --write . '!**\/format-canary-*\/**'` rewrites the tree and steps around
+ * any canary whose path a script can predict. It names a plain file rather than a directory, so a
+ * peer's canary never looks like somewhere this run should plant.
  */
 function canaryName(extension: string): string {
 	return `${randomUUID().replaceAll('-', '').slice(0, 12)}${extension}`;
@@ -178,6 +178,17 @@ async function manifestDirectory(root: string): Promise<string> {
 	return resolve(root, path);
 }
 
+// A file another run can delete between our listing it and reading it. A missing file counts as an
+// answer here. Any other error still throws.
+async function unlessGone<T>(pending: Promise<T>): Promise<T | undefined> {
+	try {
+		return await pending;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+		throw error;
+	}
+}
+
 async function startRun(root: string): Promise<Run> {
 	const directory = await manifestDirectory(root);
 
@@ -197,7 +208,16 @@ async function plant(owner: Run, directories: string[], extensions: string[]): P
 	// NUL-separated, since a directory name can hold a newline and cannot hold a NUL.
 	await appendFile(owner.manifest, paths.map((path) => `${path}\0`).join(''));
 	owner.planted.push(...paths);
-	await Promise.all(paths.map((path) => writeFile(path, MESSY[extname(path)])));
+
+	// Every write settles before this returns or throws. `Promise.all` rejects on the first failed
+	// write while its siblings are still in flight, so cleanup could remove the files and the
+	// manifest and then have a sibling land a file no manifest lists, which no sweep will touch.
+	const writes = await Promise.allSettled(
+		paths.map((path) => writeFile(path, MESSY[extname(path)])),
+	);
+	const failed = writes.find((write) => write.status === 'rejected');
+
+	if (failed) throw failed.reason;
 
 	return paths;
 }
@@ -310,25 +330,28 @@ async function walkedDirectories(walk: Run): Promise<string[]> {
  * the path sits inside this repo, it is not committed, and a file still on disk carries the marker.
  * A listed path whose file is already gone keeps only its index entry to clear.
  *
- * Age is read off the manifest, and it is what lets two runs share a checkout. A peer's manifest is
- * younger than `TIMEOUT` for as long as the peer can still be running, since Vitest has failed any
- * run older than that, so a live peer's canaries are never swept. A stray dropped seconds ago
- * survives this sweep and is caught by a later one, which is the right way round.
+ * Age is read off the manifest, and it is what lets two runs share a checkout. A run inside its
+ * `TIMEOUT` keeps a manifest younger than that, so its canaries are not swept. Vitest fails a test at
+ * `TIMEOUT` without stopping its body, so a run that overruns can lose its own fixtures to a peer's
+ * sweep. That run has already failed, and its fixtures are the only ones at risk. A stray dropped
+ * seconds ago survives this sweep and is caught by a later one, which is the right way round.
+ *
+ * Two sweeps can run at once over the same stale manifests. Either one may delete a manifest or
+ * hold `index.lock` while the other is still reading, so a vanished file is skipped rather than
+ * thrown on, and a failed `git rm --cached` leaves everything listed for a later sweep.
  */
 async function sweepStrays(root: string): Promise<void> {
 	const directory = await manifestDirectory(root);
-	const manifests = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
-		if (error.code === 'ENOENT') return [];
-		throw error;
-	});
+	const manifests = (await unlessGone(readdir(directory))) ?? [];
 
 	const cutoff = Date.now() - TIMEOUT;
 	const stale = (
 		await Promise.all(
 			manifests.map(async (name) => {
 				const manifest = join(directory, name);
+				const stats = await unlessGone(stat(manifest));
 
-				return (await stat(manifest)).mtimeMs <= cutoff ? manifest : '';
+				return stats && stats.mtimeMs <= cutoff ? manifest : '';
 			}),
 		)
 	).filter(Boolean);
@@ -338,7 +361,11 @@ async function sweepStrays(root: string): Promise<void> {
 	const committed = new Set(
 		(await git(root, ['ls-tree', '-r', '--name-only', '-z', 'HEAD'])).split('\0').filter(Boolean),
 	);
-	const listed = (await Promise.all(stale.map((manifest) => readFile(manifest, 'utf8'))))
+	const listed = (
+		await Promise.all(
+			stale.map(async (manifest) => (await unlessGone(readFile(manifest, 'utf8'))) ?? ''),
+		)
+	)
 		.flatMap((contents) => contents.split('\0'))
 		.filter(Boolean)
 		.filter((path) => {
@@ -355,10 +382,7 @@ async function sweepStrays(root: string): Promise<void> {
 	const doomed = (
 		await Promise.all(
 			listed.map(async (path) => {
-				const contents = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
-					if (error.code === 'ENOENT') return undefined;
-					throw error;
-				});
+				const contents = await unlessGone(readFile(path, 'utf8'));
 
 				return contents === undefined || contents.includes(NOTE) ? path : '';
 			}),
@@ -369,7 +393,21 @@ async function sweepStrays(root: string): Promise<void> {
 	// kind of stray for another. `-f` because the fully staged canary may have been tidied after it
 	// was added, and git refuses to unstage content that differs from both the file and HEAD.
 	if (doomed.length > 0) {
-		await git(root, ['rm', '--cached', '-f', '--quiet', '--ignore-unmatch', '--', ...doomed]);
+		const unstaged = await git(root, [
+			'rm',
+			'--cached',
+			'-f',
+			'--quiet',
+			'--ignore-unmatch',
+			'--',
+			...doomed,
+		]).then(
+			() => true,
+			() => false,
+		);
+
+		if (!unstaged) return;
+
 		await Promise.all(doomed.map((path) => rm(path, { force: true })));
 	}
 
@@ -424,7 +462,7 @@ async function formatGuard(root: string, extensions: string[]): Promise<string[]
 		// canaries with them: `git commit -a` all of them, a plain `git commit` the one fully added.
 		// The window is held to the one command that needs it.
 		//
-		// `-f` because the walk now plants wherever oxfmt goes, and that includes directories git
+		// `-f` because the walk plants wherever oxfmt goes, and that includes directories git
 		// ignores. Without it `git add` refuses the whole batch over one such path.
 		const [added, ...intended] = canaries;
 
@@ -486,7 +524,7 @@ const FORMATTED = 'export const x = 1;\n';
  * run against an exploit. An exploit never runs against this checkout: its whole purpose is a write
  * across the tree, and here that write lands on a peer's in-flight edits.
  *
- * `Hidden/` is the divergence escape 3 was about. `.gitignore` says `hidden/`, and with
+ * `Hidden/` is a directory git prunes and oxfmt walks. `.gitignore` says `hidden/`, and with
  * `core.ignorecase` on, which git init sets by default on macOS and this sets everywhere, git
  * matches it and oxfmt, which matches case-sensitively, does not. It stays untracked, the way a
  * peer's brand-new directory is, because `git check-ignore` never reports a directory holding a
@@ -606,7 +644,7 @@ describe('pnpm format', () => {
 	// The walk has a narrower gap of its own, a file-level ignore rule aimed at the probe's
 	// extension, which `walkedDirectories` describes.
 	//
-	// The list is open, and a fifth axis would not close it. A canary has to be tellable from a real
+	// The list is open, and another canary axis would not close it. A canary has to be tellable from a real
 	// file to work at all, which is exactly what a selector needs in order to skip one. More canaries
 	// do not change that. They move the selector.
 	//
@@ -664,9 +702,10 @@ describe('pnpm format', () => {
 // The escapes the guard used to let through, each run against a scratch repo so an exploit never
 // touches this checkout. An exploit arm asserts the specific failure its escape produces, not just
 // that the guard failed, since a guard that fails for an unrelated reason proves nothing about the
-// hole. Each exploit arm has been checked by mutation: put back the behaviour its escape relied on
-// (a walk pruned by `git check-ignore`, intent-to-add only, a sweep gated on shape, marker, HEAD
-// and age) and that arm fails.
+// hole. Nothing in this suite runs the old guard. Each exploit arm was checked by hand, by putting
+// back the behaviour its escape relied on (a walk pruned by `git check-ignore`, intent-to-add only,
+// a sweep gated on shape, marker, HEAD and age) and watching that arm fail. Redo that check when
+// an arm changes, because an arm that cannot fail looks exactly like one that passes.
 describe('pnpm format guard, against scripts built to evade it', () => {
 	it(
 		'walks a directory git prunes and oxfmt formats',
@@ -743,7 +782,7 @@ describe('pnpm format guard, against scripts built to evade it', () => {
 		'leaves a staged file no manifest lists, whatever it looks like',
 		async () => {
 			await inScratch('oxfmt --write', async (root) => {
-				const long = new Date(Date.now() - 2 * TIMEOUT);
+				const expired = new Date(Date.now() - 2 * TIMEOUT);
 
 				// Canary shape, the marker, absent from HEAD, and older than `TIMEOUT`: everything a
 				// sweep guessing from the file would take. Staged, so losing it costs somebody work.
@@ -751,14 +790,14 @@ describe('pnpm format guard, against scripts built to evade it', () => {
 
 				await writeFile(bystander, MESSY['.ts']);
 				await git(root, ['add', '--', bystander]);
-				await utimes(bystander, long, long);
+				await utimes(bystander, expired, expired);
 
 				// A stale manifest in the same sweep, so the deleting branch runs rather than
 				// returning early with nothing to do.
 				const earlier = await startRun(root);
 				const [stray] = await plant(earlier, [join(root, 'a')], ['.ts']);
 
-				await utimes(earlier.manifest, long, long);
+				await utimes(earlier.manifest, expired, expired);
 				await sweepStrays(root);
 
 				expect(await readFile(stray, 'utf8').catch(() => 'gone')).toBe('gone');
@@ -776,7 +815,7 @@ describe('pnpm format guard, against scripts built to evade it', () => {
 		async () => {
 			await inScratch('oxfmt --write', async (root) => {
 				const committed = await indexed(root);
-				const long = new Date(Date.now() - 2 * TIMEOUT);
+				const expired = new Date(Date.now() - 2 * TIMEOUT);
 
 				// The three states a killed run can leave: an intent-to-add entry, a full entry whose
 				// file was tidied after staging, and an entry whose file is already gone.
@@ -791,7 +830,7 @@ describe('pnpm format guard, against scripts built to evade it', () => {
 				await git(root, ['add', '--', added, orphaned]);
 				await writeFile(added, TIDY);
 				await rm(orphaned);
-				await utimes(dead.manifest, long, long);
+				await utimes(dead.manifest, expired, expired);
 
 				const live = await startRun(root);
 				const [peer] = await plant(live, [join(root, 'a', 'b')], ['.ts']);
@@ -807,6 +846,40 @@ describe('pnpm format guard, against scripts built to evade it', () => {
 				expect(await indexed(root)).toEqual(committed);
 				expect(await readFile(peer, 'utf8')).toBe(MESSY['.ts']);
 				expect(await readFile(live.manifest, 'utf8')).toBe(`${peer}\0`);
+			});
+		},
+		TIMEOUT,
+	);
+
+	// Two sweeps sharing a checkout, forced into the two collisions a real race produces at random.
+	// A manifest that vanishes between the listing and the read is a dangling link here, and a peer
+	// mid-`git rm` is an `index.lock` left in place. Neither may throw, and the lock must leave every
+	// listed file where it was for a later sweep.
+	it(
+		'survives a peer sweeping the same manifests',
+		async () => {
+			await inScratch('oxfmt --write', async (root) => {
+				const expired = new Date(Date.now() - 2 * TIMEOUT);
+				const dead = await startRun(root);
+				const [stray] = await plant(dead, [join(root, 'a')], ['.ts']);
+
+				await git(root, ['add', '--intent-to-add', '--', stray]);
+				await utimes(dead.manifest, expired, expired);
+				await symlink(join(root, 'no-such-manifest'), join(dirname(dead.manifest), 'vanished'));
+
+				const lock = join(root, '.git', 'index.lock');
+
+				await writeFile(lock, '');
+				await sweepStrays(root);
+
+				expect(await readFile(stray, 'utf8')).toBe(MESSY['.ts']);
+				expect(await readFile(dead.manifest, 'utf8')).toBe(`${stray}\0`);
+
+				await rm(lock);
+				await sweepStrays(root);
+
+				expect(await readFile(stray, 'utf8').catch(() => 'gone')).toBe('gone');
+				expect(await git(root, ['ls-files', '--', stray])).toBe('');
 			});
 		},
 		TIMEOUT,
