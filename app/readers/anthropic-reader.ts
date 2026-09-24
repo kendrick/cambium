@@ -169,9 +169,9 @@ async function readBodyText(response: Response): Promise<string | null> {
  * as a missing body. Checking the signal afterward is what stops a cancelled read from arriving as
  * `malformed`, or as a success built from a body read before the abort.
  *
- * Callers pass `response` once one exists. By then Anthropic has answered, and billed a 200, so
- * its status and request id are what a person quotes to support about that request, cancelled or
- * not.
+ * Callers pass `response` once one exists, on the ok path and the error path alike. By then
+ * Anthropic has answered, whether with a billed 200 or an error status, so the response's status
+ * and request id are what a person quotes to support about that request, cancelled or not.
  */
 function throwIfCancelled(
 	signal: AbortSignal | undefined,
