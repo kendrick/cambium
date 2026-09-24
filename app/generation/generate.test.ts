@@ -169,7 +169,11 @@ async function storeWith(start: BrandRecord, store: RecordStore = createInMemory
 function run(
 	{ store, stored }: Stored,
 	fetch: typeof globalThis.fetch,
-	extra: { key?: string; repair?: { rawResponse: string; issues: string[] } } = {},
+	extra: {
+		key?: string;
+		repair?: { rawResponse: string; issues: string[] };
+		onCommitting?: () => void;
+	} = {},
 ) {
 	return generate({
 		record: stored,
@@ -178,6 +182,7 @@ function run(
 		recordStore: store,
 		engine,
 		repair: extra.repair,
+		onCommitting: extra.onCommitting,
 		now: () => NOW,
 		resolveFontTableRef: async () => FONT_TABLE_REF,
 	});
@@ -496,6 +501,62 @@ describe('generate', () => {
 				expect(await setup.store.get(RECORD_ID)).toStrictEqual(before);
 			},
 		);
+
+		// The panel hides Cancel on this call, so it must come after the last abort check and before
+		// the write. Earlier would hide a Cancel that still works; later would leave one that doesn't.
+		it('says the commit is starting after the answer is in and before anything is written', async () => {
+			const setup = await storeWith(record([]));
+			const onCommitting = vi.fn<() => void>();
+			const put = setup.store.put.bind(setup.store);
+			const callsAtPut: number[] = [];
+			setup.store.put = async (value) => {
+				callsAtPut.push(onCommitting.mock.calls.length);
+				return put(value);
+			};
+
+			const result = await run(setup, replay(SUCCESS_ON_GENERATION_MODEL), { onCommitting });
+
+			expect(result.ok).toBe(true);
+			expect(onCommitting).toHaveBeenCalledTimes(1);
+			expect(callsAtPut.length).toBeGreaterThan(0);
+			expect(callsAtPut.every((calls) => calls === 1)).toBe(true);
+		});
+
+		it.each([
+			{ label: 'a failed read', fetch: networkDown },
+			{ label: 'an answer that does not parse', fetch: () => replay(structuredProseNotJson) },
+		])('never says the commit is starting after $label', async ({ fetch }) => {
+			const onCommitting = vi.fn<() => void>();
+
+			const result = await run(await storeWith(record([])), fetch(), { onCommitting });
+
+			expect(result.ok).toBe(false);
+			expect(onCommitting).not.toHaveBeenCalled();
+		});
+
+		it('never says the commit is starting when the run was cancelled', async () => {
+			const setup = await storeWith(record([]));
+			const controller = new AbortController();
+			const onCommitting = vi.fn<() => void>();
+			const fetch = hangsUntilAborted();
+
+			const pending = generate({
+				record: setup.stored,
+				key: API_KEY,
+				reader: createGenerationReader({ fetch }),
+				recordStore: setup.store,
+				engine,
+				signal: controller.signal,
+				onCommitting,
+				now: () => NOW,
+				resolveFontTableRef: async () => FONT_TABLE_REF,
+			});
+			await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+			controller.abort();
+
+			expect(!(await pending).ok).toBe(true);
+			expect(onCommitting).not.toHaveBeenCalled();
+		});
 	});
 
 	it.each(STARTING_RECORDS)(

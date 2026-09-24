@@ -16,7 +16,10 @@ import { getSessionKey } from '../../../app/generation/session-key';
 export type KeyDialogProps = {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	/** Gets the key straight from the input, so no component state ever holds a copy. */
+	/**
+	 * Gets the key straight from the input, so no component state ever holds a copy. An empty field
+	 * with a key already loaded hands back the loaded one, which is how the person keeps it.
+	 */
 	onSubmit: (key: string) => void;
 	/** The rejection to show when the dialog opened by itself after Anthropic refused the key. */
 	notice?: string;
@@ -28,13 +31,16 @@ const CONSOLE_URL = 'https://console.anthropic.com';
  * Asks for the key, and never on arrival: the panel opens this from Generate, by itself when
  * Anthropic rejects a key, or from the recovery button left behind after that.
  *
- * The field is uncontrolled and prefilled from session storage. After a credentials failure the
- * stored key is still there (#23: a rejected key doesn't clear it), so the person sees what was
- * sent and can fix a typo rather than paste it all again. Controlled state would keep the key in
- * React's memory for as long as the panel lives.
+ * The field is uncontrolled and always starts empty. After a credentials failure the stored key is
+ * still there (#23: a rejected key doesn't clear it), and the dialog says so rather than show it.
+ * A prefilled password input writes the whole key into the DOM as a `value` attribute, where an
+ * extension or a saved page can read it. Controlled state would keep the key in React's memory for
+ * as long as the panel lives.
  */
 export default function KeyDialog({ open, onOpenChange, onSubmit, notice }: KeyDialogProps) {
 	const inputId = useId();
+	// Only whether one exists, read on render so the key itself never travels through a prop or state.
+	const loaded = getSessionKey() !== null;
 
 	return (
 		<Dialog onOpenChange={onOpenChange} open={open}>
@@ -44,7 +50,8 @@ export default function KeyDialog({ open, onOpenChange, onSubmit, notice }: KeyD
 					onSubmit={(event) => {
 						event.preventDefault();
 						const value = new FormData(event.currentTarget).get('api-key');
-						const key = typeof value === 'string' ? value.trim() : '';
+						const typed = typeof value === 'string' ? value.trim() : '';
+						const key = typed || getSessionKey();
 						if (key) onSubmit(key);
 					}}
 				>
@@ -62,17 +69,21 @@ export default function KeyDialog({ open, onOpenChange, onSubmit, notice }: KeyD
 						<label className="text-sm font-medium" htmlFor={inputId}>
 							Anthropic API key
 						</label>
-						{/* Read on render, so the prefill never travels through a prop or state. */}
 						<input
 							autoComplete="off"
 							className="border-border bg-background focus-visible:border-ring focus-visible:ring-ring/50 h-9 rounded-md border px-3 font-mono text-sm outline-none focus-visible:ring-3"
-							defaultValue={getSessionKey() ?? ''}
 							id={inputId}
 							name="api-key"
-							required
+							required={!loaded}
 							spellCheck={false}
 							type="password"
 						/>
+						{loaded && (
+							<p className="text-muted-foreground text-sm" data-key-loaded>
+								The key you entered before is still loaded. Leave this empty to keep it, or paste a
+								new one to replace it.
+							</p>
+						)}
 					</div>
 					{/* #23 asks for this sentence outright. The default workspace can't carry a limit of
 					    its own, so a key made there can spend up to the organization's whole limit. */}

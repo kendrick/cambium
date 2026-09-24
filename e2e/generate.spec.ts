@@ -249,7 +249,7 @@ function outcome(page: Page, kind: string) {
 }
 
 /**
- * Chromium's own network diagnostic for a fetch that lands on a non-2xx status or gets aborted —
+ * Chromium's own network diagnostic for a fetch that lands on a non-2xx status or gets aborted—
  * "Failed to load resource: the server responded with a status of…" or "net::ERR_FAILED"—never
  * anything the app's code calls, and it fires the same way for a real Anthropic outage as it does
  * here.
@@ -280,6 +280,16 @@ function collectConsoleMessages(page: Page): string[] {
 	const messages: string[] = [];
 	page.on('console', (message) => messages.push(message.text()));
 	return messages;
+}
+
+/**
+ * The serialized DOM, which is what an extension, a saved page, or a screenshot tool reads. A
+ * password input's typed value lives in the element's property and never reaches this, but a
+ * `value` attribute (a prefilled `defaultValue`) does, so this is what catches the key being
+ * rendered back into the page.
+ */
+async function expectKeyNotInPage(page: Page): Promise<void> {
+	expect(await page.content()).not.toContain(TEST_KEY);
 }
 
 test('no key dialog is open before Generate is clicked, and clicking it opens one', async ({
@@ -370,9 +380,14 @@ test('a successful generation reaches the workspace, and the key touches nothing
 	}));
 
 	await waitForGenerateReady(page);
-	await generateWithFreshKey(page, TEST_KEY);
+	await generateButton(page).click();
+	const dialog = keyDialog(page);
+	await dialog.getByLabel(/api key/i).fill(TEST_KEY);
+	await expectKeyNotInPage(page);
+	await dialog.locator('button[type="submit"]').click();
 
 	await expect(page).toHaveURL(new RegExp(`/workspace\\?record=${recordId}$`));
+	await expectKeyNotInPage(page);
 
 	expect(sent).toHaveLength(1);
 	expect(sent[0]?.body.model).toBe('claude-opus-5-5');
@@ -405,17 +420,20 @@ test('a rejected key (401) reopens the key dialog by itself with the key still i
 	const consoleMessages = collectConsoleMessages(page);
 	const recordId = await saveOneRecord(page);
 
-	await mockAnthropic(page, () => ({ status: 401, body: error401Fixture.body }));
+	const sent = await mockAnthropic(page, () => ({ status: 401, body: error401Fixture.body }));
 
 	await waitForGenerateReady(page);
 	await generateWithFreshKey(page, TEST_KEY);
 
-	// Nothing is clicked between the 401 and this check. The dialog comes back by itself, with the key
-	// that was sent still in the field and the rejection stated inside it.
+	// Nothing is clicked between the 401 and this check. The dialog comes back by itself with the
+	// rejection stated inside it. The field stays empty, since a prefill would write the key into the
+	// DOM as a `value` attribute, and the dialog says the loaded key is still there instead.
 	const dialog = keyDialog(page);
 	await expect(dialog).toBeVisible();
-	await expect(dialog.getByLabel(/api key/i)).toHaveValue(TEST_KEY);
+	await expect(dialog.getByLabel(/api key/i)).toHaveValue('');
+	await expect(dialog.locator('[data-key-loaded]')).toBeVisible();
 	await expect(dialog.locator('[data-key-notice]')).toBeVisible();
+	await expectKeyNotInPage(page);
 	tolerateExpectedNetworkErrorLog(consoleErrors);
 
 	// #23's own rule: a rejected key stays loaded, so the person can inspect or fix it rather than
@@ -438,7 +456,20 @@ test('a rejected key (401) reopens the key dialog by itself with the key still i
 
 	await recovery.click();
 	await expect(dialog).toBeVisible();
-	await expect(dialog.getByLabel(/api key/i)).toHaveValue(TEST_KEY);
+	await expect(dialog.getByLabel(/api key/i)).toHaveValue('');
+	await expectKeyNotInPage(page);
+
+	// Submitting the empty field keeps the loaded key and sends nothing, since #23 forbids a retry
+	// the person didn't ask for.
+	await dialog.locator('button[type="submit"]').click();
+	await expect(dialog).toHaveCount(0);
+	const keptValue = await page.evaluate(
+		(storageKey) => sessionStorage.getItem(storageKey),
+		SESSION_KEY_STORAGE_KEY,
+	);
+	expect(keptValue).toBe(TEST_KEY);
+	expect(sent).toHaveLength(1);
+	await expectKeyNotInPage(page);
 
 	await expect(await readRecord(page, recordId)).toMatchObject({ versions: [] });
 	expect(consoleMessages.join('\n')).not.toContain(TEST_KEY);
@@ -622,6 +653,16 @@ test('a repair asked for after the key was cleared still goes out as a repair on
 	const container = outcome(page, 'not-json');
 	await expect(container).toBeVisible();
 
+	// A repair is a whole second request, images resent and the same output ceiling, so its price
+	// shows before the button is pressed. The floor is worked out by hand: 16,000 output tokens at
+	// $20/M is $0.32, and no repair can cost less than its output ceiling.
+	const repairEstimate = container.locator('[data-estimate]');
+	await expect(repairEstimate).toBeVisible();
+	const repairText = (await repairEstimate.textContent()) ?? '';
+	const repairDollars = /\$(\d+\.\d{2})\b/.exec(repairText)?.[1];
+	expect(repairDollars, `no dollar amount in "${repairText}"`).toBeDefined();
+	expect(Number(repairDollars)).toBeGreaterThanOrEqual(0.32);
+
 	// With no key left, Repair has to ask for one first. The run that follows must still be the
 	// repair, not a plain generation that drops the answer being fixed.
 	await page.locator('[data-key-indicator]').getByRole('button', { name: /clear/i }).click();
@@ -690,5 +731,80 @@ test('a stalled request can be cancelled, which offers a retry and saves no vers
 
 	await expect(await readRecord(page, recordId)).toMatchObject({ versions: [] });
 	expect(consoleMessages.join('\n')).not.toContain(TEST_KEY);
+	expect(sent).toHaveLength(1);
+});
+
+/**
+ * Opens a readwrite transaction on the record store and keeps it alive with a chain of requests, so
+ * the app's own commit queues behind it. This is how another tab's write would stall a commit, and
+ * it turns the milliseconds between "answer arrived" and "version written" into a window a test can
+ * act inside. Returns once the transaction is live; `releaseRecordStore` ends it.
+ */
+async function holdRecordStore(page: Page): Promise<void> {
+	await page.evaluate(
+		async ([databaseName, storeName]) => {
+			const db = await new Promise<IDBDatabase>((resolve, reject) => {
+				const request = indexedDB.open(databaseName);
+				request.addEventListener('success', () => resolve(request.result));
+				request.addEventListener('error', () => reject(request.error));
+			});
+			const transaction = db.transaction(storeName, 'readwrite');
+			const store = transaction.objectStore(storeName);
+			const holder = window as unknown as { releaseRecordStore?: () => void };
+			let held = true;
+
+			// A transaction commits once it has no pending requests, so each one queues the next.
+			const spin = () => {
+				if (held) store.count().addEventListener('success', spin);
+			};
+			spin();
+			transaction.addEventListener('complete', () => db.close());
+			holder.releaseRecordStore = () => {
+				held = false;
+			};
+		},
+		[DATABASE_NAME, RECORD_STORE_NAME] as const,
+	);
+}
+
+async function releaseRecordStore(page: Page): Promise<void> {
+	await page.evaluate(() => {
+		(window as unknown as { releaseRecordStore?: () => void }).releaseRecordStore?.();
+	});
+}
+
+test('Cancel is withdrawn once the answer is in and the commit has started', async ({ page }) => {
+	const recordId = await saveOneRecord(page);
+
+	let answer: (() => void) | undefined;
+	const answered = new Promise<void>((resolve) => {
+		answer = resolve;
+	});
+
+	const sent = await mockAnthropic(page, async (body) => {
+		await answered;
+		return { status: 200, body: successResponseBody(imageIdFromRequest(body)) };
+	});
+
+	await waitForGenerateReady(page);
+	await generateWithFreshKey(page, TEST_KEY);
+
+	await expect.poll(() => sent.length).toBe(1);
+	const cancel = page.getByRole('button', { name: 'Cancel' });
+	await expect(cancel).toBeVisible();
+
+	// The record was read before the request went out, so from here the only thing the app still
+	// needs from the store is the commit's write, and that is what the hold stalls.
+	await holdRecordStore(page);
+	answer?.();
+
+	// The answer is paid for and on its way into storage, so a Cancel pressed now could stop nothing.
+	// A Cancel still on screen here would swallow the click.
+	await expect(cancel).toHaveCount(0);
+	await expect(page).not.toHaveURL(/\/workspace/);
+
+	await releaseRecordStore(page);
+	await expect(page).toHaveURL(new RegExp(`/workspace\\?record=${recordId}$`));
+	expect((await readRecord(page, recordId))?.versions).toHaveLength(1);
 	expect(sent).toHaveLength(1);
 });

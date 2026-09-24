@@ -6,7 +6,7 @@ import {
 	errorKindForStatus,
 } from './anthropic-errors';
 
-const ALL_KINDS: AnthropicReaderErrorKind[] = [
+const ALL_KINDS = [
 	'credentials',
 	'billing',
 	'rate-limit',
@@ -16,7 +16,21 @@ const ALL_KINDS: AnthropicReaderErrorKind[] = [
 	'network',
 	'cancelled',
 	'malformed',
-];
+	'refusal',
+	'truncated',
+] as const satisfies readonly AnthropicReaderErrorKind[];
+
+describe('ALL_KINDS', () => {
+	// tsc does the checking here. A kind added to the union without joining this list makes the
+	// assignment below a type error, so the status filter can't quietly miss a new kind again.
+	it('names every AnthropicReaderErrorKind', () => {
+		const complete: [Exclude<AnthropicReaderErrorKind, (typeof ALL_KINDS)[number]>] extends [never]
+			? true
+			: false = true;
+
+		expect(complete).toBe(true);
+	});
+});
 
 describe('errorKindForStatus', () => {
 	it.each<[number, AnthropicReaderErrorKind]>([
@@ -54,10 +68,16 @@ describe('errorKindForStatus', () => {
 
 	// This runs on the failure path, where a throw has nowhere to go.
 	it('returns a kind for every status without throwing', () => {
-		// `network` and `cancelled` have no response behind them. `malformed` comes from a 200's body.
-		const statusOnly = ALL_KINDS.filter(
-			(kind) => kind !== 'network' && kind !== 'cancelled' && kind !== 'malformed',
-		);
+		// `network` and `cancelled` have no response behind them. `malformed`, `refusal` and `truncated`
+		// all come from a 200's body.
+		const bodyOrNoResponse = new Set<AnthropicReaderErrorKind>([
+			'network',
+			'cancelled',
+			'malformed',
+			'refusal',
+			'truncated',
+		]);
+		const statusOnly = ALL_KINDS.filter((kind) => !bodyOrNoResponse.has(kind));
 
 		for (let status = 100; status < 600; status += 1) {
 			expect(statusOnly).toContain(errorKindForStatus(status));

@@ -103,6 +103,11 @@ export type GenerateInput = Omit<SaveGeneratedVersionInput, keyof PaidSeed> & {
 	/** Set by the person's Cancel and passed to the reader. Nothing in this module sets a timeout. */
 	signal?: AbortSignal;
 	/**
+	 * Called after the last abort check, just before the commit starts. From then on an abort changes
+	 * nothing, so the caller withdraws Cancel here rather than leave a button that swallows the click.
+	 */
+	onCommitting?: () => void;
+	/**
 	 * Injectable because the default fetches the font taxonomy from a CDN, and a test that let it
 	 * would depend on the network to exercise a failure path that never gets that far.
 	 */
@@ -220,6 +225,7 @@ export async function generate({
 	engine,
 	repair,
 	signal,
+	onCommitting,
 	now,
 	resolveFontTableRef = defaultFontTableRef,
 }: GenerateInput): Promise<GenerateResult> {
@@ -261,6 +267,8 @@ export async function generate({
 	if (!parsed.ok) {
 		return { ok: false, failure: { kind: parsed.error.kind, error: parsed.error } };
 	}
+
+	onCommitting?.();
 
 	return saveGeneratedVersion({
 		record,

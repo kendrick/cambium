@@ -7,7 +7,7 @@ import { RECORD_PARAM } from '@/components/stored-record';
 import { Button } from '@/components/ui/button';
 
 import type { ReferenceImage } from '../../../core/brand-record';
-import type { CostEstimate } from '../../../app/generation/cost-estimate';
+import type { CostEstimate, ImageDimensions } from '../../../app/generation/cost-estimate';
 import type { FailureDescriptor } from '../../../app/generation/describe-failure';
 import type { PaidSeed } from '../../../app/generation/generate';
 import type { SeedRepair } from '../../../app/readers/anthropic-reader';
@@ -24,18 +24,28 @@ export type GeneratePanelProps = {
 	onKeyStored: (stored: boolean) => void;
 };
 
-/** Carries the formatted ceiling, so the render never touches the formatter's module. */
+/**
+ * Carries the formatted ceiling, so the render never touches the formatter's module. The measured
+ * dimensions ride along so a repair can be priced without decoding the images again.
+ */
 type Estimate =
 	| { kind: 'pending' }
-	| { kind: 'ready'; value: CostEstimate; maxUsdText: string }
+	| { kind: 'ready'; value: CostEstimate; maxUsdText: string; dimensions: ImageDimensions[] }
 	| { kind: 'failed' };
+
+type RepairEstimate = { kind: 'ready'; maxUsdText: string } | { kind: 'failed' };
 
 /**
  * `held` is the paid seed a storage failure hands back, kept so "Save again" can commit it without
- * a second paid read.
+ * a second paid read. `repairEstimate` is set only when the recovery is a repair.
  */
 type ShownFailure =
-	| { kind: 'described'; descriptor: FailureDescriptor; held: PaidSeed | null }
+	| {
+			kind: 'described';
+			descriptor: FailureDescriptor;
+			held: PaidSeed | null;
+			repairEstimate?: RepairEstimate;
+	  }
 	| { kind: 'unexpected' };
 
 /**
@@ -111,7 +121,12 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 				});
 
 				if (live) {
-					setEstimate({ kind: 'ready', value, maxUsdText: cost.formatUsdCeiling(value.maxUsd) });
+					setEstimate({
+						kind: 'ready',
+						value,
+						maxUsdText: cost.formatUsdCeiling(value.maxUsd),
+						dimensions,
+					});
 				}
 			} catch {
 				if (live) setEstimate({ kind: 'failed' });
@@ -122,6 +137,27 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 			live = false;
 		};
 	}, [images]);
+
+	/**
+	 * #23 wants a cost shown before every generation, and a repair is one. It sends the images again
+	 * under the same output ceiling, so it costs about as much as the first run. Never throws, since a
+	 * price it can't work out is still something to say next to the button.
+	 */
+	async function priceRepair(repair: SeedRepair): Promise<RepairEstimate> {
+		if (estimate.kind !== 'ready') return { kind: 'failed' };
+
+		try {
+			const cost = await import('../../../app/generation/cost-estimate');
+			const value = cost.estimateGenerationCost({
+				images: estimate.dimensions,
+				promptChars: cost.generationPromptChars(images, repair),
+			});
+
+			return { kind: 'ready', maxUsdText: cost.formatUsdCeiling(value.maxUsd) };
+		} catch {
+			return { kind: 'failed' };
+		}
+	}
 
 	/**
 	 * Every path into a model call or a commit goes through here, and each one starts from a click.
@@ -171,6 +207,10 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 								engine,
 								repair: attempt.repair,
 								signal: controller?.signal,
+								// Past this point the answer is paid for and the abort is never checked again, so a
+								// Cancel left on screen would swallow the click. The commit can stall behind another
+								// tab's write for as long as that write takes.
+								onCommitting: () => setAbort(null),
 							})
 						: await generation.saveGeneratedVersion({
 								record,
@@ -185,21 +225,24 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 			}
 
 			if (result.ok) {
-				// The version is written, so Cancel has nothing left to stop while the route changes.
-				setAbort(null);
 				if (mounted.current) router.push(`/workspace?${RECORD_PARAM}=${result.record.id}`);
 				return;
 			}
 
 			const { failure } = result;
+			// A repair gets one go per answer. The run that just failed was that go if it carried one.
+			const descriptor = describeFailure(failure, {
+				repairUsed: attempt.kind === 'generate' && attempt.repair !== undefined,
+			});
 
 			next = {
 				kind: 'described',
-				// A repair gets one go per answer. The run that just failed was that go if it carried one.
-				descriptor: describeFailure(failure, {
-					repairUsed: attempt.kind === 'generate' && attempt.repair !== undefined,
-				}),
+				descriptor,
 				held: 'seed' in failure ? { seed: failure.seed, provenance: failure.provenance } : null,
+				repairEstimate:
+					descriptor.recovery === 'repair-retry' && descriptor.repair
+						? await priceRepair(descriptor.repair)
+						: undefined,
 			};
 		} catch {
 			// `generate` throws only for failures it has no recovery for, and a chunk or the database can
@@ -213,8 +256,8 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 		setAbort(null);
 		setShown(next);
 
-		// #23: a rejected key reopens the dialog by itself, prefilled with the key that was sent, since
-		// it stays in session. The outcome's own button is there for after the dialog is dismissed.
+		// #23: a rejected key reopens the dialog by itself, and the key stays in session. The outcome's
+		// own button is there for after the dialog is dismissed.
 		if (next.kind === 'described' && next.descriptor.recovery === 'reopen-key-dialog') {
 			setDialog({ kind: 'update', notice: next.descriptor.message });
 		}
@@ -361,7 +404,7 @@ function FailureNotice({
 		);
 	}
 
-	const { descriptor, held } = shown;
+	const { descriptor, held, repairEstimate } = shown;
 
 	return (
 		<div
@@ -399,6 +442,14 @@ function FailureNotice({
 				<Button disabled={disabled} onClick={onRetry} variant="outline">
 					Retry
 				</Button>
+			)}
+
+			{descriptor.recovery === 'repair-retry' && descriptor.repair && repairEstimate && (
+				<p className="text-muted-foreground text-sm" data-estimate>
+					{repairEstimate.kind === 'ready'
+						? `A repair is a second request that sends your images again, so it costs up to ${repairEstimate.maxUsdText} more on your Anthropic account.`
+						: "A repair is a second request that sends your images again. Cambium couldn't work out what it will cost."}
+				</p>
 			)}
 
 			{descriptor.recovery === 'repair-retry' && descriptor.repair && (

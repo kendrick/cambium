@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { estimateGenerationCost, formatUsdCeiling } from './cost-estimate';
+import { estimateGenerationCost, formatUsdCeiling, generationPromptChars } from './cost-estimate';
 
 describe('estimateGenerationCost', () => {
 	it('sums per-image and prompt tokens, and prices output at the request ceiling', () => {
@@ -78,5 +78,29 @@ describe('formatUsdCeiling', () => {
 		});
 
 		expect(formatUsdCeiling(maxUsd)).toBe('$0.34');
+	});
+});
+
+/**
+ * A repair resends the first request's text and adds two turns: the answer being fixed, played back
+ * verbatim, and a directive naming every issue. So its text is at least the first request's plus
+ * both of those strings, whatever the directive's own wording adds around them.
+ */
+describe('generationPromptChars', () => {
+	const images = [
+		{ id: 'img-logo', downscaled: 'data:image/png;base64,Ag==', originalHash: 'sha256-logo' },
+	];
+
+	it('prices a repair as the first request plus the answer and every issue it names', () => {
+		const repair = {
+			rawResponse: 'Here is the brand palette you asked for, in prose rather than JSON.',
+			issues: ['Unexpected token H in JSON at position 0', 'keyColors: Required'],
+		};
+
+		const first = generationPromptChars(images);
+		const repaired = generationPromptChars(images, repair);
+		const added = repair.rawResponse.length + repair.issues.join('').length;
+
+		expect(repaired).toBeGreaterThanOrEqual(first + added);
 	});
 });

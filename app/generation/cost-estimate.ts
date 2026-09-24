@@ -1,5 +1,9 @@
 import type { ReferenceImage } from '../../core/brand-record';
-import { SEED_REQUEST_MAX_TOKENS, seedRequestTextChars } from '../readers/anthropic-request';
+import {
+	SEED_REQUEST_MAX_TOKENS,
+	type SeedRepair,
+	seedRequestTextChars,
+} from '../readers/anthropic-request';
 
 import { GENERATION_MODEL, GENERATION_OUTPUT_MODE, GENERATION_PRICING } from './model';
 
@@ -52,12 +56,17 @@ export function estimateGenerationCost({ images, promptChars }: CostEstimateInpu
 	return { inputTokens, maxOutputTokens, maxUsd };
 }
 
-/** The prompt text a first generation sends for these images, measured from the body itself. */
-export function generationPromptChars(images: ReferenceImage[]): number {
+/**
+ * The prompt text a generation sends for these images, measured from the body itself. Pass the
+ * repair for a repair run. A repair is a whole second request that resends the images and adds the
+ * answer being fixed and the directive, so pricing it as a first generation would understate it.
+ */
+export function generationPromptChars(images: ReferenceImage[], repair?: SeedRepair): number {
 	return seedRequestTextChars({
 		images,
 		model: GENERATION_MODEL,
 		outputMode: GENERATION_OUTPUT_MODE,
+		repair,
 	});
 }
 
