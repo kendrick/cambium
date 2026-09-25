@@ -646,7 +646,7 @@ test('every system-constant category is labelled an untouched default, and no de
 
 	for (const category of derivedCategories) {
 		const section = tokensSection.locator(`section[data-category="${category}"]`);
-		await expect(section).not.toHaveAttribute('data-source', /.+/);
+		await expect(section).not.toHaveAttribute('data-source');
 		await expect(section).not.toHaveAttribute('data-untouched');
 		await expect(section.getByText('Untouched default')).toHaveCount(0);
 	}
