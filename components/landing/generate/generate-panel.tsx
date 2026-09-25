@@ -92,9 +92,9 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 	const inFlight = useRef(false);
 
 	/**
-	 * Set for a generation from the click until its commit starts, not just during the model call. The
-	 * font lookup before that call can stall on a CDN with no timeout, and `generate` ends that wait on
-	 * abort too. A save-again makes no call and leaves this null.
+	 * Set for a generation from the click until its commit starts or its failure is shown, so it covers
+	 * the font lookup before the model call too. That lookup can stall on a CDN with no timeout, and
+	 * `generate` ends the wait on abort. A save-again makes no call and leaves this null.
 	 */
 	const [abort, setAbort] = useState<AbortController | null>(null);
 
