@@ -2,7 +2,8 @@ import { defineConfig, devices } from '@playwright/test';
 
 // Decided here and passed to the server, rather than left to the server's own default, so one
 // number decides both what the browser opens and what the server binds. `E2E_PORT` lets two
-// worktrees run the suite at once; on a shared 4173 the second run's server fails to bind.
+// worktrees run the suite at once. On a shared 4173, Playwright finds the port taken and fails the
+// second run before starting its server, since `reuseExistingServer` is off.
 const PORT = e2ePort(process.env.E2E_PORT);
 
 function e2ePort(raw: string | undefined): number {
