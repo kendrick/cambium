@@ -647,7 +647,7 @@ test('every system-constant category is labelled an untouched default, and no de
 	for (const category of derivedCategories) {
 		const section = tokensSection.locator(`section[data-category="${category}"]`);
 		await expect(section).not.toHaveAttribute('data-source', /.+/);
-		await expect(section).not.toHaveAttribute('data-untouched', /.+/);
+		await expect(section).not.toHaveAttribute('data-untouched');
 		await expect(section.getByText('Untouched default')).toHaveCount(0);
 	}
 });
@@ -676,7 +676,7 @@ test('overriding a system value drops the untouched label without changing its s
 	// The source never moves: overriding a value doesn't change where it came from, only whether it
 	// still matches what shipped.
 	await expect(section).toHaveAttribute('data-source', 'system');
-	await expect(section).not.toHaveAttribute('data-untouched', /.+/);
+	await expect(section).not.toHaveAttribute('data-untouched');
 	await expect(section.getByText('Untouched default')).toHaveCount(0);
 	await expect(section.getByText('Default, edited')).toBeVisible();
 
