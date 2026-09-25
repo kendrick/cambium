@@ -1,11 +1,19 @@
 /**
- * Eight kinds because there are eight recoveries. #23 branches on `kind` to decide what it offers
- * the user: re-enter the key, top up the account, wait, send fewer images, retry. Status codes are
- * the wrong thing to branch on, because 401 and 403 mean the same thing to a person holding a key,
- * and 500 and 529 both mean try later.
+ * One kind per thing that went wrong, as a person holding a key would tell them apart.
+ * `describeFailure` maps each to a message of its own and to one recovery: re-enter the key, retry,
+ * or nothing at all. Several kinds share a recovery, and the message tells the person which
+ * situation they're in. Status codes are the wrong thing to branch on, because 401 and 403 mean
+ * the same thing to a person holding a key, and 500 and 529 both mean try later.
  *
- * `network` and `malformed` have no status behind them. The first is fetch rejecting before a
- * response exists, the second a 200 whose body holds no usable content block.
+ * `network` never has a status behind it: fetch rejected before a response existed. `cancelled`
+ * has one only when the abort landed after the headers arrived, and then it carries that status
+ * and request id; an abort before that leaves both null. The two stay separate because only
+ * `network` is the connection's fault, and telling somebody who pressed Cancel to check their
+ * connection would be wrong. The last three all arrive as a 200, and only the body tells them
+ * apart. `malformed` holds no usable content block. `refusal` and `truncated` come from
+ * `stop_reason`, and they need kinds of their own because their recoveries differ from a parse
+ * failure's: a repair retry can't talk a safety classifier round, and a truncated seed hit
+ * `max_tokens`, so asking for the same seed again hits it again.
  */
 export type AnthropicReaderErrorKind =
 	| 'credentials'
@@ -15,7 +23,10 @@ export type AnthropicReaderErrorKind =
 	| 'invalid-request'
 	| 'server'
 	| 'network'
-	| 'malformed';
+	| 'cancelled'
+	| 'malformed'
+	| 'refusal'
+	| 'truncated';
 
 /** All optional: a network failure has no status, and a `request-id` header is not guaranteed. */
 export type AnthropicReaderErrorDetails = {
@@ -23,6 +34,7 @@ export type AnthropicReaderErrorDetails = {
 	requestId?: string | null;
 	body?: string | null;
 	retryAfterSeconds?: number | null;
+	refusalCategory?: string | null;
 	cause?: unknown;
 };
 
@@ -48,6 +60,12 @@ export class AnthropicReaderError extends Error {
 	 * to display rather than one to sleep on.
 	 */
 	readonly retryAfterSeconds: number | null;
+	/**
+	 * Only ever set for `refusal`, from the response's `stop_details.category`. The API documents
+	 * that set as open (`cyber`, `bio`, `reasoning_extraction` so far) and lets it be null, so this
+	 * is a string to show or log rather than a union to switch on.
+	 */
+	readonly refusalCategory: string | null;
 
 	constructor(
 		kind: AnthropicReaderErrorKind,
@@ -68,6 +86,7 @@ export class AnthropicReaderError extends Error {
 		this.requestId = details.requestId ?? null;
 		this.body = details.body ?? null;
 		this.retryAfterSeconds = details.retryAfterSeconds ?? null;
+		this.refusalCategory = details.refusalCategory ?? null;
 	}
 }
 
@@ -78,8 +97,8 @@ export class AnthropicReaderError extends Error {
  * The taxonomy in #17 names the statuses the API documents, which leaves the ones it does not:
  * 404, 409, 502. An unmapped 4xx is the request being wrong, so it joins `invalid-request`.
  * Everything else, 5xx and the impossible alike, is the service failing rather than the caller, so
- * it joins `server`. Both put a wrong guess on the side that tells the user to try again instead
- * of blaming their input.
+ * it joins `server`, which tells the user to try again. `describeFailure` gives `invalid-request`
+ * no recovery, since resending a request the API rejected gets the same answer.
  */
 export function errorKindForStatus(status: number): AnthropicReaderErrorKind {
 	switch (status) {

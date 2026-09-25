@@ -39,6 +39,12 @@ export type RawReaderResponse = {
 	provider: string;
 	model: string;
 	promptVersion: string;
+	/**
+	 * The provider's id for this request, when the provider sent one. A read can succeed and the run
+	 * still fail afterwards, in parsing or in storage, and the request was billed either way, so this
+	 * is what lets support find it. Absent for a reader that makes no request.
+	 */
+	requestId?: string;
 };
 
 /**

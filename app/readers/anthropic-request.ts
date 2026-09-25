@@ -18,10 +18,22 @@ type AcceptedImageMediaType = (typeof ACCEPTED_IMAGE_MEDIA_TYPES)[number];
 
 export type AnthropicOutputMode = 'structured' | 'forced-tool';
 
+/**
+ * A seed the model did answer with, handed back for one correction. `rawResponse` is the seed text
+ * the reader took from that answer: a text block verbatim, or a tool call's input re-serialized.
+ * It's never the response envelope, since a response with no seed text has nothing to correct.
+ * `issues` is why the core or the record refused it, one line each, already worded for the model.
+ */
+export type SeedRepair = {
+	rawResponse: string;
+	issues: string[];
+};
+
 export type SeedRequestInput = {
 	images: ReferenceImage[];
 	model: string;
 	outputMode: AnthropicOutputMode;
+	repair?: SeedRepair;
 };
 
 /**
@@ -92,6 +104,48 @@ function buildContent(images: ReferenceImage[]) {
 	return blocks;
 }
 
+function repairDirective(issues: string[]): string {
+	const listed =
+		issues.length > 0
+			? issues.map((issue) => `- ${issue}`).join('\n')
+			: '- The response could not be read as a seed.';
+
+	return [
+		'Your previous response could not be used as a brand seed, for these reasons:',
+		listed,
+		'Reply with a corrected seed for the same reference images, in the same format as before.',
+	].join('\n\n');
+}
+
+/**
+ * The repair is a conversation rather than a patched prompt: the original turn unchanged, the
+ * model's own answer, then a user turn naming what was wrong with it. Ending on a user turn is the
+ * point. An assistant turn last would be a prefill, and Opus 5.5 rejects prefill with a 400.
+ *
+ * The assistant turn carries no thinking block, because the reader never kept one. The API accepts
+ * a history with thinking stripped, which is its own documented recovery for a history it cannot
+ * bind, so this costs the model its earlier reasoning and nothing else.
+ */
+function buildMessages(content: Record<string, unknown>[], repair: SeedRepair | undefined) {
+	const original = { role: 'user', content };
+
+	if (!repair) {
+		return [original];
+	}
+
+	// An empty text block is a 400 from the API, and a blank answer gives the model nothing to
+	// correct anyway. Failing here names the caller's mistake instead of spending a request on it.
+	if (repair.rawResponse.trim().length === 0) {
+		throw new Error('a repair needs the response being repaired, and this one is empty');
+	}
+
+	return [
+		original,
+		{ role: 'assistant', content: [{ type: 'text', text: repair.rawResponse }] },
+		{ role: 'user', content: [{ type: 'text', text: repairDirective(repair.issues) }] },
+	];
+}
+
 /**
  * Builds the request body for `POST /v1/messages` only. No `fetch`, no headers, no API key: the
  * reader owns transport, and keeping this module blind to the key is what makes "no key reaches
@@ -116,7 +170,7 @@ export function buildSeedRequestBody(input: SeedRequestInput): Record<string, un
 		model: input.model,
 		max_tokens: SEED_REQUEST_MAX_TOKENS,
 		system: SEED_SYSTEM_PROMPT,
-		messages: [{ role: 'user', content: buildContent(input.images) }],
+		messages: buildMessages(buildContent(input.images), input.repair),
 	};
 
 	if (input.outputMode === 'structured') {
@@ -146,4 +200,33 @@ export function buildSeedRequestBody(input: SeedRequestInput): Record<string, un
 	// since the whole response is small enough to arrive in one shot.
 
 	return body;
+}
+
+/**
+ * How many characters of text a request body carries, for the cost estimate. Counted from the body
+ * this module would actually send, so the estimate follows the prompt, the schema, the per-image id
+ * lines and any repair turns as they change, with nothing restated by hand.
+ *
+ * Image blocks are left out, since the API prices an image by its pixels, not by the length of its
+ * base64. Everything else is text the model reads, including the schema inside `output_config` or
+ * `tools`, so it's counted as JSON.
+ */
+export function seedRequestTextChars(input: SeedRequestInput): number {
+	const { system, messages, output_config, tools } = buildSeedRequestBody(input) as {
+		system: string;
+		messages: { content: { type: string; text?: string }[] }[];
+		output_config?: unknown;
+		tools?: unknown;
+	};
+
+	const messageChars = messages
+		.flatMap((message) => message.content)
+		.reduce((total, block) => total + (block.type === 'text' ? (block.text?.length ?? 0) : 0), 0);
+
+	return (
+		system.length +
+		messageChars +
+		(output_config === undefined ? 0 : JSON.stringify(output_config).length) +
+		(tools === undefined ? 0 : JSON.stringify(tools).length)
+	);
 }

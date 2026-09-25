@@ -1,0 +1,35 @@
+{
+	"status": 200,
+	"headers": {
+		"request-id": "req_011CRefusalThinkingFirst4Qm",
+		"content-type": "application/json"
+	},
+	"body": {
+		"id": "msg_01RefusalThinkingFirst",
+		"type": "message",
+		"role": "assistant",
+		"model": "claude-opus-5-5",
+		"content": [
+			{
+				"type": "thinking",
+				"thinking": "",
+				"signature": "ErUBCkYIBRgCKkBRZWZ1c2FsVGhpbmtpbmdGaXJzdFNpZ25hdHVyZQ=="
+			},
+			{
+				"type": "text",
+				"text": "I can't help with this request."
+			}
+		],
+		"stop_reason": "refusal",
+		"stop_sequence": null,
+		"stop_details": {
+			"type": "refusal",
+			"category": "cyber",
+			"explanation": "The request was declined by a safety classifier."
+		},
+		"usage": {
+			"input_tokens": 1420,
+			"output_tokens": 9
+		}
+	}
+}

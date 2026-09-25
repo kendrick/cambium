@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { BrandReader } from '../../core/brand-reader';
 import type { ReferenceImage } from '../../core/brand-record';
 import { parseSeed } from '../../core/parse-seed';
 
@@ -24,9 +25,11 @@ import error529 from './fixtures/error-529-overloaded.json';
 import forcedToolSuccessThinkingFirst from './fixtures/forced-tool-success-thinking-first.json';
 import forcedToolSuccess from './fixtures/forced-tool-success.json';
 import malformedNoContentBlock from './fixtures/malformed-no-content-block.json';
+import refusalThinkingFirst from './fixtures/refusal-thinking-first.json';
 import structuredProseNotJson from './fixtures/structured-prose-not-json.json';
 import structuredSuccessThinkingFirst from './fixtures/structured-success-thinking-first.json';
 import structuredSuccess from './fixtures/structured-success.json';
+import truncatedMaxTokensThinkingFirst from './fixtures/truncated-max-tokens-thinking-first.json';
 
 type Fixture = {
 	status: number;
@@ -183,6 +186,20 @@ describe('createAnthropicBrandReader success', () => {
 		// The model the response named, not the one the config asked for.
 		expect(result.model).toBe(structuredSuccess.body.model);
 		expect(result.model).not.toBe(CONFIGURED_MODEL);
+	});
+
+	// A 200 can still fail later, in the core or in storage, and support needs this id to find it.
+	it('returns the request id the response carried', async () => {
+		const result = await read(stubFetch(structuredSuccess));
+
+		expect(result.requestId).toBe(structuredSuccess.headers['request-id']);
+	});
+
+	it('leaves the request id absent when the response sent none', async () => {
+		const { 'request-id': _dropped, ...headers } = structuredSuccess.headers;
+		const result = await read(stubFetch({ ...structuredSuccess, headers }));
+
+		expect(result).not.toHaveProperty('requestId');
 	});
 
 	it('falls back to the configured model when the response names none', async () => {
@@ -365,5 +382,278 @@ describe('createAnthropicBrandReader key handling', () => {
 		);
 
 		expect(everythingAnErrorCarries(error)).not.toContain(API_KEY);
+	});
+});
+
+describe('createAnthropicBrandReader stop reasons', () => {
+	// Both fixtures lead with a thinking block and hold a readable text block behind it, so a reader
+	// that consulted the normalizer first would resolve them as seeds. Only the stop reason can
+	// turn them into failures.
+	it.each([
+		{ label: 'refusal', fixture: refusalThinkingFirst as Fixture },
+		{ label: 'max_tokens', fixture: truncatedMaxTokensThinkingFirst as Fixture },
+	])('reads the $label stop reason past a leading thinking block', ({ fixture }) => {
+		const content = (fixture.body as { content: { type: string }[] }).content;
+
+		expect(content[0].type).toBe('thinking');
+		expect(content.some((block) => block.type === 'text')).toBe(true);
+	});
+
+	it('turns stop_reason refusal into a refusal carrying its category', async () => {
+		const fetchStub = stubFetch(refusalThinkingFirst);
+		const error = await rejection(read(fetchStub));
+
+		expect(error.kind).toBe('refusal');
+		expect(error.refusalCategory).toBe('cyber');
+		expect(error.status).toBe(200);
+		expect(error.requestId).toBe(refusalThinkingFirst.headers['request-id']);
+		expect(JSON.parse(error.body ?? '')).toEqual(refusalThinkingFirst.body);
+		expect(error.retryAfterSeconds).toBeNull();
+		expect(fetchStub).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		{ label: 'null stop_details', stopDetails: null },
+		{ label: 'a null category', stopDetails: { type: 'refusal', category: null } },
+	])('still calls it a refusal, with no category, given $label', async ({ stopDetails }) => {
+		const body = { ...refusalThinkingFirst.body, stop_details: stopDetails };
+		const error = await rejection(read(stubFetch({ ...refusalThinkingFirst, body })));
+
+		expect(error.kind).toBe('refusal');
+		expect(error.refusalCategory).toBeNull();
+	});
+
+	it('turns stop_reason max_tokens into truncated, and makes exactly one request', async () => {
+		const fetchStub = stubFetch(truncatedMaxTokensThinkingFirst);
+		const error = await rejection(read(fetchStub));
+
+		expect(error.kind).toBe('truncated');
+		expect(error.status).toBe(200);
+		expect(error.requestId).toBe(truncatedMaxTokensThinkingFirst.headers['request-id']);
+		expect(JSON.parse(error.body ?? '')).toEqual(truncatedMaxTokensThinkingFirst.body);
+		expect(error.refusalCategory).toBeNull();
+		expect(fetchStub).toHaveBeenCalledTimes(1);
+	});
+
+	it('reads the stop reason in forced-tool mode too', async () => {
+		const error = await rejection(read(stubFetch(truncatedMaxTokensThinkingFirst), 'forced-tool'));
+
+		expect(error.kind).toBe('truncated');
+	});
+
+	it.each([
+		{ label: 'refusal', fixture: refusalThinkingFirst as Fixture },
+		{ label: 'truncated', fixture: truncatedMaxTokensThinkingFirst as Fixture },
+	])('keeps the key out of a $label error', async ({ fixture }) => {
+		const error = await rejection(read(stubFetch(fixture)));
+
+		expect(everythingAnErrorCarries(error)).not.toContain(API_KEY);
+	});
+});
+
+describe('createAnthropicBrandReader repair', () => {
+	const repair = {
+		rawResponse: blockOfType(structuredProseNotJson, 'text').text as string,
+		issues: ['Unexpected token H in JSON at position 0'],
+	};
+
+	type SentBody = Record<string, unknown> & { messages: { role: string }[] };
+
+	async function sentBody(fetchStub: ReturnType<typeof stubFetch>): Promise<SentBody> {
+		const [, init] = fetchStub.mock.calls[0];
+		return JSON.parse(String(init?.body)) as SentBody;
+	}
+
+	it('sends the repair conversation, ending on a user turn, in one request', async () => {
+		const fetchStub = stubFetch(structuredSuccess);
+		const result = await readerWith(fetchStub).read(IMAGES, {
+			auth: anthropicAuth(API_KEY),
+			repair,
+		});
+		const body = await sentBody(fetchStub);
+
+		expect(body).toEqual(
+			buildSeedRequestBody({
+				images: IMAGES,
+				model: CONFIGURED_MODEL,
+				outputMode: 'structured',
+				repair,
+			}),
+		);
+		expect(body.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+		expect(fetchStub).toHaveBeenCalledTimes(1);
+		expect(parseSeed(result).ok).toBe(true);
+	});
+
+	// The default mode, since that is what #23 calls. A forced `tool_choice` is a 400 on Opus 5.5.
+	it.each([
+		{ label: 'a first read', withRepair: false },
+		{ label: 'a repair', withRepair: true },
+	])('puts no tool_choice on the wire for $label', async ({ withRepair }) => {
+		const fetchStub = stubFetch(structuredSuccess);
+		await readerWith(fetchStub).read(IMAGES, {
+			auth: anthropicAuth(API_KEY),
+			...(withRepair ? { repair } : {}),
+		});
+		const body = await sentBody(fetchStub);
+
+		expect(body).not.toHaveProperty('tool_choice');
+		expect(body).not.toHaveProperty('tools');
+	});
+
+	it('sends a single user turn when no repair was asked for', async () => {
+		const fetchStub = stubFetch(structuredSuccess);
+		await read(fetchStub);
+
+		expect((await sentBody(fetchStub)).messages.map((message) => message.role)).toEqual(['user']);
+	});
+
+	it('turns an empty repair into a typed invalid-request before any request', async () => {
+		const fetchStub = stubFetch(structuredSuccess);
+		const error = await rejection(
+			readerWith(fetchStub).read(IMAGES, {
+				auth: anthropicAuth(API_KEY),
+				repair: { rawResponse: '', issues: [] },
+			}),
+		);
+
+		expect(error.kind).toBe('invalid-request');
+		expect(fetchStub).not.toHaveBeenCalled();
+	});
+
+	it('keeps the key out of the repair turn it sends', async () => {
+		const fetchStub = stubFetch(structuredSuccess);
+		await readerWith(fetchStub).read(IMAGES, { auth: anthropicAuth(API_KEY), repair });
+
+		expect(JSON.stringify(await sentBody(fetchStub))).not.toContain(API_KEY);
+	});
+});
+
+describe('createAnthropicBrandReader seam', () => {
+	// The repair option widens this reader's own options, never the seam's. If that ever stopped
+	// being assignable, `tsc` fails here before any caller of `BrandReader` notices.
+	it('is still a BrandReader, and reads through the seam without a repair', async () => {
+		const reader: BrandReader = readerWith(stubFetch(structuredSuccess));
+		const result = await reader.read(IMAGES, { auth: anthropicAuth(API_KEY) });
+
+		expect(parseSeed(result).ok).toBe(true);
+	});
+});
+
+/**
+ * Behaves the way a browser's `fetch` does with a signal: it never settles on its own, and it
+ * rejects with the signal's reason once the signal aborts. A stub that ignored the signal would
+ * leave the read hanging, and the test would time out rather than fail on the kind.
+ */
+function hangsUntilAborted() {
+	return vi.fn<typeof globalThis.fetch>(
+		(_url, init) =>
+			new Promise<Response>((_resolve, reject) => {
+				init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+			}),
+	);
+}
+
+describe('createAnthropicBrandReader cancellation', () => {
+	it('turns an abort mid-request into cancelled, not network, after exactly one request', async () => {
+		const controller = new AbortController();
+		const fetchStub = hangsUntilAborted();
+
+		const pending = rejection(
+			readerWith(fetchStub).read(IMAGES, {
+				auth: anthropicAuth(API_KEY),
+				signal: controller.signal,
+			}),
+		);
+		controller.abort();
+		const error = await pending;
+
+		expect(error.kind).toBe('cancelled');
+		expect(error.status).toBeNull();
+		expect(fetchStub).toHaveBeenCalledTimes(1);
+		expect(everythingAnErrorCarries(error)).not.toContain(API_KEY);
+	});
+
+	it('sends nothing when the signal is already aborted', async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const fetchStub = stubFetch(structuredSuccess);
+
+		const error = await rejection(
+			readerWith(fetchStub).read(IMAGES, {
+				auth: anthropicAuth(API_KEY),
+				signal: controller.signal,
+			}),
+		);
+
+		expect(error.kind).toBe('cancelled');
+		expect(fetchStub).not.toHaveBeenCalled();
+	});
+
+	// The response is complete and readable here. Resolving it anyway would hand the caller a seed
+	// the person had already said they didn't want.
+	it('refuses a response that arrived after the abort, even a readable one', async () => {
+		const controller = new AbortController();
+		const fetchStub = vi.fn<typeof globalThis.fetch>(async () => {
+			controller.abort();
+			return responseFrom(structuredSuccess);
+		});
+
+		const error = await rejection(
+			readerWith(fetchStub).read(IMAGES, {
+				auth: anthropicAuth(API_KEY),
+				signal: controller.signal,
+			}),
+		);
+
+		expect(error.kind).toBe('cancelled');
+	});
+
+	// A cancel that lands after the headers still leaves a request Anthropic answered and may have
+	// billed. The status and request id are what a person quotes to support about that request, so
+	// the cancel must not throw them away just because the body never finished.
+	it.each([200, 529])(
+		'keeps the status and request id when a %i was already answered before the cancel',
+		async (status) => {
+			const controller = new AbortController();
+			const fetchStub = vi.fn<typeof globalThis.fetch>(async () => {
+				const body = new ReadableStream<Uint8Array>({
+					start(stream) {
+						controller.signal.addEventListener('abort', () =>
+							stream.error(controller.signal.reason),
+						);
+					},
+				});
+				queueMicrotask(() => controller.abort());
+				return new Response(body, { status, headers: { 'request-id': 'req_after_headers' } });
+			});
+
+			const error = await rejection(
+				readerWith(fetchStub).read(IMAGES, {
+					auth: anthropicAuth(API_KEY),
+					signal: controller.signal,
+				}),
+			);
+
+			expect(error.kind).toBe('cancelled');
+			expect(error.status).toBe(status);
+			expect(error.requestId).toBe('req_after_headers');
+		},
+	);
+
+	it('still calls a plain rejected fetch network when a signal was passed and never aborted', async () => {
+		const controller = new AbortController();
+		const fetchStub = vi.fn<typeof globalThis.fetch>(async () => {
+			throw new TypeError('Failed to fetch');
+		});
+
+		const error = await rejection(
+			readerWith(fetchStub).read(IMAGES, {
+				auth: anthropicAuth(API_KEY),
+				signal: controller.signal,
+			}),
+		);
+
+		expect(error.kind).toBe('network');
 	});
 });

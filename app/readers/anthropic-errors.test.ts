@@ -6,7 +6,7 @@ import {
 	errorKindForStatus,
 } from './anthropic-errors';
 
-const ALL_KINDS: AnthropicReaderErrorKind[] = [
+const ALL_KINDS = [
 	'credentials',
 	'billing',
 	'rate-limit',
@@ -14,8 +14,23 @@ const ALL_KINDS: AnthropicReaderErrorKind[] = [
 	'invalid-request',
 	'server',
 	'network',
+	'cancelled',
 	'malformed',
-];
+	'refusal',
+	'truncated',
+] as const satisfies readonly AnthropicReaderErrorKind[];
+
+describe('ALL_KINDS', () => {
+	// tsc does the checking here. A kind added to the union without joining this list makes the
+	// assignment below a type error, so the status filter can't quietly miss a new kind again.
+	it('names every AnthropicReaderErrorKind', () => {
+		const complete: [Exclude<AnthropicReaderErrorKind, (typeof ALL_KINDS)[number]>] extends [never]
+			? true
+			: false = true;
+
+		expect(complete).toBe(true);
+	});
+});
 
 describe('errorKindForStatus', () => {
 	it.each<[number, AnthropicReaderErrorKind]>([
@@ -53,7 +68,16 @@ describe('errorKindForStatus', () => {
 
 	// This runs on the failure path, where a throw has nowhere to go.
 	it('returns a kind for every status without throwing', () => {
-		const statusOnly = ALL_KINDS.filter((kind) => kind !== 'network' && kind !== 'malformed');
+		// No status maps to `network` or `cancelled`: neither is chosen from a status, though a late
+		// `cancelled` carries one. `malformed`, `refusal` and `truncated` all come from a 200's body.
+		const bodyOrNoResponse = new Set<AnthropicReaderErrorKind>([
+			'network',
+			'cancelled',
+			'malformed',
+			'refusal',
+			'truncated',
+		]);
+		const statusOnly = ALL_KINDS.filter((kind) => !bodyOrNoResponse.has(kind));
 
 		for (let status = 100; status < 600; status += 1) {
 			expect(statusOnly).toContain(errorKindForStatus(status));
@@ -114,5 +138,33 @@ describe('AnthropicReaderError', () => {
 		expect(error.status).toBe(529);
 		expect(error.requestId).toBeNull();
 		expect(error.retryAfterSeconds).toBeNull();
+	});
+});
+
+describe('the kinds a 200 carries', () => {
+	// `refusal` and `truncated` come from `stop_reason` on a successful response. A status mapping
+	// that produced either would tell `describeFailure` a request failed for a reason no status can
+	// express.
+	it('never come out of a status', () => {
+		for (let status = 100; status < 600; status += 1) {
+			expect(['refusal', 'truncated']).not.toContain(errorKindForStatus(status));
+		}
+	});
+
+	it('carries the refusal category when the response named one', () => {
+		const error = new AnthropicReaderError('refusal', 'Declined.', {
+			status: 200,
+			refusalCategory: 'cyber',
+		});
+
+		expect(error.kind).toBe('refusal');
+		expect(error.refusalCategory).toBe('cyber');
+	});
+
+	it('leaves the refusal category null when nothing supplied one', () => {
+		expect(new AnthropicReaderError('truncated', 'Cut off.').refusalCategory).toBeNull();
+		expect(
+			new AnthropicReaderError('refusal', 'Declined.', { refusalCategory: null }).refusalCategory,
+		).toBeNull();
 	});
 });

@@ -8,6 +8,8 @@ Recorded Anthropic Messages API responses, one JSON file per case, each wrapping
 
 Two of them lead with a `thinking` block. Opus 5 runs adaptive thinking by default and the reader sends no `thinking` key, so a real 200 carries one ahead of the text or `tool_use` block; `structured-success-thinking-first.json` and `forced-tool-success-thinking-first.json` are what stop a reader from taking `content[0]` and calling it the seed.
 
+`refusal-thinking-first.json` and `truncated-max-tokens-thinking-first.json` lead with one too, and each also holds a readable text block: a sentence of refusal, and a seed cut off mid-value. Both are 200s, and only `stop_reason` marks them as failures. A reader that ran the normalizer before checking it would hand either one to the core as a seed, so keep the text blocks in place.
+
 The one boundary worth remembering: `malformed-no-content-block.json` is a 200 whose `content` array has nothing the reader can read a seed out of, which is a reader-level failure. `structured-prose-not-json.json` is also a 200, with a normal text block, but the text is prose rather than JSON, so the reader treats it as a success and hands the text to the core, where `parseSeed` is the one that rejects it. Do not fold these two together.
 
 ## Reference Images for the Local Extractor
