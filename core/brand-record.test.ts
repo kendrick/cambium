@@ -18,7 +18,6 @@ const seed = {
 		},
 	],
 	neutralTemperature: null,
-	surfacePolarity: null,
 	radiusCharacter: null,
 	shadowCharacter: null,
 	trackingFeel: null,
@@ -48,7 +47,15 @@ const record = {
 	id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
 	schemaVersion: SCHEMA_VERSION,
 	revision: 1,
-	images: [{ id: 'img-1', downscaled: 'data:image/webp;base64,AA', originalHash: 'sha256:abc' }],
+	brandUrl: null,
+	images: [
+		{
+			id: 'img-1',
+			downscaled: 'data:image/webp;base64,AA',
+			originalHash: 'sha256:abc',
+			tag: 'auto',
+		},
+	],
 	versions: [version],
 };
 
@@ -102,8 +109,27 @@ describe('BrandRecordSchema', () => {
 
 		const result = BrandRecordSchema.safeParse({
 			...record,
-			schemaVersion: SCHEMA_VERSION - 1,
+			schemaVersion: 7,
 			versions: [versionSeven],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['schemaVersion']);
+	});
+
+	// The archive the bump to 9 exists for: stamped 8 and shaped like 8, so its images carry no
+	// tag, it has no `brandUrl`, and its seed still states `surfacePolarity`. Each of those fails on
+	// its own, and the version has to be what the reader hears about first.
+	it('rejects a record from before tags and the brand URL were stored, naming schemaVersion first', () => {
+		const { brandUrl: _url, ...recordEight } = record;
+		const untagged = record.images.map(({ tag: _tag, ...image }) => image);
+		const versionEight = { ...version, seed: { ...seed, surfacePolarity: 'light-first' } };
+
+		const result = BrandRecordSchema.safeParse({
+			...recordEight,
+			schemaVersion: 8,
+			images: untagged,
+			versions: [versionEight],
 		});
 
 		expect(result.success).toBe(false);
@@ -425,5 +451,87 @@ describe('BrandRecordSchema overrides', () => {
 		});
 
 		expect(result.success).toBe(true);
+	});
+});
+
+/**
+ * #22 asks a person to tag each image and, optionally, to give the brand's site. Both used to die
+ * with the page. IndexedDB hands a record back through the structured clone algorithm, so that is
+ * the path a stored tag and URL have to survive.
+ */
+describe('BrandRecordSchema tags and brand URL', () => {
+	const tagged = {
+		...record,
+		brandUrl: 'acme.com',
+		images: [
+			{ ...record.images[0]!, tag: 'logo' },
+			{
+				id: 'img-2',
+				downscaled: 'data:image/webp;base64,AB',
+				originalHash: 'sha256:def',
+				tag: 'ui',
+			},
+		],
+	};
+
+	it('keeps every image tag and the brand URL through a parse and a structured clone', () => {
+		const reread = BrandRecordSchema.parse(structuredClone(BrandRecordSchema.parse(tagged)));
+
+		expect(reread.images.map((image) => image.tag)).toEqual(['logo', 'ui']);
+		expect(reread.brandUrl).toBe('acme.com');
+	});
+
+	// `auto` is a real answer, the one the form starts on, so a writer has no reason to leave the
+	// key out. An image without it came from code that forgot, and defaulting it would hide that.
+	it('refuses an image that carries no tag', () => {
+		const { tag: _dropped, ...untagged } = record.images[0]!;
+
+		const result = BrandRecordSchema.safeParse({ ...record, images: [untagged] });
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['images', 0, 'tag']);
+	});
+
+	// `screenshot` is the likeliest stray: it is what people call a `ui` image.
+	it('refuses a tag the form does not offer', () => {
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			images: [{ ...record.images[0]!, tag: 'screenshot' }],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['images', 0, 'tag']);
+	});
+
+	// A key that can go missing reads the same as one nobody wired up. `null` says the person left
+	// the field blank.
+	it('requires the key, holding null when no URL was given', () => {
+		const { brandUrl: _dropped, ...without } = record;
+
+		expect(BrandRecordSchema.safeParse(without).success).toBe(false);
+		expect(BrandRecordSchema.safeParse({ ...record, brandUrl: null }).success).toBe(true);
+	});
+
+	// The form takes `acme.com` on purpose, since that is what people type, so a URL parse would
+	// refuse the commonest real answer. What is stored is the text, trimmed.
+	it('accepts a bare domain as typed, trimmed of surrounding space', () => {
+		const parsed = BrandRecordSchema.parse({ ...record, brandUrl: '  acme.com  ' });
+
+		expect(parsed.brandUrl).toBe('acme.com');
+	});
+
+	// A blank field stores null, so an empty string is a writer that skipped that step, and one of
+	// only spaces is the same mistake after the trim.
+	it.each(['', '   '])('refuses %j, which the form stores as null', (brandUrl) => {
+		const result = BrandRecordSchema.safeParse({ ...record, brandUrl });
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['brandUrl']);
+	});
+
+	it('refuses a URL longer than 2048 characters', () => {
+		const result = BrandRecordSchema.safeParse({ ...record, brandUrl: 'a'.repeat(2049) });
+
+		expect(result.success).toBe(false);
 	});
 });

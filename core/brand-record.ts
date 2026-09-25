@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { BrandSeedSchema } from './brand-seed';
+import { IMAGE_TAGS } from './image-tag';
 import { overrideKey, TokenOverrideSchema } from './token-overrides';
 import { TokenSetSchema } from './token-set';
 
@@ -50,10 +51,18 @@ import { TokenSetSchema } from './token-set';
  *
  * No migration is written here either, for the same reason as 7: no deployed copy of Cambium held
  * a saved brand when this shipped. A shim would be trivial, since every version-7 version means
- * `overrides: []`, but a shim for records nobody holds is code nobody runs. #77 bumps for its own
- * shape change and takes 9.
+ * `overrides: []`, but a shim for records nobody holds is code nobody runs.
+ *
+ * 9 is three shape changes landing together so they share one bump: #77's `tag`, required on every
+ * `ReferenceImageSchema`; #77's `brandUrl` on `BrandRecordSchema`, required and nullable; and #83's
+ * removal of `surfacePolarity` from `BrandSeedSchema`, which nothing read. #22 already asked a
+ * person for the tag and the URL, and both were lost when the page closed. Without this bump a
+ * version-8 archive fails once per image on the missing tag, once on the missing URL, and once per
+ * seed on a key the strict seed schema no longer declares, which reads like corruption; with it the
+ * first issue names `schemaVersion`. No migration here either, for the same deployment reason as 7
+ * and 8.
  */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /**
  * What storage stamps on a record's first commit. It lives here rather than in `app/storage/`
@@ -66,11 +75,16 @@ export const FIRST_REVISION = 1;
  * Only the downscaled image actually sent to the model is stored, plus a hash of the
  * original. That is the true model input, so it is what makes a version reproducible, and it
  * costs a fraction of the original's storage. The id is what seed provenance points back at.
+ *
+ * `tag` is what the person said the image is, and it is required. An image nobody tagged holds
+ * `auto`, the form's default, so a missing tag can only mean a writer forgot. Filling one in here
+ * would hide that writer.
  */
 export const ReferenceImageSchema = z.strictObject({
 	id: z.string().min(1),
 	downscaled: z.string().min(1),
 	originalHash: z.string().min(1),
+	tag: z.enum(IMAGE_TAGS),
 });
 
 export const FontTableRefSchema = z.strictObject({
@@ -146,6 +160,11 @@ export const BrandVersionSchema = z.strictObject({
  * whether a given revision is the one a write may be built on is a question only storage can answer,
  * and `RecordStore.put` holds that check.
  *
+ * `brandUrl` is the brand's site as the person typed it, trimmed, or null when they left it blank.
+ * It is never parsed as a URL: the form accepts `acme.com` on purpose, because that is what people
+ * type, and a URL parse would refuse it. Nothing fetches it either. The 2048 cap is a bound on
+ * stored text, not a claim about URLs.
+ *
  * Seed provenance is checked against the images the record actually holds. An id pointing at
  * no image is provenance that cannot be followed, which is worse than none, because it still
  * reads as evidence.
@@ -155,6 +174,7 @@ export const BrandRecordSchema = z
 		id: z.uuid(),
 		schemaVersion: z.literal(SCHEMA_VERSION),
 		revision: z.number().int().positive(),
+		brandUrl: z.string().trim().min(1).max(2048).nullable(),
 		images: z.array(ReferenceImageSchema),
 		versions: z.array(BrandVersionSchema),
 	})

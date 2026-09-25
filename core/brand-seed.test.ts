@@ -19,7 +19,6 @@ export const colorsOnly = {
 		},
 	],
 	neutralTemperature: null,
-	surfacePolarity: null,
 	radiusCharacter: null,
 	shadowCharacter: null,
 	trackingFeel: null,
@@ -119,7 +118,6 @@ describe('BrandSeedSchema', () => {
 		const parsed = BrandSeedSchema.parse({
 			...colorsOnly,
 			neutralTemperature: { hue: 259.8, chroma: 0.01 },
-			surfacePolarity: 'light-first',
 			radiusCharacter: { base: 8, progression: 'soft' },
 			shadowCharacter: { spread: 'diffuse', tintFromSurface: true },
 			trackingFeel: 'normal',
@@ -137,10 +135,17 @@ describe('BrandSeedSchema', () => {
 		expect(parsed.imageClassifications?.[0]?.detected).toBe('logo');
 	});
 
-	it.each(['light', 'dark'])('rejects %j, which is not how the spec spells polarity', (value) => {
-		expect(BrandSeedSchema.safeParse({ ...colorsOnly, surfacePolarity: value }).success).toBe(
-			false,
-		);
+	// #83 removed the field because nothing read it. A reader still sending it, such as a prompt
+	// from before `seed-v4` or a stored seed from before `SCHEMA_VERSION` 9, has to be refused by
+	// name rather than stripped, or the removal is invisible to the code that still produces it.
+	it('refuses surfacePolarity as a key it no longer declares', () => {
+		const result = BrandSeedSchema.safeParse({ ...colorsOnly, surfacePolarity: 'light-first' });
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]).toMatchObject({
+			code: 'unrecognized_keys',
+			keys: ['surfacePolarity'],
+		});
 	});
 
 	// A brand needs a display face and a body face, and `displayDiffersFromBody` in the type
