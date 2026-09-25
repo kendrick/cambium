@@ -52,7 +52,7 @@ function makeVersion(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		tokenSet: null,
 		provider: 'anthropic',
 		model: 'claude-opus-5',
-		promptVersion: 'seed-v3',
+		promptVersion: 'seed-v4',
 		rawResponse: '{"keyColors":[]}',
 		scaleEngine: 'cambium-oklch-1',
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
@@ -432,7 +432,7 @@ describe('the workspace store', () => {
 		expect(next.versions[1]).toMatchObject({
 			provider: 'anthropic',
 			model: 'claude-opus-5',
-			promptVersion: 'seed-v3',
+			promptVersion: 'seed-v4',
 			fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 			// Null exactly because no model call produced this version, which is what the schema's own
 			// comment says null there means.

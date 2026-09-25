@@ -70,7 +70,7 @@ const rawResponse = {
 	raw: JSON.stringify(seed),
 	provider: 'anthropic',
 	model: 'claude-opus-5',
-	promptVersion: 'seed-v3',
+	promptVersion: 'seed-v4',
 };
 
 const dtcgDocument = {
@@ -124,7 +124,7 @@ const record = {
 			tokenSet,
 			provider: 'anthropic',
 			model: 'claude-opus-5',
-			promptVersion: 'seed-v3',
+			promptVersion: 'seed-v4',
 			rawResponse: '{"keyColors":[{"proposedRole":"brand"}]}',
 			scaleEngine: 'cambium-oklch-1',
 			fontTable: { source: 'in-repo', version: 'cambium-curated-1' },

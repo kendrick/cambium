@@ -14,7 +14,7 @@ The other reading is which scheme sits at the top level of a `TokenSet`, unprefi
 
 ## Consequences
 
-`surfacePolarity` is gone from `BrandSeedSchema`, from the three sites in `app/readers/seed-prompt.ts`, from `core/brand-seed.test.ts`, and from roughly twenty fixture nulls across `core/` and `app/`. Because `BrandSeedSchema` is a `strictObject`, a seed stored under the previous shape stops parsing the moment the field disappears, which is the loud failure `SCHEMA_VERSION` exists to produce. `app/storage/indexed-db-record-store.ts:55` documents the resulting contract: a record stamped with an older `schemaVersion` throws on `get` and on `list` alike, naming `schemaVersion` in the error, and the export archive stays the only migration path.
+`surfacePolarity` is gone from `BrandSeedSchema`, from the three sites in `app/readers/seed-prompt.ts`, and from roughly twenty fixture nulls across `core/` and `app/`. The name survives only in tests that assert a seed carrying it is refused. Because `BrandSeedSchema` is a `strictObject`, a seed stored under the previous shape stops parsing the moment the field disappears, which is the loud failure `SCHEMA_VERSION` exists to produce. `app/storage/indexed-db-record-store.ts:55` documents the resulting contract: a record stamped with an older `schemaVersion` throws on `get` and on `list` alike, naming `schemaVersion` in the error, and the export archive stays the only migration path.
 
 Removing the field changes no derived token. Both schemes' surfaces were already a function of the ramps the engine builds from the rest of the seed, never of this one, so there is no consumer to update and no test that pinned a `surfacePolarity` branch to delete.
 

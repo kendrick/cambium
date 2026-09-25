@@ -130,7 +130,7 @@ function version(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		tokenSet: null,
 		provider: 'anthropic',
 		model: 'claude-opus-5',
-		promptVersion: 'seed-v3',
+		promptVersion: 'seed-v4',
 		rawResponse: '{"earlier":true}',
 		scaleEngine: engine.id,
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },

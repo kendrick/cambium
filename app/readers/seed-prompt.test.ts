@@ -124,7 +124,7 @@ const coloursOnlyExample = {
 };
 
 describe('seed prompt version', () => {
-	// #77 dropped surfacePolarity from the seed, which is a shape change a fixture captured under
+	// #83 dropped surfacePolarity from the seed, which is a shape change a fixture captured under
 	// seed-v3 cannot describe: bumping here is what lets a stored promptVersion say which prompt
 	// produced a given record, per the docblock above SEED_PROMPT_VERSION.
 	it('moved to seed-v4 when surfacePolarity left the seed', () => {
