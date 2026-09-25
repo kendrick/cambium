@@ -378,7 +378,8 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 
 /**
- * Turns a picked file into the `ReferenceImage` a `BrandRecord` stores.
+ * Turns a picked file into everything a stored `ReferenceImage` holds except its `tag`, which the
+ * form adds once a person has picked one.
  *
  * Rejects by returning rather than throwing: picking the wrong file is an ordinary user action,
  * not an exceptional one, the same reasoning `LocalExtraction` uses in

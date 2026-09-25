@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { BrandSeedSchema } from './brand-seed';
+import { BRAND_URL_MAX_LENGTH } from './brand-url';
 import { IMAGE_TAGS } from './image-tag';
 import { overrideKey, TokenOverrideSchema } from './token-overrides';
 import { TokenSetSchema } from './token-set';
@@ -162,7 +163,7 @@ export const BrandVersionSchema = z.strictObject({
  *
  * `brandUrl` is the brand's site as the person typed it, trimmed, or null when they left it blank.
  * It is never parsed as a URL: the form accepts `acme.com` on purpose, because that is what people
- * type, and a URL parse would refuse it. Nothing fetches it either. The 2048 cap is a bound on
+ * type, and a URL parse would refuse it. Nothing fetches it either. The length cap is a bound on
  * stored text, not a claim about URLs.
  *
  * Seed provenance is checked against the images the record actually holds. An id pointing at
@@ -174,7 +175,7 @@ export const BrandRecordSchema = z
 		id: z.uuid(),
 		schemaVersion: z.literal(SCHEMA_VERSION),
 		revision: z.number().int().positive(),
-		brandUrl: z.string().trim().min(1).max(2048).nullable(),
+		brandUrl: z.string().trim().min(1).max(BRAND_URL_MAX_LENGTH).nullable(),
 		images: z.array(ReferenceImageSchema),
 		versions: z.array(BrandVersionSchema),
 	})

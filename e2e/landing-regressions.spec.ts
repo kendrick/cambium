@@ -301,7 +301,7 @@ test('a malformed brand URL does not block the save', async ({ page }) => {
 	await page.getByLabel('Reference images').setInputFiles(pngFile('brand.png', makePng(2, 2)));
 	await expect(stagedRow(page, 'brand.png')).toBeVisible();
 
-	// `type="url"` put native constraint validation on an optional field nothing stores, and a
+	// `type="url"` put native constraint validation on an optional field nothing fetches, and a
 	// failed constraint cancels the submit before `save` ever runs.
 	await page.getByLabel(/Brand site/).fill('not a url');
 	await page.getByRole('button', { name: 'Save these references' }).click();
@@ -309,6 +309,26 @@ test('a malformed brand URL does not block the save', async ({ page }) => {
 	await expectSaved(page);
 
 	expect(await readStoredRecords(page)).toHaveLength(1);
+});
+
+test('a brand URL past the stored cap is cut at the input rather than failing the save', async ({
+	page,
+}) => {
+	await page.goto('/');
+
+	await page.getByLabel('Reference images').setInputFiles(pngFile('brand.png', makePng(2, 2)));
+	await expect(stagedRow(page, 'brand.png')).toBeVisible();
+
+	// Past `BRAND_URL_MAX_LENGTH` the schema refuses the record inside `store.put`, which the form can
+	// only report as a storage failure that every retry repeats.
+	await page.getByLabel(/Brand site/).fill('a'.repeat(3000));
+	await page.getByRole('button', { name: 'Save these references' }).click();
+
+	await expectSaved(page);
+
+	const records = await readStoredRecords(page);
+	expect(records).toHaveLength(1);
+	expect(records[0]!.brandUrl).toHaveLength(2048);
 });
 
 test('a small PNG carrying a 12 MB ancillary chunk is re-encoded rather than stored whole', async ({

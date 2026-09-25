@@ -19,6 +19,7 @@ import {
 } from '@/lib/image-intake';
 
 import type { BrandRecord } from '../../core/brand-record';
+import { BRAND_URL_MAX_LENGTH } from '../../core/brand-url';
 
 /**
  * A picked image as the form holds it: what was stored, what the person called it, and the tag they
@@ -460,13 +461,19 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				</label>
 				<input
 					className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+					// Frozen while a save runs, like the image controls: `save` closes over the value from
+					// the submit render, so an edit made mid-save would be dropped without a word.
+					disabled={busy}
 					id={brandUrlId}
 					inputMode="url"
+					// The schema refuses anything longer, and that refusal surfaces from `store.put` as the
+					// generic storage failure, which no retry with the same text can clear.
+					maxLength={BRAND_URL_MAX_LENGTH}
 					onChange={(event) => setBrandUrl(event.target.value)}
 					placeholder="https://example.com"
 					// Deliberately not `type="url"`. That attribute brought native constraint validation with
-					// it, which refused to submit the form over a field that is optional, is never fetched,
-					// and is not even stored yet: "acme.com" is how people write a domain, and typing it left
+					// it, which refused to submit the form over a field that is optional and never
+					// fetched: "acme.com" is how people write a domain, and typing it left
 					// the images unsaved with no message at all, because `save` never ran. `inputMode` is
 					// what summons the URL keyboard on a phone, so nothing is lost by dropping the type.
 					//
