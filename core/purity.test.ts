@@ -73,8 +73,7 @@ const tokenSet = {
 /**
  * `tokenSet` re-read through the schema, for the `core/css/` adapters below: they take a `TokenSet`
  * with mutable tuple fields, and `NON_COLOR_FIXTURE`'s `as const` leaves `tokenSet` itself carrying
- * `readonly` ones, `motion.values.easing.standard.value` among them. `css.fixture.ts`'s `PINNED_SET`
- * takes the same route for the same reason.
+ * `readonly` ones, `motion.values.easing.standard.value` among them.
  */
 const cssTokenSet = TokenSetSchema.parse(tokenSet);
 
@@ -323,7 +322,8 @@ describe('core purity', () => {
 		// own vocabulary, and `cssTokenSet` names nothing else: one ramp ('brand'), one semantic alias
 		// ('border'), one shadow step, radius step, type size, weight, line height and tracking step,
 		// each a name the generator itself emits. That is what lets it stand in here instead of the
-		// heavier `GENERATED_SET` fixture in `core/css/css.fixture.ts`.
+		// heavier `GENERATED_SET` fixture in `core/css/css.fixture.ts`. A non-empty result is all these
+		// rows check, because the adapters' own suites own their output and this table owns purity.
 		['toStylesheet', () => toStylesheet(cssTokenSet).length > 0],
 		['toGlobalsCss', () => toGlobalsCss(cssTokenSet, cssNaming()).length > 0],
 		['toThemeBlock', () => toThemeBlock(cssTokenSet, cssNaming()).length > 0],
