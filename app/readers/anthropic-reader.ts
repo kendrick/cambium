@@ -187,9 +187,10 @@ function throwIfCancelled(
 }
 
 /**
- * The only module in the repo that calls `fetch`. It talks to `POST /v1/messages` directly rather
- * than through `@anthropic-ai/sdk`, per ADR-0002: the request is one shape, the dependency is not
- * in the measured baseline, and a bring-your-own-key static site pays for every kilobyte.
+ * The only module in the repo that calls the Anthropic API. Other modules call `fetch`, but none of
+ * them reaches Anthropic. It talks to `POST /v1/messages` directly rather than through
+ * `@anthropic-ai/sdk`, per ADR-0002: the request is one shape, the dependency is not in the
+ * measured baseline, and a bring-your-own-key static site pays for every kilobyte.
  *
  * The key arrives per read through `options.auth`, never through this config. That is the seam's
  * decision (`core/brand-reader.ts`), and it keeps a key out of anything long-lived enough to be

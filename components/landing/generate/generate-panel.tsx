@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import type { ReferenceImage } from '../../../core/brand-record';
 import type { CostEstimate, ImageDimensions } from '../../../app/generation/cost-estimate';
 import type { FailureDescriptor } from '../../../app/generation/describe-failure';
-import type { PaidSeed } from '../../../app/generation/generate';
+import type { HeldSeed } from '../../../app/generation/generate';
 import type { SeedRepair } from '../../../app/readers/anthropic-reader';
 import { getSessionKey, setSessionKey } from '../../../app/generation/session-key';
 
@@ -35,18 +35,24 @@ type Estimate =
 
 type RepairEstimate = { kind: 'ready'; maxUsdText: string } | { kind: 'failed' };
 
+// Type-only, so the landing bundle loads the module only when a run starts.
+type GenerationModule = typeof import('../../../app/generation/generate');
+
 /**
  * `held` is the paid seed a storage failure hands back, kept so "Save again" can commit it without
- * a second paid read. `repairEstimate` is set only when the recovery is a repair.
+ * a second paid read. It keeps the read's request id too, so a save-again that fails can still name
+ * the request that was billed. `repairEstimate` is set only when the recovery is a repair.
+ *
+ * `unexpected` carries a request id only when a paid read preceded the throw.
  */
 type ShownFailure =
 	| {
 			kind: 'described';
 			descriptor: FailureDescriptor;
-			held: PaidSeed | null;
+			held: HeldSeed | null;
 			repairEstimate?: RepairEstimate;
 	  }
-	| { kind: 'unexpected' };
+	| { kind: 'unexpected'; requestId?: string };
 
 /**
  * Why the dialog is open decides what submitting it does. Only `generate` runs a model call, and it
@@ -56,7 +62,7 @@ type DialogIntent = { kind: 'generate'; repair?: SeedRepair } | { kind: 'update'
 
 type Attempt =
 	| { kind: 'generate'; key: string; repair?: SeedRepair }
-	| { kind: 'save-again'; held: PaidSeed };
+	| { kind: 'save-again'; held: HeldSeed };
 
 const count = new Intl.NumberFormat('en-US');
 
@@ -93,8 +99,9 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 
 	/**
 	 * Set for a generation from the click until its commit starts or its failure is shown, so it covers
-	 * the font lookup before the model call too. That lookup can stall on a CDN with no timeout, and
-	 * `generate` ends the wait on abort. A save-again makes no call and leaves this null.
+	 * the record and font lookups before the model call too. Either can stall with no timeout, the
+	 * record behind another tab and the font table on a CDN, and each wait ends on abort. A save-again
+	 * makes no call and leaves this null.
 	 */
 	const [abort, setAbort] = useState<AbortController | null>(null);
 
@@ -181,7 +188,10 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 		const controller = attempt.kind === 'generate' ? new AbortController() : null;
 		setAbort(controller);
 
+		const signal = controller?.signal;
 		let next: ShownFailure;
+		// Kept outside the `try` so the catch can tell a paid read's failure from any other.
+		let PaidReadError: GenerationModule['UnexpectedAfterPaidReadError'] | undefined;
 
 		try {
 			const [generation, { describeFailure }, storage, { createOklchScaleEngine }] =
@@ -192,41 +202,62 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 					import('../../../core/oklch-scale-engine'),
 				]);
 
-			const recordStore = await storage.createIndexedDbRecordStore();
+			PaidReadError = generation.UnexpectedAfterPaidReadError;
+
+			// Cancel is on screen from the click, and neither the open nor the read before the request takes
+			// a signal. Another tab can hold the open behind an upgrade and the read behind a write, with no
+			// timeout on either, so both race the abort the way the font lookup does. Nothing was sent, so
+			// nothing was billed.
+			const cancelled = () =>
+				generation.cancelledFailure('The run was cancelled before anything was sent.', signal);
+			const opening = storage.createIndexedDbRecordStore();
+			const recordStore = await generation.unlessAborted(() => opening, signal);
 			let result: Awaited<ReturnType<typeof generation.generate>>;
 
-			try {
-				const record = await recordStore.get(recordId);
+			if (recordStore === generation.ABORTED) {
+				// The open carries on without this run. This closes it once it lands, because an open
+				// connection is what an upgrade in another tab waits on forever. A rejected open has nothing
+				// to close.
+				void opening.then(storage.closeIndexedDbRecordStore, () => {});
+				result = cancelled();
+			} else {
+				try {
+					const record = await generation.unlessAborted(() => recordStore.get(recordId), signal);
 
-				if (!record) throw new Error('the record is no longer stored');
+					if (record === generation.ABORTED) {
+						result = cancelled();
+					} else {
+						if (!record) throw new Error('the record is no longer stored');
 
-				const engine = createOklchScaleEngine();
+						const engine = createOklchScaleEngine();
 
-				result =
-					attempt.kind === 'generate'
-						? await generation.generate({
-								record,
-								key: attempt.key,
-								reader: generation.createGenerationReader(),
-								recordStore,
-								engine,
-								repair: attempt.repair,
-								signal: controller?.signal,
-								// Past this point the answer is paid for and the abort is never checked again, so a
-								// Cancel left on screen would swallow the click. The commit can stall behind another
-								// tab's write for as long as that write takes.
-								onCommitting: () => setAbort(null),
-							})
-						: await generation.saveGeneratedVersion({
-								record,
-								...attempt.held,
-								recordStore,
-								engine,
-							});
-			} finally {
-				// Same reason as the route's read-back: an open connection is what an upgrade in another tab
-				// waits on forever.
-				storage.closeIndexedDbRecordStore(recordStore);
+						result =
+							attempt.kind === 'generate'
+								? await generation.generate({
+										record,
+										key: attempt.key,
+										reader: generation.createGenerationReader(),
+										recordStore,
+										engine,
+										repair: attempt.repair,
+										signal,
+										// Past this point the answer is paid for and the abort is never checked again, so
+										// a Cancel left on screen would swallow the click. The commit can stall behind
+										// another tab's write for as long as that write takes.
+										onCommitting: () => setAbort(null),
+									})
+								: await generation.saveGeneratedVersion({
+										record,
+										...attempt.held,
+										recordStore,
+										engine,
+									});
+					}
+				} finally {
+					// Same reason as the route's read-back: an open connection is what an upgrade in another
+					// tab waits on forever. A read the abort left pending still finishes first.
+					storage.closeIndexedDbRecordStore(recordStore);
+				}
 			}
 
 			if (result.ok) {
@@ -243,17 +274,28 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 			next = {
 				kind: 'described',
 				descriptor,
-				held: 'seed' in failure ? { seed: failure.seed, provenance: failure.provenance } : null,
+				held:
+					'seed' in failure
+						? {
+								seed: failure.seed,
+								provenance: failure.provenance,
+								...(failure.requestId ? { requestId: failure.requestId } : {}),
+							}
+						: null,
 				repairEstimate:
 					descriptor.recovery === 'repair-retry' && descriptor.repair
 						? await priceRepair(descriptor.repair)
 						: undefined,
 			};
-		} catch {
+		} catch (error) {
 			// `generate` throws only for failures it has no recovery for, and a chunk or the database can
 			// fail before it runs. Nothing is logged, because the thrown value could be anything and the
-			// key must never reach the console.
-			next = { kind: 'unexpected' };
+			// key must never reach the console. The catch reads only the paid-read type, and only its
+			// request id.
+			next =
+				PaidReadError && error instanceof PaidReadError
+					? { kind: 'unexpected', requestId: error.requestId }
+					: { kind: 'unexpected' };
 		}
 
 		inFlight.current = false;
@@ -377,8 +419,17 @@ type FailureNoticeProps = {
 	onUpdateKey: () => void;
 	onRetry: () => void;
 	onRepair: (repair: SeedRepair) => void;
-	onSaveAgain: (held: PaidSeed) => void;
+	onSaveAgain: (held: HeldSeed) => void;
 };
+
+/** What support needs to look a charge up, shown wherever a failure followed a paid read. */
+function RequestId({ id }: { id: string }) {
+	return (
+		<p className="text-muted-foreground text-xs">
+			Anthropic request id: <code className="bg-muted rounded px-1 py-0.5">{id}</code>
+		</p>
+	);
+}
 
 /**
  * One failure and the one control its descriptor names. The copy is `describeFailure`'s alone, so
@@ -405,6 +456,8 @@ function FailureNotice({
 					Generation stopped on an error Cambium didn&apos;t expect. Reload the page to see whether
 					anything was saved.
 				</p>
+
+				{shown.requestId && <RequestId id={shown.requestId} />}
 			</div>
 		);
 	}
@@ -419,12 +472,7 @@ function FailureNotice({
 		>
 			<p className="text-destructive text-sm">{descriptor.message}</p>
 
-			{descriptor.requestId && (
-				<p className="text-muted-foreground text-xs">
-					Anthropic request id:{' '}
-					<code className="bg-muted rounded px-1 py-0.5">{descriptor.requestId}</code>
-				</p>
-			)}
+			{descriptor.requestId && <RequestId id={descriptor.requestId} />}
 
 			{descriptor.raw && (
 				<details className="w-full text-sm">

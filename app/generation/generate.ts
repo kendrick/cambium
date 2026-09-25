@@ -51,11 +51,22 @@ export type PaidSeed = {
 	provenance: CommitProvenance;
 };
 
+/**
+ * What the landing page keeps for "Save again": the paid seed plus the id of the read that paid for
+ * it. A save-again makes no request of its own, so a failure it hits can only name that read's id.
+ */
+export type HeldSeed = PaidSeed & {
+	requestId?: string;
+};
+
 /** The model call had already succeeded when any of these happened, so the paid seed rides along. */
 export type StorageFailure = PaidSeed & {
 	kind: StorageFailureKind;
 	error: StorageQuotaExceededError | StaleRecordWriteError | RecordStampedAheadError;
-	/** The paid read's, when it had one. A save-again made no request, so it has none. */
+	/**
+	 * The paid read's, when it had one. A save-again made no request, so it carries the id of the
+	 * read whose seed it's saving.
+	 */
 	requestId?: string;
 };
 
@@ -96,14 +107,14 @@ export type SaveResult =
 	| { ok: true; record: BrandRecord }
 	| { ok: false; failure: StorageFailure | RecordSchemaFailure };
 
-export type SaveGeneratedVersionInput = PaidSeed & {
+export type SaveGeneratedVersionInput = HeldSeed & {
 	record: BrandRecord;
 	recordStore: RecordStore;
 	engine: ScaleEngine;
 	now?: () => string;
 };
 
-export type GenerateInput = Omit<SaveGeneratedVersionInput, keyof PaidSeed> & {
+export type GenerateInput = Omit<SaveGeneratedVersionInput, keyof HeldSeed> & {
 	/** Passed in, not read from `session-key.ts`, so this module never touches `sessionStorage`. */
 	key: string;
 	reader: AnthropicBrandReader;
@@ -130,15 +141,33 @@ async function defaultFontTableRef(): Promise<FontTableRef> {
 	return (await resolveFontTable()).ref;
 }
 
-const ABORTED = Symbol('aborted');
+/**
+ * Thrown by `generate` when the commit fails after a paid read in a way `saveGeneratedVersion` has
+ * no recovery for. Support needs the read's request id to find that charge, so the error carries
+ * it. `cause` holds the original error.
+ */
+export class UnexpectedAfterPaidReadError extends Error {
+	readonly requestId: string;
+
+	constructor(requestId: string, cause: unknown) {
+		super('The commit failed after a paid read.', { cause });
+		this.name = 'UnexpectedAfterPaidReadError';
+		this.requestId = requestId;
+	}
+}
+
+export const ABORTED = Symbol('aborted');
 
 /**
  * Lets Cancel end a wait on something that takes no signal. The default font lookup is a CDN fetch
  * with none, and it can't take one: the in-flight promise is cached and shared, so aborting it for
  * this run would fail every other caller waiting on it. It finishes in the background instead, and
  * a late rejection lands on a handler here rather than going unhandled.
+ *
+ * Exported for the landing page's record lookup, which has the same problem: IndexedDB takes no
+ * signal, and another tab's write can hold the read for as long as that write takes.
  */
-function unlessAborted<T>(
+export function unlessAborted<T>(
 	start: () => Promise<T>,
 	signal?: AbortSignal,
 ): Promise<T | typeof ABORTED> {
@@ -156,7 +185,7 @@ function unlessAborted<T>(
 	});
 }
 
-function cancelledFailure(
+export function cancelledFailure(
 	message: string,
 	signal: AbortSignal | undefined,
 	requestId?: string,
@@ -224,10 +253,12 @@ export async function saveGeneratedVersion({
 	record,
 	seed,
 	provenance,
+	requestId,
 	recordStore,
 	engine,
 	now,
 }: SaveGeneratedVersionInput): Promise<SaveResult> {
+	const id = requestId ? { requestId } : {};
 	const workspace = createWorkspaceStore({ recordStore, engine, now }).getState();
 
 	workspace.open(record);
@@ -245,6 +276,7 @@ export async function saveGeneratedVersion({
 					error: cause,
 					seed,
 					provenance,
+					...id,
 				},
 			};
 		}
@@ -255,7 +287,7 @@ export async function saveGeneratedVersion({
 			throw cause;
 		}
 
-		return { ok: false, failure: { kind: error.kind, error, seed, provenance } };
+		return { ok: false, failure: { kind: error.kind, error, seed, provenance, ...id } };
 	}
 }
 
@@ -328,22 +360,25 @@ export async function generate({
 
 	onCommitting?.();
 
-	const saved = await saveGeneratedVersion({
-		record,
-		seed: parsed.seed,
-		provenance: {
-			provider: response.provider,
-			model: response.model,
-			promptVersion: response.promptVersion,
-			rawResponse: response.raw,
-			fontTable,
-		},
-		recordStore,
-		engine,
-		now,
-	});
-
-	if (saved.ok || !response.requestId) return saved;
-
-	return { ok: false, failure: { ...saved.failure, requestId: response.requestId } };
+	try {
+		return await saveGeneratedVersion({
+			record,
+			seed: parsed.seed,
+			provenance: {
+				provider: response.provider,
+				model: response.model,
+				promptVersion: response.promptVersion,
+				rawResponse: response.raw,
+				fontTable,
+			},
+			requestId: response.requestId,
+			recordStore,
+			engine,
+			now,
+		});
+	} catch (cause) {
+		// This read was paid for, so even a failure with no recovery has to name it.
+		if (response.requestId) throw new UnexpectedAfterPaidReadError(response.requestId, cause);
+		throw cause;
+	}
 }

@@ -971,3 +971,37 @@ test('Cancel is withdrawn once the answer is in and the commit has started', asy
 	expect((await readRecord(page, recordId))?.versions).toHaveLength(1);
 	expect(sent).toHaveLength(1);
 });
+
+test('Cancel ends a run stalled on the record lookup before anything is sent', async ({ page }) => {
+	const recordId = await saveOneRecord(page);
+	const sent = await mockAnthropic(page, () => ({ status: 500, body: {} }));
+
+	await waitForGenerateReady(page);
+	// Held before the click, so the panel's fresh read of the record queues behind it and the run
+	// can't reach the font lookup or the request.
+	await holdRecordStore(page);
+
+	// Released in `finally` even when an assertion fails. Left held, a failing run's teardown stalled
+	// for over four minutes.
+	try {
+		await generateWithFreshKey(page, TEST_KEY);
+
+		const cancel = page.getByRole('button', { name: 'Cancel' });
+		await expect(cancel).toBeVisible();
+		await cancel.click();
+
+		// Asserted while the hold is still in place. A run that only noticed the abort once the read
+		// came back would pass after the release and prove nothing.
+		const container = outcome(page, 'cancelled');
+		await expect(container).toBeVisible();
+		await expect(cancel).toHaveCount(0);
+		await expect(container.getByRole('button', { name: /retry/i })).toBeEnabled();
+		await expect(container.getByRole('button')).toHaveCount(1);
+		expect(sent).toHaveLength(0);
+	} finally {
+		await releaseRecordStore(page);
+	}
+
+	await expect(await readRecord(page, recordId)).toMatchObject({ versions: [] });
+	expect(sent).toHaveLength(0);
+});

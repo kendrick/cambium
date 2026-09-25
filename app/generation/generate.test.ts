@@ -18,7 +18,7 @@ import type { AnthropicBrandReader } from '../readers/anthropic-reader';
 import { SEED_PROMPT_VERSION } from '../readers/seed-prompt';
 import { createInMemoryRecordStore } from '../storage/in-memory-record-store';
 import type { RecordStore } from '../storage/record-store';
-import { StorageQuotaExceededError } from '../storage/storage-estimate';
+import { StorageQuotaExceededError, toStorageWriteError } from '../storage/storage-estimate';
 
 import { describeFailure, type FailureRecovery } from './describe-failure';
 import {
@@ -693,6 +693,65 @@ describe('generate', () => {
 
 			expect(result.failure.kind).toBe('cancelled');
 			expect(describeFailure(result.failure, { repairUsed: false }).requestId).toBe(PROBE_ID);
+		});
+
+		it('keeps the request id through a save-again that fails on storage too', async () => {
+			const setup = await storeWith(record([]), fullAfterFirstWrite());
+			const first = await run(setup, replay(withProbeId(SUCCESS_ON_GENERATION_MODEL)));
+
+			if (first.ok || !('seed' in first.failure)) {
+				throw new Error('expected a storage failure');
+			}
+
+			expect(first.failure.kind).toBe('storage-quota-exceeded');
+
+			// What the panel keeps for Save again. The store is still full, so the save-again fails too.
+			const held = {
+				seed: first.failure.seed,
+				provenance: first.failure.provenance,
+				requestId: first.failure.requestId,
+			};
+			const again = await saveGeneratedVersion({
+				record: setup.stored,
+				...held,
+				recordStore: setup.store,
+				engine,
+				now: () => NOW,
+			});
+
+			if (again.ok) {
+				throw new Error('expected the save-again to fail');
+			}
+
+			expect(again.failure.kind).toBe('storage-quota-exceeded');
+			expect(describeFailure(again.failure, { repairUsed: false }).requestId).toBe(PROBE_ID);
+		});
+
+		it('keeps the request id on a commit error with no recovery, with the original as its cause', async () => {
+			const inner = createInMemoryRecordStore();
+			// IndexedDB reports an aborted transaction as an AbortError. `toStorageWriteError` passes it
+			// through unchanged, so `saveGeneratedVersion` doesn't recognise it and rethrows.
+			const original = toStorageWriteError(new DOMException('aborted', 'AbortError'));
+			let writes = 0;
+			const store: RecordStore = {
+				list: () => inner.list(),
+				get: (id) => inner.get(id),
+				delete: (id) => inner.delete(id),
+				async put(value) {
+					writes += 1;
+					if (writes > 1) throw original;
+					return inner.put(value);
+				},
+			};
+			const setup = await storeWith(record([]), store);
+
+			const thrown = await run(setup, replay(withProbeId(SUCCESS_ON_GENERATION_MODEL))).then(
+				() => null,
+				(error: unknown) => error,
+			);
+
+			expect(thrown).toMatchObject({ requestId: PROBE_ID });
+			expect((thrown as Error).cause).toBe(original);
 		});
 	});
 
