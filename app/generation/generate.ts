@@ -259,9 +259,15 @@ export async function saveGeneratedVersion({
 	now,
 }: SaveGeneratedVersionInput): Promise<SaveResult> {
 	const id = requestId ? { requestId } : {};
-	const workspace = createWorkspaceStore({ recordStore, engine, now }).getState();
+	const store = createWorkspaceStore({ recordStore, engine, now });
+	const workspace = store.getState();
 
 	workspace.open(record);
+	// `open` restores the newest version's overrides, and they were edits to another seed's tokens.
+	// Carried into this commit, they'd be credited to a model that never produced what they sit on.
+	for (const key of Object.keys(store.getState().overrides)) {
+		workspace.clearOverride(key);
+	}
 	workspace.editSeed(seed);
 
 	try {

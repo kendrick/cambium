@@ -4,6 +4,7 @@ import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { BrandSeedSchema } from './brand-seed';
 import { CAMBIUM_NAMESPACE, derived, invented, observed } from './provenance';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
+import { TokenOverrideSchema } from './token-overrides';
 import { TokenSetSchema } from './token-set';
 
 const stepPayload = derived('keyColors', 'takes the brand hue through the curve at this step');
@@ -68,6 +69,7 @@ const record = {
 			scaleEngine: 'cambium-oklch-1',
 			fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 			interpretation: 'balanced',
+			overrides: [{ kind: 'value', category: 'radius', path: ['lg', 'value'], value: 1 }],
 		},
 	],
 };
@@ -157,9 +159,31 @@ describe('schema strictness', () => {
 		expect(schema.safeParse({ ...value, somethingNew: true }).success).toBe(false);
 	});
 
+	/**
+	 * An override is the user's work, so a key stripped from one on the way to disk is an edit
+	 * that silently reads back different. `scheme` on a radius is the likeliest stray. Among value
+	 * overrides, only the shadow branch declares a `scheme`, and `category: 'shadow'` is what
+	 * selects that branch. Stripping the key would quietly turn a malformed override into a
+	 * well-formed one.
+	 */
+	it.each([
+		['a key no override kind declares', { somethingNew: true }],
+		['a scheme on a category that has only one home', { scheme: 'dark' }],
+	])('an override inside BrandRecordSchema rejects %s', (_name, extra) => {
+		const [version] = record.versions;
+		const stray = { ...version!.overrides[0]!, ...extra };
+
+		expect(TokenOverrideSchema.safeParse(stray).success).toBe(false);
+		expect(
+			BrandRecordSchema.safeParse({ ...record, versions: [{ ...version, overrides: [stray] }] })
+				.success,
+		).toBe(false);
+	});
+
 	it('still accepts every shape it does declare', () => {
 		expect(BrandSeedSchema.safeParse(seed).success).toBe(true);
 		expect(TokenSetSchema.safeParse(tokenSet).success).toBe(true);
 		expect(BrandRecordSchema.safeParse(record).success).toBe(true);
+		expect(TokenOverrideSchema.safeParse(record.versions[0]!.overrides[0]).success).toBe(true);
 	});
 });

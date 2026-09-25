@@ -79,6 +79,7 @@ function makeRecordWithImage(): BrandRecord {
 				scaleEngine: 'cambium-oklch-1',
 				fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 				interpretation: 'balanced',
+				overrides: [],
 			},
 		],
 	};

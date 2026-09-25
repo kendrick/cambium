@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { derived } from './provenance';
+import type { TokenOverride } from './token-overrides';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
 
 /** Reused wherever this file needs a token to carry provenance and nothing about which. */
@@ -40,6 +41,7 @@ const version = {
 	scaleEngine: 'cambium-oklch-1',
 	fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 	interpretation: 'balanced',
+	overrides: [],
 };
 
 const record = {
@@ -92,6 +94,22 @@ describe('BrandRecordSchema', () => {
 		expect(result.error?.issues[0]?.path).toEqual(['schemaVersion']);
 	});
 
+	// The archive the bump to 8 exists for: stamped 7 and shaped like 7, so it carries no
+	// `overrides`. The missing key fails too, but the first issue has to be the version, or the
+	// reader is left to guess from a list of per-version complaints.
+	it('rejects a record from before overrides were stored, naming schemaVersion first', () => {
+		const { overrides: _dropped, ...versionSeven } = version;
+
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			schemaVersion: SCHEMA_VERSION - 1,
+			versions: [versionSeven],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['schemaVersion']);
+	});
+
 	it('rejects an id that is not a UUID', () => {
 		expect(BrandRecordSchema.safeParse({ ...record, id: 'record-1' }).success).toBe(false);
 	});
@@ -108,6 +126,7 @@ describe('BrandRecordSchema', () => {
 		'interpretation',
 		'rawResponse',
 		'ordinal',
+		'overrides',
 	])('requires every version to record its %s', (field) => {
 		const { [field]: _dropped, ...incomplete } = version as Record<string, unknown>;
 
@@ -294,6 +313,116 @@ describe('BrandRecordSchema revision', () => {
 	// tying the two together would reject it.
 	it('accepts a revision that has run ahead of the version count', () => {
 		const result = BrandRecordSchema.safeParse({ ...record, revision: 3, versions: [] });
+
+		expect(result.success).toBe(true);
+	});
+});
+
+/**
+ * A version stores the user's overrides beside the seed, and IndexedDB hands a record back through
+ * the structured clone algorithm, so that is the path a stored override has to survive.
+ */
+describe('BrandRecordSchema overrides', () => {
+	const everyKind: TokenOverride[] = [
+		{ kind: 'alias', scheme: 'light', token: 'primary', alias: 'brand.4' },
+		{ kind: 'primitive', scheme: 'dark', ramp: 'brand', step: 9, l: 0.7, c: 0.1, h: 30 },
+		{ kind: 'value', category: 'motion', path: ['easing', 'standard', 'value', 1], value: 0.2 },
+		{ kind: 'value', category: 'shadow', scheme: 'dark', path: ['md', 'blur', 'value'], value: 9 },
+	];
+
+	it('keeps every override kind, in order, through a parse and a structured clone', () => {
+		const stored = BrandRecordSchema.parse({
+			...record,
+			versions: [{ ...version, overrides: everyKind }],
+		});
+		const reread = BrandRecordSchema.parse(structuredClone(stored));
+
+		expect(reread.versions[0]?.overrides).toEqual(everyKind);
+	});
+
+	// A stored version holds no token set, so there is nothing to check a target against. The
+	// schema takes the override and `applyOverrides` reports the miss when a set exists.
+	it('accepts an override naming a token no set is known to hold', () => {
+		const unknown = { kind: 'alias', scheme: 'light', token: 'nowhere', alias: 'brand.4' };
+
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			versions: [{ ...version, overrides: [unknown] }],
+		});
+
+		expect(result.success).toBe(true);
+	});
+
+	it('refuses a second override to the same leaf, at the second one', () => {
+		const first = { kind: 'value', category: 'radius', path: ['lg', 'value'], value: 1 };
+		const again = { ...first, value: 2 };
+		const elsewhere = { kind: 'alias', scheme: 'light', token: 'primary', alias: 'brand.4' };
+
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			versions: [{ ...version, overrides: [first, elsewhere, again] }],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues.map((issue) => issue.path)).toEqual([
+			['versions', 0, 'overrides', 2],
+		]);
+	});
+
+	// Property access reads `1` and `'1'` as one key, so `applyOverrides` writes both spellings to
+	// the same slot of the bezier, and the second would win without a word on reopen.
+	it('refuses a second override to the same index spelled as a string, at the second one', () => {
+		const first = {
+			kind: 'value',
+			category: 'motion',
+			path: ['easing', 'standard', 'value', 1],
+			value: 0.3,
+		};
+		const again = { ...first, path: ['easing', 'standard', 'value', '1'], value: 0.4 };
+
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			versions: [{ ...version, overrides: [first, again] }],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues.map((issue) => issue.path)).toEqual([
+			['versions', 0, 'overrides', 1],
+		]);
+	});
+
+	// Both pairs share a token name or a dotted spelling, so a check keyed on anything looser than
+	// `overrideKey` would refuse them.
+	it.each([
+		[
+			'the same token in two schemes',
+			{ kind: 'alias', scheme: 'light', token: 'primary', alias: 'brand.4' },
+			{ kind: 'alias', scheme: 'dark', token: 'primary', alias: 'brand.4' },
+		],
+		[
+			'paths that join to the same dotted string',
+			{ kind: 'value', category: 'radius', path: ['a.b', 'value'], value: 1 },
+			{ kind: 'value', category: 'radius', path: ['a', 'b.value'], value: 1 },
+		],
+	])('accepts two overrides to different leaves: %s', (_name, one, other) => {
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			versions: [{ ...version, overrides: [one, other] }],
+		});
+
+		expect(result.success).toBe(true);
+	});
+
+	it('lets a later version override a leaf an earlier one already did', () => {
+		const edit = { kind: 'value', category: 'radius', path: ['lg', 'value'], value: 1 };
+
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			versions: [
+				{ ...version, overrides: [edit] },
+				{ ...version, ordinal: 2, overrides: [{ ...edit, value: 2 }] },
+			],
+		});
 
 		expect(result.success).toBe(true);
 	});

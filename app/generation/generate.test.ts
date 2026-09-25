@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/brand-record';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
+import type { TokenOverride } from '../../core/token-overrides';
 import error400 from '../readers/fixtures/error-400-invalid-request.json';
 import error401 from '../readers/fixtures/error-401-credentials.json';
 import error402 from '../readers/fixtures/error-402-billing.json';
@@ -134,6 +135,7 @@ function version(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		scaleEngine: engine.id,
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 		interpretation: 'balanced',
+		overrides: [],
 		...overrides,
 	};
 }
@@ -329,6 +331,26 @@ describe('generate', () => {
 				expect(result.ok && result.record).toStrictEqual(after);
 			},
 		);
+
+		// Opening the record restores its newest version's overrides into the workspace, and a seed edit
+		// keeps them. Committed as they stand, a person's edits to one model's tokens would ride into a
+		// version credited to another model and applied to a seed the person never saw.
+		it('starts the generated version with no overrides, whatever the newest version held', async () => {
+			const held: TokenOverride = {
+				kind: 'value',
+				category: 'radius',
+				path: ['lg', 'value'],
+				value: 12,
+			};
+			const setup = await storeWith(record([version({ overrides: [held] })]));
+
+			const result = await run(setup, replay(SUCCESS_ON_GENERATION_MODEL));
+			const after = await setup.store.get(RECORD_ID);
+
+			expect(result.ok).toBe(true);
+			expect(after?.versions.at(-1)?.overrides).toEqual([]);
+			expect(after?.versions[0]?.overrides).toEqual([held]);
+		});
 
 		// Asserted on the request body, because the stored model is whatever the response names. Only
 		// the request says which model this module asked for and priced.

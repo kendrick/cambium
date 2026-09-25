@@ -4,7 +4,13 @@ import { DARK_SCHEME, deepFreeze, LIGHT_SCHEME, SEMANTIC } from './css/css.fixtu
 import { resolveScheme } from './resolve-scheme';
 import { type TokenSet, TokenSetSchema } from './token-set';
 import { NON_COLOR_FIXTURE } from './token-set.fixture';
-import { applyOverrides, overrideKey, type TokenOverride } from './token-overrides';
+import {
+	applyOverrides,
+	overrideKey,
+	type TokenOverride,
+	TokenOverrideSchema,
+	VALUE_CATEGORIES,
+} from './token-overrides';
 
 /**
  * `PINNED_SET`'s two schemes already differ in every primitive and in their shadows, but they share
@@ -406,5 +412,77 @@ describe('overrideKey', () => {
 		];
 
 		expect(new Set(keys).size).toBe(keys.length);
+	});
+
+	// `applyOverrides` walks the path with property access, which reads `1` and `'1'` as the same
+	// key, so a key that kept the segment's JS type would let two edits to one leaf sit side by side
+	// in the store map and past the duplicate check in `BrandRecordSchema`.
+	it('gives an index one key whether it is spelled as a number or a string', () => {
+		const asNumber: TokenOverride = {
+			kind: 'value',
+			category: 'motion',
+			path: ['easing', 'standard', 'value', 1],
+			value: 0.3,
+		};
+		const asString: TokenOverride = { ...asNumber, path: ['easing', 'standard', 'value', '1'] };
+
+		expect(applied([asString])).toEqual(applied([asNumber]));
+		expect(overrideKey(asString)).toBe(overrideKey(asNumber));
+		expect(
+			overrideKey({ ...asNumber, category: 'shadow', scheme: 'dark', path: ['md', 'x', 0] }),
+		).toBe(
+			overrideKey({ ...asNumber, category: 'shadow', scheme: 'dark', path: ['md', 'x', '0'] }),
+		);
+	});
+});
+
+describe('TokenOverrideSchema', () => {
+	const everyKind: TokenOverride[] = [
+		{ kind: 'alias', scheme: 'dark', token: 'primary', alias: 'brand.3' },
+		{ kind: 'primitive', scheme: 'light', ramp: 'brand', step: 9, l: 0.7, c: 0.1, h: 30 },
+		{ kind: 'value', category: 'radius', path: ['lg', 'value'], value: 1 },
+		{ kind: 'value', category: 'shadow', scheme: 'dark', path: ['md', 'blur', 'value'], value: 9 },
+	];
+
+	// The consumer of a parsed override is `applyOverrides`, so each kind the schema takes has to
+	// land on `BASE` as the same edit the unparsed override makes.
+	it.each(everyKind)(
+		'parses a $kind override into one applyOverrides takes unchanged',
+		(override) => {
+			const parsed = TokenOverrideSchema.parse(override);
+
+			expect(parsed).toEqual(override);
+			expect(applied([parsed])).toEqual(applied([override]));
+		},
+	);
+
+	// `write` reads a value override's target as `draft[category]`, so a category the schema takes
+	// and the token set doesn't hold at the top level is an override that can never land. Shadow
+	// is the ninth, carried by its own branch because it needs a scheme.
+	it('takes exactly the non-colour categories a token set holds', () => {
+		const colourLayers = new Set(['primitives', 'semantic', 'schemes']);
+		const nonColour = Object.keys(TokenSetSchema.shape).filter((key) => !colourLayers.has(key));
+
+		expect(new Set([...VALUE_CATEGORIES, 'shadow'])).toEqual(new Set(nonColour));
+	});
+
+	it.each([
+		['a shadow leaf with no scheme', { kind: 'value', category: 'shadow', path: ['md'], value: 1 }],
+		[
+			'a colour layer used as a value category',
+			{ kind: 'value', category: 'schemes', path: [], value: 1 },
+		],
+		['a category no token set holds', { kind: 'value', category: 'border', path: [], value: 1 }],
+		['a scheme nobody derives', { kind: 'alias', scheme: 'sepia', token: 'primary', alias: 'b.1' }],
+		[
+			'a path segment that is neither a key nor an index',
+			{ kind: 'value', category: 'radius', path: [true], value: 1 },
+		],
+		[
+			'a value that is not a number',
+			{ kind: 'value', category: 'radius', path: ['lg'], value: '1' },
+		],
+	])('refuses %s', (_name, override) => {
+		expect(TokenOverrideSchema.safeParse(override).success).toBe(false);
 	});
 });

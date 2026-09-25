@@ -1,18 +1,26 @@
+import { z } from 'zod';
+
 import { canPrintOklchCss } from './css/oklch-css';
+import { SCHEME_NAMES } from './scale-engine';
 import { type TokenSet, TokenSetSchema } from './token-set';
 
-export type SchemeName = 'light' | 'dark';
+const SchemeNameSchema = z.enum(SCHEME_NAMES);
+
+export type SchemeName = z.infer<typeof SchemeNameSchema>;
 
 /** The eight non-colour categories that live at the top level only, so a leaf there has no scheme. */
-export type ValueCategory =
-	| 'radius'
-	| 'typography'
-	| 'tracking'
-	| 'spacing'
-	| 'opacity'
-	| 'motion'
-	| 'focusRing'
-	| 'zIndex';
+export const VALUE_CATEGORIES = [
+	'radius',
+	'typography',
+	'tracking',
+	'spacing',
+	'opacity',
+	'motion',
+	'focusRing',
+	'zIndex',
+] as const;
+
+export type ValueCategory = (typeof VALUE_CATEGORIES)[number];
 
 /**
  * Keys under a category's `values`, down to one numeric leaf: `['lg', 'value']` for a radius,
@@ -20,7 +28,9 @@ export type ValueCategory =
  * cubic bezier. An array rather than a dotted string because token names are any non-empty string
  * and may hold a dot themselves.
  */
-export type ValuePath = readonly (string | number)[];
+const ValuePathSchema = z.array(z.union([z.string(), z.number()])).readonly();
+
+export type ValuePath = z.infer<typeof ValuePathSchema>;
 
 /**
  * One user edit to a derived set, shaped so that applying it still yields a valid `TokenSet`.
@@ -31,20 +41,45 @@ export type ValuePath = readonly (string | number)[];
  *
  * Shadow is the one non-colour category a scheme carries, so a shadow leaf needs a `scheme` where
  * the other categories' leaves have exactly one home.
+ *
+ * `TokenOverride` is `z.infer` of this schema rather than a hand-written union checked against it,
+ * so the stored shape and the type the store and the list code against can't drift apart. The
+ * schema checks shape only. Whether an override has a target is a question about one token set,
+ * and a stored version holds none, so `applyOverrides` answers it and reports a miss as an issue
+ * rather than a parse failure.
  */
-export type TokenOverride =
-	| { kind: 'alias'; scheme: SchemeName; token: string; alias: string }
-	| {
-			kind: 'primitive';
-			scheme: SchemeName;
-			ramp: string;
-			step: number;
-			l: number;
-			c: number;
-			h: number;
-	  }
-	| { kind: 'value'; category: ValueCategory; path: ValuePath; value: number }
-	| { kind: 'value'; category: 'shadow'; scheme: SchemeName; path: ValuePath; value: number };
+export const TokenOverrideSchema = z.union([
+	z.strictObject({
+		kind: z.literal('alias'),
+		scheme: SchemeNameSchema,
+		token: z.string(),
+		alias: z.string(),
+	}),
+	z.strictObject({
+		kind: z.literal('primitive'),
+		scheme: SchemeNameSchema,
+		ramp: z.string(),
+		step: z.number(),
+		l: z.number(),
+		c: z.number(),
+		h: z.number(),
+	}),
+	z.strictObject({
+		kind: z.literal('value'),
+		category: z.enum(VALUE_CATEGORIES),
+		path: ValuePathSchema,
+		value: z.number(),
+	}),
+	z.strictObject({
+		kind: z.literal('value'),
+		category: z.literal('shadow'),
+		scheme: SchemeNameSchema,
+		path: ValuePathSchema,
+		value: z.number(),
+	}),
+]);
+
+export type TokenOverride = z.infer<typeof TokenOverrideSchema>;
 
 export type OverrideIssue = { path: (string | number)[]; message: string };
 
@@ -58,6 +93,12 @@ export type ApplyOverridesResult =
  *
  * JSON over a joined string because names may contain any separator we'd pick: `['a.b', 'value']`
  * and `['a', 'b.value']` would collide on a dot join.
+ *
+ * Path segments go through `String` first because `write` reaches the leaf by property access,
+ * which reads `1` and `'1'` as the same key. Left typed, the two spellings would get two keys for one
+ * leaf and both would pass the duplicate check in `BrandRecordSchema`. `String` is the conversion
+ * property access itself applies, so the key agrees with the walk on `-0`, `1e21` and the rest.
+ * `step` stays a number: the schema takes only numbers there and `write` matches it with `===`.
  */
 export function overrideKey(override: TokenOverride): string {
 	switch (override.kind) {
@@ -68,8 +109,8 @@ export function overrideKey(override: TokenOverride): string {
 		case 'value':
 			return JSON.stringify(
 				override.category === 'shadow'
-					? ['value', 'shadow', override.scheme, ...override.path]
-					: ['value', override.category, ...override.path],
+					? ['value', 'shadow', override.scheme, ...override.path.map(String)]
+					: ['value', override.category, ...override.path.map(String)],
 			);
 	}
 }

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { BrandSeedSchema } from './brand-seed';
+import { overrideKey, TokenOverrideSchema } from './token-overrides';
 import { TokenSetSchema } from './token-set';
 
 /**
@@ -38,10 +39,21 @@ import { TokenSetSchema } from './token-set';
  * catches that rejection and reports the record as unreadable. It cannot be exported around the
  * problem either, since an export reads through the same parse. The reason no shim was written is a
  * fact about deployments rather than about this file: no deployed copy of Cambium held a saved brand
- * when this shipped, confirmed by the project owner on 2026-09-23. #77 bumps for its own shape
- * change and takes 8.
+ * when this shipped, confirmed by the project owner on 2026-09-23.
+ *
+ * 8 is #26's `overrides` on `BrandVersionSchema`, required. A version used to hold what the model
+ * said and nothing the user did after, so an override lived only in the workspace draft and was
+ * gone on the next open. The overrides are stored rather than the token set they produce, because
+ * the derived tokens are recomputed from the seed and storing both puts the same facts in two
+ * places. Without this bump a version-7 archive fails once per version on the missing key, which
+ * reads like corruption; with it the first issue names `schemaVersion`.
+ *
+ * No migration is written here either, for the same reason as 7: no deployed copy of Cambium held
+ * a saved brand when this shipped. A shim would be trivial, since every version-7 version means
+ * `overrides: []`, but a shim for records nobody holds is code nobody runs. #77 bumps for its own
+ * shape change and takes 9.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /**
  * What storage stamps on a record's first commit. It lives here rather than in `app/storage/`
@@ -88,6 +100,11 @@ export const FontTableRefSchema = z.strictObject({
  * version was made; `ordinal` says which one is actually later when that isn't enough. It
  * starts at 1 for a record's first version and increases by exactly one with no gaps, checked
  * independently of `createdAt` in `BrandRecordSchema`'s refinement below.
+ *
+ * `overrides` is the user's edits to the derived set, in the order they were first made, and it
+ * is input the same way `seed` is: a reader re-derives the tokens and applies these on top. It is
+ * required, and empty on a version nobody edited, so a writer that forgets it fails the parse
+ * instead of quietly dropping the user's work.
  */
 export const BrandVersionSchema = z.strictObject({
 	createdAt: z.iso.datetime(),
@@ -101,6 +118,7 @@ export const BrandVersionSchema = z.strictObject({
 	scaleEngine: z.string().min(1),
 	fontTable: FontTableRefSchema,
 	interpretation: z.enum(['faithful', 'balanced', 'expressive']),
+	overrides: z.array(TokenOverrideSchema),
 });
 
 /**
@@ -167,6 +185,27 @@ export const BrandRecordSchema = z
 					message: `expected ordinal ${expected}, starting at 1 with no gaps`,
 				});
 			}
+		});
+
+		// The workspace holds overrides in a map keyed by `overrideKey`, so it never writes two
+		// edits to one leaf. A version that holds two came from somewhere else, and reading it back
+		// into that map drops one without a word, so the record wouldn't survive its own round
+		// trip. Scoped to one version, since a later version re-editing a leaf is just history.
+		record.versions.forEach((version, index) => {
+			const seen = new Set<string>();
+
+			version.overrides.forEach((override, overrideIndex) => {
+				const key = overrideKey(override);
+
+				if (seen.has(key)) {
+					ctx.addIssue({
+						code: 'custom',
+						path: ['versions', index, 'overrides', overrideIndex],
+						message: 'an earlier override in this version already targets the same leaf',
+					});
+				}
+				seen.add(key);
+			});
 		});
 
 		const imageIds = new Set(record.images.map((image) => image.id));

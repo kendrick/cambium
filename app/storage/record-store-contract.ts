@@ -24,6 +24,7 @@ function makeVersion(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		scaleEngine: 'cambium-oklch-1',
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 		interpretation: 'balanced',
+		overrides: [],
 		...overrides,
 	};
 }
@@ -1131,6 +1132,46 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			await store.put(record);
 
 			expect((await store.get(record.id))?.versions).toEqual([v1, v2, v3]);
+		});
+
+		// #26 stores the user's edits instead of the token set they'd produce, so a version's
+		// `overrides` has to round-trip exactly like any other field: nothing here should collapse,
+		// reorder, or drop an entry on the way to storage and back.
+		it('round-trips a version carrying two overrides unchanged', async () => {
+			const record = makeRecord({
+				versions: [
+					makeVersion({
+						overrides: [
+							{ kind: 'alias', scheme: 'light', token: 'primary', alias: 'brand.4' },
+							{ kind: 'value', category: 'radius', path: ['lg', 'value'], value: 12 },
+						],
+					}),
+				],
+			});
+
+			const stored = await store.put(record);
+			expect(stored.versions[0]?.overrides).toEqual(record.versions[0]?.overrides);
+			expect((await read(store, record.id)).versions[0]?.overrides).toEqual(
+				record.versions[0]?.overrides,
+			);
+		});
+
+		// Matched against `Error` to stay implementation-blind, like the smuggled-field case. Putting
+		// the same record at the current version afterward shows the stamp is what `put` refused,
+		// because that put succeeds and the stamp is the only difference.
+		it('rejects a record stamped with the previous schema version', async () => {
+			const current = makeRecord();
+			const stale = {
+				...current,
+				schemaVersion: SCHEMA_VERSION - 1,
+			} as unknown as BrandRecord;
+
+			await expect(store.put(stale)).rejects.toThrow(Error);
+			expect(await store.get(stale.id)).toBeNull();
+			await expect(store.put(current)).resolves.toMatchObject({
+				id: stale.id,
+				schemaVersion: SCHEMA_VERSION,
+			});
 		});
 	});
 
