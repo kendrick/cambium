@@ -2,7 +2,7 @@
 
 ADR-0003 kept chroma-js's `contrastAPCA` out of every module the browser bundle can reach, because it cost 17.2 kB gzip of first-load budget for a number no user saw. Issue #8 changes the second half of that. Its contrast report carries an APCA Lc beside every WCAG ratio, as data an interface renders without recomputing, and the workspace store builds that report on every derivation. So `core/contrast/check.ts` now imports APCA, and the store carries it to the browser. This ADR supersedes ADR-0003's APCA clause and its rule to import chroma-js only from its main entry. The culori policy in ADR-0003 stands unchanged.
 
-The cost moved too. The store loads only through the dynamic `import()` in `components/workspace/workspace-route.tsx`, so APCA rides the lazy workspace chunk, and first load on `/` and `/workspace` stays at 198.0 kB and 193.9 kB. The total-JS budget is where it lands. Through chroma-js's package index, #8 put the build at 460.2 kB against the 450 kB budget in `lib/bundle-budget.ts`, because the index evaluates the whole library. Through the deep module `chroma-js/src/utils/contrastAPCA.js`, the build measures 448.8 kB, against 442.6 kB on `main` before #8.
+The cost moved too. The store loads only through the dynamic `import()` in `components/workspace/workspace-route.tsx`, so APCA rides the lazy workspace chunk, and first load on `/` and `/workspace` stays at 198.0 kB and 193.9 kB. The total-JS budget is where it lands. Through chroma-js's package index, #8 put the build at 460.2 kB against the 450 kB budget in `lib/bundle-budget.ts`, because the index evaluates the whole library. Through the deep module `chroma-js/src/utils/contrastAPCA.js`, the build measures 449.0 kB, against 442.6 kB on `main` before #8.
 
 ## Considered Options
 
@@ -20,4 +20,4 @@ This takes the least code and keeps ADR-0003's main-entry rule. It also spends a
 
 APCA stays advisory. `passes` reads the WCAG ratio alone, which is what ADR-0003's gate and #8's decisions both require.
 
-The total-JS budget has 1.2 kB left after #8. #25 and #29 both add to the workspace chunk, so the next contrast-adjacent change should expect to meet that ceiling.
+The total-JS budget has 1.0 kB left after #8. #25 and #29 both add to the workspace chunk, so the next contrast-adjacent change should expect to meet that ceiling.
