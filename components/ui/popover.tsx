@@ -16,11 +16,15 @@ function PopoverContent({
 	alignOffset = 0,
 	side = 'bottom',
 	sideOffset = 4,
+	container,
 	...props
 }: PopoverPrimitive.Popup.Props &
-	Pick<PopoverPrimitive.Positioner.Props, 'align' | 'alignOffset' | 'side' | 'sideOffset'>) {
+	Pick<PopoverPrimitive.Positioner.Props, 'align' | 'alignOffset' | 'side' | 'sideOffset'> &
+	Pick<PopoverPrimitive.Portal.Props, 'container'>) {
 	return (
-		<PopoverPrimitive.Portal>
+		// `container` exists for the workspace preview, whose tokens are custom properties scoped to
+		// one element: a popup portalled to <body> would read the app's own colours instead.
+		<PopoverPrimitive.Portal container={container}>
 			<PopoverPrimitive.Positioner
 				align={align}
 				alignOffset={alignOffset}

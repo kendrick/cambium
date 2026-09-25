@@ -1,5 +1,6 @@
 'use client';
 
+import { lazy, Suspense } from 'react';
 import { useStore } from 'zustand';
 import type { StoreApi } from 'zustand/vanilla';
 
@@ -8,6 +9,14 @@ import { RawResponse } from '@/components/workspace/raw-response';
 import { SeedRail } from '@/components/workspace/seed-rail';
 import { TokenList } from '@/components/workspace/token-list';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
+
+// Its own chunk, apart from the shell's. The gallery brings base-ui's popover and the stylesheet
+// export's checks, and none of that should hold up the token list, which renders without it.
+const Preview = lazy(() =>
+	import('@/components/workspace/preview/preview').then((module) => ({ default: module.Preview })),
+);
+
+const PREVIEW_LOADING = <p className="text-muted-foreground text-sm">Loading the preview…</p>;
 
 /**
  * Loaded by `WorkspaceRoute` through a dynamic import, never statically. base-ui's tabs and
@@ -72,10 +81,19 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 						<TabsTab value="accessibility">Accessibility</TabsTab>
 						<TabsTab value="export">Export</TabsTab>
 					</TabsList>
-					{/* Empty until #28, #27 and #29 fill them. */}
-					<TabsPanel value="preview" className="text-muted-foreground p-2 text-sm">
-						The preview is not built yet.
+					<TabsPanel value="preview" className="flex min-h-0 flex-col p-2">
+						{tokenSet ? (
+							<Suspense fallback={PREVIEW_LOADING}>
+								<Preview tokenSet={tokenSet} />
+							</Suspense>
+						) : (
+							<p className="text-muted-foreground text-sm">
+								There are no tokens to preview yet. They show up here once the seed produces a token
+								set.
+							</p>
+						)}
 					</TabsPanel>
+					{/* Empty until #27 and #29 fill them. */}
 					<TabsPanel value="accessibility" className="text-muted-foreground p-2 text-sm">
 						The accessibility report is not built yet.
 					</TabsPanel>
