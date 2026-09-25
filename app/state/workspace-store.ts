@@ -356,18 +356,24 @@ function withOverrides(
 }
 
 /**
- * `repairContrast` walks a bounded lightness search per failing pair and measured ~2.6ms on the
- * `blue` SWEEP seed (see `workspace-store.test.ts`), against #8's own "memoize if over about 5ms"
- * bar. `setOverride` and `clearOverride` both reuse the `derived` already held rather than
- * re-deriving, so without this cache a session of override edits would re-run that search on every
- * keystroke for a repair nothing had changed. Keyed on `derived` rather than on the base `TokenSet`
- * `buildTokenSet` returns, because that call produces a fresh object every time and leaves nothing
- * to key on that survives past its own call; `derived` is the one thing every caller here already
- * holds across such a sequence, and a new `derived` only ever arrives together with a new seed.
+ * `repairContrast` walks a bounded lightness search per failing pair. `setOverride` and
+ * `clearOverride` both reuse the `derived` already held rather than re-deriving, so without this
+ * cache a session of override edits would re-run that search on every keystroke for a repair
+ * nothing had changed. Keyed on `derived` rather than on the base `TokenSet` `buildTokenSet`
+ * returns, because that call produces a fresh object every time and leaves nothing to key on that
+ * survives past its own call; `derived` is the one thing every caller here already holds across
+ * such a sequence.
+ *
+ * `ScaleEngine.generate`'s contract never promises a fresh object per call, and `buildTokenSet`
+ * also reads `seed` directly for the non-colour categories. An engine that memoizes, or a test fake
+ * that hands back the same `derived` for two different seeds, would otherwise serve a stale
+ * repaired set for the second one. So each cache entry also carries the seed and preset that
+ * produced it, and a lookup that doesn't match both recomputes instead of trusting `derived`'s
+ * identity alone.
  */
 const repairCache = new WeakMap<
 	Extract<ScaleEngineResult, { ok: true }>,
-	{ repaired: TokenSet; unrepaired: UnrepairedEntry[] }
+	{ seed: BrandSeed; preset: Interpretation; repaired: TokenSet; unrepaired: UnrepairedEntry[] }
 >();
 
 function repairedBase(
@@ -377,7 +383,7 @@ function repairedBase(
 ): { repaired: TokenSet; unrepaired: UnrepairedEntry[] } {
 	const cached = repairCache.get(derived);
 
-	if (cached) {
+	if (cached && cached.preset === preset && sameSeed(cached.seed, seed)) {
 		return cached;
 	}
 
@@ -392,7 +398,7 @@ function repairedBase(
 		throw new Error(`contrast repair produced an override the base could not take: ${applied.key}`);
 	}
 
-	const result = { repaired: applied.tokenSet, unrepaired };
+	const result = { seed, preset, repaired: applied.tokenSet, unrepaired };
 
 	repairCache.set(derived, result);
 

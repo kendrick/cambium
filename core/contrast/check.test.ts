@@ -202,14 +202,13 @@ describe('checkContrast', () => {
 	/**
 	 * `semantic-map.ts`'s cited ratios (135-137, 100-105) read as continuous OKLCH contrast:
 	 * cross-checked against `contrastFromOklch` directly, every one lands within 0.005. `wcag` here
-	 * is `renderedContrast` instead, rounded to 8-bit sRGB first, because Task 1 says so and because
-	 * that is the number a screen actually paints (`core/oklch.ts`'s own docstring, #72). Rounding
-	 * both ends to a byte grid moves a ratio by a little, unevenly across seeds — the same
-	 * quantization-straddle #72 names, worst case 0.0131 there. The worst case measured here is
-	 * 0.0152 (yellow's muted-foreground, light), which is why this tolerance is wider than the
-	 * "within 0.01" the wave table asks for. Narrowing it back to 0.01 would either drop a seed the
-	 * documented claim covers or silently swap `wcag` for the continuous figure Task 1 says not to
-	 * report; the task report's `plan_concerns` carries this in full.
+	 * is `renderedContrast` instead, rounded to 8-bit sRGB first, because that is the number a screen
+	 * actually paints (`core/oklch.ts`'s own docstring, #72). Rounding both ends to a byte grid moves
+	 * a ratio by a little, unevenly across seeds, the same quantization-straddle #72 names, worst
+	 * case 0.0131 there. The worst case measured here is 0.0152 (yellow's muted-foreground, light),
+	 * which is why this tolerance sits at 0.02 rather than 0.01: narrowing it would drop a seed the
+	 * documented claim covers, or force `wcag` back onto the continuous figure this suite
+	 * deliberately doesn't report.
 	 */
 	const RENDERED_ROUNDING_ALLOWANCE = 0.02;
 
@@ -235,14 +234,12 @@ describe('checkContrast', () => {
 
 	/**
 	 * `semantic-map.ts:114-121`'s "3.85:1 in light" is the danger ramp's superseded step 9 figure,
-	 * quoted there to argue for moving `destructive` to step 11 — not a live measurement.
-	 * `SEMANTIC_MAP.destructive` already reads `danger.11`, and the same paragraph gives that step's
-	 * current figure as "5.25:1 in light and 8.95:1 in dark, clearing 4.5:1 on all twenty
-	 * seed-and-scheme combinations." The plan's Context section carried the old step-9 number forward
-	 * as a third "known failure" that the current code does not reproduce, because it no longer
-	 * exists; see `plan_concerns` in the task report. Asserted here as a pass against the paragraph's
-	 * own current figure, so a regression that reopens the shortfall fails loudly instead of this
-	 * suite quietly agreeing with stale prose.
+	 * quoted there to argue for moving `destructive` to step 11, not a live measurement.
+	 * `SEMANTIC_MAP.destructive` already reads `danger.11` (`semantic-map.ts:107-121`), and the same
+	 * paragraph gives that step's current figure as "5.25:1 in light and 8.95:1 in dark, clearing
+	 * 4.5:1 on all twenty seed-and-scheme combinations." Asserted here as a pass against that current
+	 * figure, so a regression that reopens the shortfall fails loudly instead of this suite quietly
+	 * agreeing with stale prose.
 	 */
 	it.each(SWEEP.map(([name]) => name))(
 		'destructive already clears AA against background for %s',

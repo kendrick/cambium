@@ -38,7 +38,7 @@ const NON_SUFFIX_PAIRS: readonly DeclaredPair[] = [
 /**
  * `X-foreground` pairs with `X`, for every `X` that is itself a declared token: `card-foreground`
  * strips to `card`, `sidebar-accent-foreground` to `sidebar-accent`. The bare `foreground` key is
- * the one name the suffix can't strip anything from — `''` names no token — and it is also the root
+ * the one name the suffix can't strip anything from (`''` names no token), and it is also the root
  * pair the rest of the naming scheme is built on, so it resolves to `background` directly rather
  * than through the strip.
  */

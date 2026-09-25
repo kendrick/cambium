@@ -15,7 +15,7 @@ import { CONTRAST_PAIRS } from './pairs';
 
 /**
  * One measured pair, one scheme. Plain data rather than a class or a function closure, so an
- * interface can render it and #8's repair task can consume it without either one recomputing a
+ * interface can render it and `repairContrast` can consume it without either one recomputing a
  * contrast ratio.
  */
 export type ContrastEntry = {

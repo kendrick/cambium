@@ -10,7 +10,7 @@ import { buildTokenSet } from '../semantic-layer';
 import { applyOverrides, type TokenOverride } from '../token-overrides';
 import type { TokenSet } from '../token-set';
 import { checkContrast } from './check';
-import { defaultPins, pinKey, repairContrast } from './repair';
+import { defaultPins, type PinKey, pinKey, type RepairEntry, repairContrast } from './repair';
 
 /**
  * Real engine output for the same ten seeds `check.test.ts` sweeps. Repeated rather than imported
@@ -83,12 +83,31 @@ function primitiveOverrides(overrides: readonly TokenOverride[]) {
 }
 
 /**
+ * Whether `entry.outOfOrder` matches what the final applied set actually shows at that step.
+ * Shared by the two "out of order" tests below so proving the flag can be true and proving it
+ * stays correct everywhere else rest on one comparison, not two copies of it.
+ */
+function outOfOrderMatchesFinal(final: TokenSet, entry: RepairEntry): boolean {
+	const ramp = final.schemes[entry.scheme].primitives[entry.ramp]!;
+	const l = ramp[entry.step - 1]!.l;
+	// Step 1 is the page end of a ramp: lightest in light, darkest in dark.
+	const descending = entry.scheme === 'light';
+	const before = ramp[entry.step - 2]?.l;
+	const after = ramp[entry.step]?.l;
+	const inOrder = descending
+		? (before === undefined || before >= l) && (after === undefined || l >= after)
+		: (before === undefined || before <= l) && (after === undefined || l <= after);
+
+	return entry.outOfOrder === !inOrder;
+}
+
+/**
  * The protected set read straight off provenance, written out here rather than asked of
  * `defaultPins`, so a test using it checks `repairContrast` against the rule instead of against the
  * function it would otherwise share a bug with.
  */
-function observedSteps(tokenSet: TokenSet): Set<string> {
-	const keys = new Set<string>();
+function observedSteps(tokenSet: TokenSet): Set<PinKey> {
+	const keys = new Set<PinKey>();
 
 	for (const scheme of SCHEME_NAMES) {
 		for (const [ramp, steps] of Object.entries(tokenSet.schemes[scheme].primitives)) {
@@ -282,17 +301,7 @@ describe('the repair report', () => {
 		const final = applied(base, overrides);
 
 		for (const entry of report) {
-			const ramp = final.schemes[entry.scheme].primitives[entry.ramp]!;
-			const l = ramp[entry.step - 1]!.l;
-			// Step 1 is the page end of a ramp: lightest in light, darkest in dark.
-			const descending = entry.scheme === 'light';
-			const before = ramp[entry.step - 2]?.l;
-			const after = ramp[entry.step]?.l;
-			const inOrder = descending
-				? (before === undefined || before >= l) && (after === undefined || l >= after)
-				: (before === undefined || before <= l) && (after === undefined || l <= after);
-
-			expect(entry.outOfOrder).toBe(!inOrder);
+			expect(outOfOrderMatchesFinal(final, entry)).toBe(true);
 		}
 
 		expect(
@@ -305,6 +314,26 @@ describe('the repair report', () => {
 			),
 		).toBe(true);
 	});
+
+	/**
+	 * A later move can shift a step's neighbours and leave an earlier entry's `outOfOrder` wrong if
+	 * it were still read off the set as it stood right after that entry's own move, which is why
+	 * `repairContrast` recomputes every entry against the final set before returning. This checks
+	 * that recomputation holds for every entry, for every seed in the sweep, against the set
+	 * `overrides` actually produces.
+	 */
+	it.each(SWEEP.map(([name]) => name))(
+		'%s: every report entry’s outOfOrder matches the final applied set',
+		(name) => {
+			const base = sweptSet(name);
+			const { overrides, report } = repairContrast(base);
+			const final = applied(base, overrides);
+
+			for (const entry of report) {
+				expect(outOfOrderMatchesFinal(final, entry)).toBe(true);
+			}
+		},
+	);
 });
 
 describe('pins', () => {

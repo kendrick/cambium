@@ -70,7 +70,7 @@ export type RepairResult = {
 
 export type RepairOptions = {
 	/** Replaces the default rather than adding to it, so a caller extending it spreads `defaultPins`. */
-	pinned?: ReadonlySet<string>;
+	pinned?: ReadonlySet<PinKey>;
 };
 
 /** Lightness is searched on the six-decimal grid every ramp step is quantized to. */
@@ -214,7 +214,7 @@ function pairId(entry: ContrastEntry): string {
  * move left behind, so the hue and chroma tolerance is measured against what the generator made.
  */
 export function repairContrast(tokenSet: TokenSet, options: RepairOptions = {}): RepairResult {
-	const pinned: ReadonlySet<string> = options.pinned ?? defaultPins(tokenSet);
+	const pinned: ReadonlySet<PinKey> = options.pinned ?? defaultPins(tokenSet);
 	const moves = new Map<string, TokenOverride>();
 	const report: RepairEntry[] = [];
 	const stuck = new Map<string, UnrepairedReason>();
@@ -300,12 +300,19 @@ export function repairContrast(tokenSet: TokenSet, options: RepairOptions = {}):
 
 	const unrepaired = checkContrast(current)
 		.filter((entry) => !entry.passes)
-		.map((entry): UnrepairedEntry =>
-			Object.assign(entry, {
-				reason:
-					stuck.get(pairId(entry)) ?? (converged ? 'no-lightness-clears' : 'did-not-converge'),
-			}),
-		);
+		.map((entry): UnrepairedEntry => ({
+			...entry,
+			reason: stuck.get(pairId(entry)) ?? (converged ? 'no-lightness-clears' : 'did-not-converge'),
+		}));
 
-	return { overrides: [...moves.values()], unrepaired, report };
+	// Recomputed against the final `current` rather than trusted from the moment of each move: a
+	// later move can shift a step's neighbours, which changes what "in order" means for an earlier
+	// entry, and a reader of the report only ever sees the set this returns, not the set as it stood
+	// mid-loop.
+	const finalReport = report.map((entry) => ({
+		...entry,
+		outOfOrder: isOutOfOrder(current, entry.scheme, entry.ramp, entry.step),
+	}));
+
+	return { overrides: [...moves.values()], unrepaired, report: finalReport };
 }
