@@ -134,6 +134,7 @@ function version(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		scaleEngine: engine.id,
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 		interpretation: 'balanced',
+		overrides: [],
 		...overrides,
 	};
 }

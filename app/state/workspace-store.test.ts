@@ -58,6 +58,7 @@ function makeVersion(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		scaleEngine: 'cambium-oklch-1',
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 		interpretation: 'balanced',
+		overrides: [],
 		...overrides,
 	};
 }
@@ -914,6 +915,21 @@ const BORDER_TO_8: TokenOverride = {
 	alias: 'neutral.8',
 };
 
+/** `radius.lg` derives to something other than 1 for every seed here. */
+const RADIUS_LG_TO_1: TokenOverride = {
+	kind: 'value',
+	category: 'radius',
+	path: ['lg', 'value'],
+	value: 1,
+};
+
+const RING_TO_BRAND_9: TokenOverride = {
+	kind: 'alias',
+	scheme: 'light',
+	token: 'ring',
+	alias: 'brand.9',
+};
+
 function borderAlias(tokenSet: TokenSet | null): { mirror?: string; light?: string } {
 	return {
 		mirror: tokenSet?.semantic.border?.alias,
@@ -1074,7 +1090,7 @@ describe('the workspace store’s token set and overrides', () => {
 		expect(borderAlias(store.getState().tokenSet).light).toBe('neutral.8');
 	});
 
-	it('commits no token set, so an override never reaches storage', async () => {
+	it('commits no token set even while an override is held', async () => {
 		const { store, recordStore } = openWorkspace();
 
 		store.getState().setOverride(BORDER_TO_8);
@@ -1085,6 +1101,163 @@ describe('the workspace store’s token set and overrides', () => {
 
 		expect(written.tokenSet).toBeNull();
 		expect(written.seed).toEqual(seedWith(30));
+	});
+
+	/** A second version, newer than `makeVersion()`'s, carrying the overrides it is handed. */
+	const savedWith = (overrides: TokenOverride[], seed = seedWith(259.8)) =>
+		makeVersion({ createdAt: '2026-02-01T00:00:00.000Z', ordinal: 2, seed, overrides });
+
+	/** What the same seed derives to with nothing overridden, so a test can tell a restore apart. */
+	const underived = () => openWorkspace().store.getState().tokenSet;
+
+	it('commits the overrides it holds, restored ones included, in the order they were first made', async () => {
+		const { store, recordStore } = openWorkspace(
+			makeRecord([makeVersion(), savedWith([BORDER_TO_8])]),
+		);
+
+		store.getState().setOverride(RADIUS_LG_TO_1);
+		store.getState().setOverride({ ...BORDER_TO_8, alias: 'neutral.3' });
+
+		const committed = await store.getState().commit(PROVENANCE);
+		// Read back through storage rather than off what was handed to `put`, since the stored
+		// record is what the next `open` sees.
+		const stored = await recordStore.get(committed.id);
+
+		// Replacing the border edit keeps its place: it was made first, in the version restored.
+		expect(stored?.versions.at(-1)?.overrides).toEqual([
+			{ ...BORDER_TO_8, alias: 'neutral.3' },
+			RADIUS_LG_TO_1,
+		]);
+	});
+
+	it('opens a record with its newest version’s overrides applied and held by key', async () => {
+		const { store, recordStore } = openWorkspace(makeRecord([]));
+		const stored = await recordStore.put(
+			makeRecord([makeVersion(), savedWith([BORDER_TO_8, RADIUS_LG_TO_1])]),
+		);
+
+		store.getState().open(stored);
+
+		// The oracle is the edit path: opening has to land where setting the same two by hand does.
+		const { store: byHand } = openWorkspace();
+
+		byHand.getState().setOverride(BORDER_TO_8);
+		byHand.getState().setOverride(RADIUS_LG_TO_1);
+
+		const state = store.getState();
+
+		expect(underived()?.radius.values.lg?.value).not.toBe(1);
+		expect(borderAlias(state.tokenSet)).toEqual({ mirror: 'neutral.8', light: 'neutral.8' });
+		expect(state.tokenSet?.radius.values.lg?.value).toBe(1);
+		expect(Object.keys(state.overrides)).toEqual([
+			overrideKey(BORDER_TO_8),
+			overrideKey(RADIUS_LG_TO_1),
+		]);
+		expect(state.overrides).toEqual(byHand.getState().overrides);
+		expect(state.tokenSet).toEqual(byHand.getState().tokenSet);
+		expect(state.overrideIssues).toEqual({});
+	});
+
+	it('restores the selected version’s overrides, not the ones the previous version held', () => {
+		const record = makeRecord([
+			makeVersion({ overrides: [BORDER_TO_8] }),
+			savedWith([RING_TO_BRAND_9]),
+		]);
+		const { store } = openWorkspace(record);
+		const derivedRing = underived()?.semantic.ring?.alias;
+
+		expect(derivedRing).not.toBe('brand.9');
+		expect(store.getState().tokenSet?.semantic.ring?.alias).toBe('brand.9');
+
+		store.getState().selectVersion(1);
+
+		const state = store.getState();
+
+		expect(state.overrides).toEqual({ [overrideKey(BORDER_TO_8)]: BORDER_TO_8 });
+		expect(borderAlias(state.tokenSet).light).toBe('neutral.8');
+		expect(state.tokenSet?.semantic.ring?.alias).toBe(derivedRing);
+	});
+
+	it('discards edits back to the version’s stored overrides, not to none', () => {
+		const { store } = openWorkspace(makeRecord([makeVersion(), savedWith([BORDER_TO_8])]));
+		const derivedRing = underived()?.semantic.ring?.alias;
+
+		store.getState().setOverride({ ...BORDER_TO_8, alias: 'neutral.3' });
+		store.getState().setOverride(RING_TO_BRAND_9);
+		store.getState().discardEdits();
+
+		const state = store.getState();
+
+		expect(state.overrides).toEqual({ [overrideKey(BORDER_TO_8)]: BORDER_TO_8 });
+		expect(borderAlias(state.tokenSet).light).toBe('neutral.8');
+		expect(state.tokenSet?.semantic.ring?.alias).toBe(derivedRing);
+	});
+
+	it('carries provenance forward on a commit that only adds overrides', async () => {
+		const record = makeRecord([makeVersion(), savedWith([BORDER_TO_8])]);
+		const { store } = openWorkspace(record);
+
+		store.getState().setOverride(RING_TO_BRAND_9);
+
+		const next = await store.getState().commit();
+		const previous = record.versions[1]!;
+
+		expect(next.versions[2]).toMatchObject({
+			provider: previous.provider,
+			model: previous.model,
+			promptVersion: previous.promptVersion,
+			fontTable: previous.fontTable,
+			rawResponse: null,
+			seed: previous.seed,
+			overrides: [BORDER_TO_8, RING_TO_BRAND_9],
+		});
+	});
+
+	it('opens a stored override the base cannot take as an issue, and applies the rest', () => {
+		const toSpare: TokenOverride = { ...BORDER_TO_8, token: 'ring', alias: 'spare.11' };
+		const record = makeRecord([makeVersion(), savedWith([toSpare, BORDER_TO_8])]);
+		let opened!: ReturnType<typeof openWorkspace>;
+
+		// Hue 259.8 gives `reshapingEngine` no spare ramp, so `spare.11` has no target on open.
+		expect(() => {
+			opened = openWorkspace(record, { engine: reshapingEngine() });
+		}).not.toThrow();
+
+		const { store } = opened;
+		let state = store.getState();
+
+		expect(Object.keys(state.overrides)).toEqual([overrideKey(toSpare), overrideKey(BORDER_TO_8)]);
+		expect(Object.keys(state.overrideIssues)).toEqual([overrideKey(toSpare)]);
+		expect(state.tokenSet?.semantic.ring?.alias).toBe(underived()?.semantic.ring?.alias);
+		expect(borderAlias(state.tokenSet).light).toBe('neutral.8');
+
+		store.getState().editSeed({ keyColors: seedWith(30).keyColors });
+		state = store.getState();
+
+		expect(state.overrideIssues).toEqual({});
+		expect(state.tokenSet?.semantic.ring?.alias).toBe('spare.11');
+	});
+
+	it('commits the overrides held when the commit was asked for, not one set mid-write', async () => {
+		const { store, records, writeInFlight, releaseWrite } = gatedWorkspace();
+
+		store.getState().open(makeRecord([makeVersion(), savedWith([BORDER_TO_8])]));
+
+		const pending = store.getState().commit();
+
+		await writeInFlight;
+		store.getState().setOverride(RING_TO_BRAND_9);
+		releaseWrite();
+
+		const committed = await pending;
+		const stored = await records.get(committed.id);
+
+		expect(stored?.versions.at(-1)?.overrides).toEqual([BORDER_TO_8]);
+		// The mid-write edit is the user's, so the workspace keeps it on top of what was committed.
+		expect(Object.keys(store.getState().overrides)).toEqual([
+			overrideKey(BORDER_TO_8),
+			overrideKey(RING_TO_BRAND_9),
+		]);
 	});
 
 	const twoVersions = () =>
@@ -1103,7 +1276,7 @@ describe('the workspace store’s token set and overrides', () => {
 			(s: ReturnType<typeof openWorkspace>['store']) => s.getState().selectVersion(1),
 		],
 		['discardEdits', (s: ReturnType<typeof openWorkspace>['store']) => s.getState().discardEdits()],
-	])('drops overrides on %s and shows the derived value again', (_name, act) => {
+	])('drops unsaved overrides on %s and shows the derived value again', (_name, act) => {
 		const record = twoVersions();
 		const { store } = openWorkspace(record);
 

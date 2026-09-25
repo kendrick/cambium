@@ -24,6 +24,7 @@ function makeVersion(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		scaleEngine: 'cambium-oklch-1',
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 		interpretation: 'balanced',
+		overrides: [],
 		...overrides,
 	};
 }
@@ -1131,6 +1132,41 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			await store.put(record);
 
 			expect((await store.get(record.id))?.versions).toEqual([v1, v2, v3]);
+		});
+
+		// #26 stores the user's edits instead of the token set they'd produce, so a version's
+		// `overrides` has to round-trip exactly like any other field: nothing here should collapse,
+		// reorder, or drop an entry on the way to storage and back.
+		it('round-trips a version carrying two overrides unchanged', async () => {
+			const record = makeRecord({
+				versions: [
+					makeVersion({
+						overrides: [
+							{ kind: 'alias', scheme: 'light', token: 'primary', alias: 'brand.4' },
+							{ kind: 'value', category: 'radius', path: ['lg', 'value'], value: 12 },
+						],
+					}),
+				],
+			});
+
+			const stored = await store.put(record);
+			expect(stored.versions[0]?.overrides).toEqual(record.versions[0]?.overrides);
+			expect((await read(store, record.id)).versions[0]?.overrides).toEqual(
+				record.versions[0]?.overrides,
+			);
+		});
+
+		// `schemaVersion` is a `z.literal`, so a record stamped with the version this one superseded
+		// fails the same validation a smuggled field does above: `put` writes nothing, and the error
+		// names the field that tripped it rather than reading as a generic rejection.
+		it('rejects a record stamped with the previous schema version', async () => {
+			const stale = {
+				...makeRecord(),
+				schemaVersion: SCHEMA_VERSION - 1,
+			} as unknown as BrandRecord;
+
+			await expect(store.put(stale)).rejects.toThrow(/schemaVersion/);
+			expect(await store.get(stale.id)).toBeNull();
 		});
 	});
 

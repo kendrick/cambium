@@ -169,6 +169,7 @@ type CommitRequest = {
 	activeOrdinal: number | null;
 	draftSeed: BrandSeed | null;
 	preset: Interpretation;
+	overrides: Record<string, TokenOverride>;
 };
 
 export type WorkspaceState = {
@@ -202,10 +203,12 @@ export type WorkspaceState = {
 	/**
 	 * The user's edits on top of the derived set, keyed by `overrideKey`, in the order they were first
 	 * made. Draft state like `draftSeed`: `editSeed` and `selectPreset` keep them, and everything that
-	 * resets the draft to a version (`open`, `close`, `selectVersion`, `discardEdits`) drops them.
+	 * resets the draft to a version (`open`, `close`, `selectVersion`, `discardEdits`) replaces them
+	 * with that version's stored `overrides`.
 	 *
-	 * Never persisted. `commit` writes `tokenSet: null` whatever is held here, so a committed version
-	 * does not carry them; persisting overrides is a follow-up to #26 and a schema change.
+	 * `commit` writes them onto the new version as a list in this order, and still writes
+	 * `tokenSet: null`. The overrides are the user's input and the token set is arithmetic on it, so
+	 * only the input is stored.
 	 */
 	overrides: Record<string, TokenOverride>;
 	/**
@@ -375,10 +378,15 @@ function workspaceFor(
 ): Pick<WorkspaceState, 'draftSeed' | 'preset' | 'overrides'> & Derivation {
 	const draftSeed = version?.seed ?? null;
 	const preset = version?.interpretation ?? 'balanced';
+	// Landing on a version takes its stored overrides and drops the draft's, the same as the seed.
+	// Keeping the draft's would apply one version's edits to another version's tokens. The schema
+	// refuses a repeated key, so keying loses nothing, and a stored override this base can't take
+	// ends up in `overrideIssues` rather than throwing.
+	const overrides = Object.fromEntries(
+		(version?.overrides ?? []).map((override) => [overrideKey(override), override]),
+	);
 
-	// Overrides are edits to the draft, so landing on a version drops them with the rest of the
-	// draft. Keeping them would apply one version's edits to another version's tokens.
-	return { draftSeed, preset, overrides: {}, ...derivation(engine, draftSeed, preset, {}) };
+	return { draftSeed, preset, overrides, ...derivation(engine, draftSeed, preset, overrides) };
 }
 
 function versionAt(record: BrandRecord, ordinal: number | null): BrandVersion | null {
@@ -480,7 +488,7 @@ export function createWorkspaceStore({
 }: WorkspaceStoreOptions): StoreApi<WorkspaceState> {
 	return createStore<WorkspaceState>()((set, get) => {
 		async function appendVersion(request: CommitRequest): Promise<BrandRecord> {
-			const { provenance, activeOrdinal, draftSeed, preset } = request;
+			const { provenance, activeOrdinal, draftSeed, preset, overrides } = request;
 
 			// A queued commit belongs to the workspace that asked for it. `commit` captures the request
 			// synchronously and this body runs a turn later at the earliest, so by now the workspace can
@@ -519,6 +527,10 @@ export function createWorkspaceStore({
 				// `BrandRecordSchema` accepts the version, and it reads as generated ever after.
 				// `rawResponse` decays to null on its own; these three do not, so the caller has to say
 				// where an edited seed came from.
+				//
+				// Overrides don't count as an edit here. They leave the seed alone, so the model still
+				// produced everything they sit on, and the version's own `overrides` list records what
+				// the user changed.
 				if (!sameSeed(draftSeed, active.seed)) {
 					throw new Error(
 						'this commit edits the seed, so it needs explicit provenance: no model produced this seed',
@@ -552,8 +564,10 @@ export function createWorkspaceStore({
 				ordinal: record.versions.length + 1,
 				seed: draftSeed,
 				// Derived tokens are recomputed, never stored. Writing them would put the same facts in
-				// two places and let a stored set outlive the engine that produced it.
+				// two places and let a stored set outlive the engine that produced it. The overrides are
+				// stored instead, because they are the user's input the way the seed is the model's.
 				tokenSet: null,
+				overrides: Object.values(overrides),
 				scaleEngine: engine.id,
 				interpretation: preset,
 			};
@@ -790,7 +804,7 @@ export function createWorkspaceStore({
 				// version or keep typing while this waits behind an earlier write, and a commit that read
 				// the workspace then would persist that instead, under provenance describing a seed it
 				// never saw.
-				const { activeOrdinal, draftSeed, preset } = get();
+				const { activeOrdinal, draftSeed, preset, overrides } = get();
 				const request: CommitRequest = {
 					provenance,
 					session,
@@ -798,6 +812,7 @@ export function createWorkspaceStore({
 					activeOrdinal,
 					draftSeed,
 					preset,
+					overrides,
 				};
 
 				// Both arms run the commit: a rejected one must not wedge every commit behind it.

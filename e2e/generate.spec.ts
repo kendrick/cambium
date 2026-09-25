@@ -251,6 +251,7 @@ async function commitVersionFromAnotherTab(page: Page, recordId: string): Promis
 				scaleEngine: 'cambium-oklch-1',
 				fontTable: { source: 'cambium-e2e-other-tab', version: '1' },
 				interpretation: 'balanced',
+				overrides: [],
 			},
 		],
 	});
