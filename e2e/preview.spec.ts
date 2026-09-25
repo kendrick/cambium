@@ -321,6 +321,7 @@ function buildRecord(): BrandRecord {
 				scaleEngine: 'cambium-oklch-1',
 				fontTable: { source: 'cambium-e2e-fixture', version: '1' },
 				interpretation: 'balanced',
+				overrides: [],
 			},
 		],
 	});
