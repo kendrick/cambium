@@ -533,8 +533,11 @@ test('an axe scan of the preview in both schemes, reported rather than asserted'
 
 		const results = await new AxeBuilder({ page }).include('[data-preview]').analyze();
 
-		// Reported, not asserted: contrast repair is #8's job, and until it lands a violation here is
-		// a finding about the token set rather than a regression in the preview.
+		// Reported, not asserted. #8's repair clears every pair `core/contrast/pairs.ts` declares, and
+		// what axe still finds here sits outside that list: the pinned brand colour as text on the
+		// page, `muted-foreground` on `sidebar-accent`, and destructive text over a tint of itself.
+		// No token repair reaches those, so a violation here is a finding about how the preview pairs
+		// tokens rather than a regression.
 		for (const violation of results.violations) {
 			test.info().annotations.push({
 				type: `axe ${scheme}`,
