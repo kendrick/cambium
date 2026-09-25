@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { BrandSeedSchema } from './brand-seed';
+import { cssNaming, toGlobalsCss } from './css/globals-css';
+import { scalarDeclarations, schemeDeclarations } from './css/scheme-declarations';
+import { toStylesheet } from './css/stylesheet';
+import { toDarkThemeLayer, toThemeBlock } from './css/theme-block';
 import { SPEC_TOKEN_SET } from './dtcg/dtcg.fixture';
 import { deserializeDtcg } from './dtcg/deserialize';
 import { summarizeViolations } from './dtcg/report';
@@ -65,6 +69,14 @@ const tokenSet = {
 	schemes: { light: layer, dark: layer },
 	...NON_COLOR_FIXTURE,
 };
+
+/**
+ * `tokenSet` re-read through the schema, for the `core/css/` adapters below: they take a `TokenSet`
+ * with mutable tuple fields, and `NON_COLOR_FIXTURE`'s `as const` leaves `tokenSet` itself carrying
+ * `readonly` ones, `motion.values.easing.standard.value` among them. `css.fixture.ts`'s `PINNED_SET`
+ * takes the same route for the same reason.
+ */
+const cssTokenSet = TokenSetSchema.parse(tokenSet);
 
 const rawResponse = {
 	raw: JSON.stringify(seed),
@@ -305,6 +317,24 @@ describe('core purity', () => {
 					summary?.likelyCause === 'must be < 360'
 				);
 			},
+		],
+		// The four `core/css/` adapters and the two declaration maps `core/css/scheme-declarations.ts`
+		// builds from the same halves all refuse a token set naming anything outside the generator's
+		// own vocabulary, and `cssTokenSet` names nothing else: one ramp ('brand'), one semantic alias
+		// ('border'), one shadow step, radius step, type size, weight, line height and tracking step,
+		// each a name the generator itself emits. That is what lets it stand in here instead of the
+		// heavier `GENERATED_SET` fixture in `core/css/css.fixture.ts`.
+		['toStylesheet', () => toStylesheet(cssTokenSet).length > 0],
+		['toGlobalsCss', () => toGlobalsCss(cssTokenSet, cssNaming()).length > 0],
+		['toThemeBlock', () => toThemeBlock(cssTokenSet, cssNaming()).length > 0],
+		['toDarkThemeLayer', () => toDarkThemeLayer(cssTokenSet, cssNaming()).length > 0],
+		[
+			'schemeDeclarations',
+			() => Object.keys(schemeDeclarations(cssTokenSet, 'light', cssNaming())).length > 0,
+		],
+		[
+			'scalarDeclarations',
+			() => Object.keys(scalarDeclarations(cssTokenSet, cssNaming())).length > 0,
 		],
 	])('%s parses a valid value without reaching the network', (_name, parses) => {
 		vi.stubGlobal('fetch', () => {
