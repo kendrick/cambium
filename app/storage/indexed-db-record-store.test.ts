@@ -65,7 +65,8 @@ function makeRecordWithImage(): BrandRecord {
 		id: crypto.randomUUID(),
 		schemaVersion: SCHEMA_VERSION,
 		revision: 1,
-		images: [{ id: 'img-1', downscaled, originalHash: 'sha256:abc' }],
+		brandUrl: null,
+		images: [{ id: 'img-1', downscaled, originalHash: 'sha256:abc', tag: 'auto' }],
 		versions: [
 			{
 				createdAt: '2026-01-01T00:00:00.000Z',
@@ -74,7 +75,7 @@ function makeRecordWithImage(): BrandRecord {
 				tokenSet: null,
 				provider: 'anthropic',
 				model: 'claude-opus-5',
-				promptVersion: 'seed-v3',
+				promptVersion: 'seed-v4',
 				rawResponse: null,
 				scaleEngine: 'cambium-oklch-1',
 				fontTable: { source: 'in-repo', version: 'cambium-curated-1' },

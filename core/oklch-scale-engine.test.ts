@@ -35,7 +35,6 @@ const seed = (overrides = {}) =>
 			},
 		],
 		neutralTemperature: null,
-		surfacePolarity: null,
 		radiusCharacter: null,
 		shadowCharacter: null,
 		trackingFeel: null,

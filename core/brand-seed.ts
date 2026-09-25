@@ -186,7 +186,6 @@ const rankedByExpressiveScore = z
 export const BrandSeedSchema = z.strictObject({
 	keyColors: z.array(KeyColorSchema).nullable(),
 	neutralTemperature: z.strictObject({ hue: HueSchema, chroma: z.number().min(0) }).nullable(),
-	surfacePolarity: z.enum(['light-first', 'dark-first']).nullable(),
 	radiusCharacter: z
 		.strictObject({ base: z.number().min(0), progression: z.enum(['sharp', 'soft', 'pill']) })
 		.nullable(),

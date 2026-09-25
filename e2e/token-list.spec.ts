@@ -45,7 +45,6 @@ const SEED: BrandSeed = {
 		},
 	],
 	neutralTemperature: null,
-	surfacePolarity: null,
 	radiusCharacter: null,
 	shadowCharacter: null,
 	trackingFeel: null,
@@ -276,8 +275,14 @@ function buildRecordWithSeed(seed: BrandSeed, overrides: TokenOverride[] = []): 
 		id: randomUUID(),
 		schemaVersion: SCHEMA_VERSION,
 		revision: FIRST_REVISION,
+		brandUrl: null,
 		images: [
-			{ id: 'img-1', downscaled: 'data:image/png;base64,AAAA', originalHash: 'sha256-fixture' },
+			{
+				id: 'img-1',
+				downscaled: 'data:image/png;base64,AAAA',
+				originalHash: 'sha256-fixture',
+				tag: 'auto',
+			},
 		],
 		versions: [
 			{

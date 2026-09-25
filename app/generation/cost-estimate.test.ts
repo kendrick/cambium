@@ -88,7 +88,12 @@ describe('formatUsdCeiling', () => {
  */
 describe('generationPromptChars', () => {
 	const images = [
-		{ id: 'img-logo', downscaled: 'data:image/png;base64,Ag==', originalHash: 'sha256-logo' },
+		{
+			id: 'img-logo',
+			downscaled: 'data:image/png;base64,Ag==',
+			originalHash: 'sha256-logo',
+			tag: 'auto' as const,
+		},
 	];
 
 	it('prices a repair as the first request plus the answer and every issue it names', () => {

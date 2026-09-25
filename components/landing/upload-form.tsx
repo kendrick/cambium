@@ -19,22 +19,15 @@ import {
 } from '@/lib/image-intake';
 
 import type { BrandRecord } from '../../core/brand-record';
+import { BRAND_URL_MAX_LENGTH } from '../../core/brand-url';
 
 /**
  * A picked image as the form holds it: what was stored, what the person called it, and the tag they
  * applied.
  *
- * `tag` lives here and nowhere else. `ReferenceImageSchema` is a `z.strictObject` holding an id, a
- * downscaled data URL, and a hash of the original, with no slot for a tag, so a tag drives the
- * guidance below and then dies with the page.
- *
- * Storing it beside the record rather than in it was considered and rejected. `app/storage/` could
- * hold a second object store keyed by image id without touching `core/`, and that is the wrong
- * trade: issue #1 makes the export archive the only migration path, and `SCHEMA_VERSION` exists so
- * that a record whose shape moved fails loudly. Metadata the archive cannot see would migrate
- * silently and wrongly, which is worse than metadata that is honestly absent. Closing this properly
- * needs a field on `ReferenceImageSchema` and a `SCHEMA_VERSION` bump, which is `core/` work. #77
- * owns it and is blocked on this ticket and #9.
+ * `tag` lives here rather than on `PreparedImage`, because intake runs before a person has chosen
+ * one. `save` below folds it onto `prepared.image` to build the `ReferenceImage`
+ * `ReferenceImageSchema` now requires (#77).
  */
 type PickedImage = {
 	name: string;
@@ -42,7 +35,8 @@ type PickedImage = {
 	prepared: PreparedImage;
 };
 
-const TAG_LABELS: Record<ImageTag, string> = {
+/** Exported so the saved view in `landing-route.tsx` prints the same words the picker offered. */
+export const TAG_LABELS: Record<ImageTag, string> = {
 	auto: 'Automatic',
 	logo: 'Logo',
 	ui: 'Interface',
@@ -328,7 +322,13 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				id: crypto.randomUUID(),
 				schemaVersion: SCHEMA_VERSION,
 				revision: FIRST_REVISION,
-				images: picked.map((image) => image.prepared.image),
+				// `tag` folded on here rather than carried on `PreparedImage`: intake runs before the
+				// person has chosen one, and this is the one place that holds both halves.
+				images: picked.map(({ tag, prepared }) => ({ ...prepared.image, tag })),
+				// Trimmed, and empty collapses to null rather than "". `BrandRecordSchema.brandUrl` is
+				// `.min(1).nullable()`, so an empty string would fail the parse instead of just meaning
+				// "nothing typed".
+				brandUrl: brandUrl.trim() || null,
 				// No versions yet. Producing the first one needs a key and a model call, which is #23.
 				versions: [],
 			};
@@ -461,13 +461,19 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				</label>
 				<input
 					className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+					// Frozen while a save runs, like the image controls: `save` closes over the value from
+					// the submit render, so an edit made mid-save would be dropped without a word.
+					disabled={busy}
 					id={brandUrlId}
 					inputMode="url"
+					// The schema refuses anything longer, and that refusal surfaces from `store.put` as the
+					// generic storage failure, which no retry with the same text can clear.
+					maxLength={BRAND_URL_MAX_LENGTH}
 					onChange={(event) => setBrandUrl(event.target.value)}
 					placeholder="https://example.com"
 					// Deliberately not `type="url"`. That attribute brought native constraint validation with
-					// it, which refused to submit the form over a field that is optional, is never fetched,
-					// and is not even stored yet: "acme.com" is how people write a domain, and typing it left
+					// it, which refused to submit the form over a field that is optional and never
+					// fetched: "acme.com" is how people write a domain, and typing it left
 					// the images unsaved with no message at all, because `save` never ran. `inputMode` is
 					// what summons the URL keyboard on a phone, so nothing is lost by dropping the type.
 					//
@@ -479,11 +485,10 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				/>
 				{/* Captured and never fetched. Nothing on this route makes a network call, and crawling a
 				    site somebody named would be a different product with a different privacy story.
-				    It reaches no further than this form for now, for the same reason the tag above does:
-				    `BrandRecordSchema` is strict and has no field for it. #77 adds one. */}
-				<p className="text-muted-foreground text-sm">
-					Cambium never opens it, and it is not saved with the record yet.
-				</p>
+				    `BrandRecordSchema.brandUrl` stores it as plain text for exactly that reason (#77): a
+				    field that is never parsed or requested cannot fail on the domains-without-scheme people
+				    actually type. */}
+				<p className="text-muted-foreground text-sm">Cambium never opens it.</p>
 			</div>
 
 			<Button disabled={picked.length < MIN_REFERENCE_IMAGES || busy} type="submit">

@@ -45,7 +45,12 @@ const API_KEY = 'sk-ant-LEAK-SENTINEL-9f3ac0b2e7';
 const CONFIGURED_MODEL = 'claude-opus-5-configured';
 
 const IMAGES: ReferenceImage[] = [
-	{ id: 'img-1', downscaled: 'data:image/webp;base64,AA', originalHash: 'sha256:img-1' },
+	{
+		id: 'img-1',
+		downscaled: 'data:image/webp;base64,AA',
+		originalHash: 'sha256:img-1',
+		tag: 'auto',
+	},
 ];
 
 /**
@@ -288,7 +293,14 @@ describe('createAnthropicBrandReader failures', () => {
 	it.each([
 		{
 			label: 'an image that is not a base64 data URL',
-			images: [{ id: 'broken', downscaled: 'not-a-data-url', originalHash: 'sha256:broken' }],
+			images: [
+				{
+					id: 'broken',
+					downscaled: 'not-a-data-url',
+					originalHash: 'sha256:broken',
+					tag: 'auto' as const,
+				},
+			],
 			expected: /broken/,
 		},
 		{ label: 'no images at all', images: [], expected: /at least one reference image/ },

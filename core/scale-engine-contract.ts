@@ -75,7 +75,6 @@ function seedWith(brand: OklchTriple, overrides: Partial<BrandSeed> = {}): Brand
 			{ oklch: brand, proposedRole: 'brand', sourceImageId: 'img-1', sourceRegion: null },
 		],
 		neutralTemperature: null,
-		surfacePolarity: null,
 		radiusCharacter: null,
 		shadowCharacter: null,
 		trackingFeel: null,

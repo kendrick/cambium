@@ -50,7 +50,6 @@ const seed = {
 		},
 	],
 	neutralTemperature: null,
-	surfacePolarity: null,
 	radiusCharacter: null,
 	shadowCharacter: null,
 	trackingFeel: null,
@@ -71,7 +70,7 @@ const rawResponse = {
 	raw: JSON.stringify(seed),
 	provider: 'anthropic',
 	model: 'claude-opus-5',
-	promptVersion: 'seed-v3',
+	promptVersion: 'seed-v4',
 };
 
 const dtcgDocument = {
@@ -108,7 +107,15 @@ const record = {
 	id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
 	schemaVersion: SCHEMA_VERSION,
 	revision: 1,
-	images: [{ id: 'img-1', downscaled: 'data:image/webp;base64,AA', originalHash: 'sha256:abc' }],
+	brandUrl: null,
+	images: [
+		{
+			id: 'img-1',
+			downscaled: 'data:image/webp;base64,AA',
+			originalHash: 'sha256:abc',
+			tag: 'auto',
+		},
+	],
 	versions: [
 		{
 			createdAt: '2026-09-16T12:00:00.000Z',
@@ -117,7 +124,7 @@ const record = {
 			tokenSet,
 			provider: 'anthropic',
 			model: 'claude-opus-5',
-			promptVersion: 'seed-v3',
+			promptVersion: 'seed-v4',
 			rawResponse: '{"keyColors":[{"proposedRole":"brand"}]}',
 			scaleEngine: 'cambium-oklch-1',
 			fontTable: { source: 'in-repo', version: 'cambium-curated-1' },

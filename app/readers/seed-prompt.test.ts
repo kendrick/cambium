@@ -52,7 +52,6 @@ const fullExample = {
 		},
 	],
 	neutralTemperature: { hue: 259.8, chroma: 0.008 },
-	surfacePolarity: 'light-first',
 	radiusCharacter: { base: 8, progression: 'soft' },
 	shadowCharacter: { spread: 'diffuse', tintFromSurface: true },
 	trackingFeel: 'normal',
@@ -114,7 +113,6 @@ const coloursOnlyExample = {
 		},
 	],
 	neutralTemperature: null,
-	surfacePolarity: null,
 	radiusCharacter: null,
 	shadowCharacter: null,
 	trackingFeel: null,
@@ -126,12 +124,11 @@ const coloursOnlyExample = {
 };
 
 describe('seed prompt version', () => {
-	// Seven of the eight fixtures under core/fixtures/raw-responses/ were captured under this
-	// version, and each asserts that it produces the current eleven-key shape. The eighth,
-	// prose-not-json.json, is stamped seed-v2 and stays that way: it records a model answering in
-	// prose, which says nothing about a shape and so pins nothing to a version.
-	it('is the version the recorded fixtures were captured under', () => {
-		expect(SEED_PROMPT_VERSION).toBe('seed-v3');
+	// #83 dropped surfacePolarity from the seed, which is a shape change a fixture captured under
+	// seed-v3 cannot describe: bumping here is what lets a stored promptVersion say which prompt
+	// produced a given record, per the docblock above SEED_PROMPT_VERSION.
+	it('moved to seed-v4 when surfacePolarity left the seed', () => {
+		expect(SEED_PROMPT_VERSION).toBe('seed-v4');
 	});
 });
 
@@ -241,5 +238,16 @@ describe('the prompt', () => {
 	// that leaked the images into the standing text would break the split without failing anything.
 	it('keeps the standing instruction longer than the line that accompanies the images', () => {
 		expect(SEED_SYSTEM_PROMPT.length).toBeGreaterThan(SEED_USER_DIRECTIVE.length * 4);
+	});
+
+	// The prompt spells its field count as a word, which the key-list checks above can't see. Pinning
+	// the schema at ten here means a field added later fails this test until the "ten fields"
+	// sentences move with it.
+	it('says the field count the schema actually has, and drops the retired field', () => {
+		expect(seedKeys).toHaveLength(10);
+		expect(SEED_TOOL_DESCRIPTION).toContain('ten fields');
+		expect(SEED_SYSTEM_PROMPT).toContain('ten fields');
+		expect(SEED_TOOL_DESCRIPTION).not.toContain('surfacePolarity');
+		expect(SEED_SYSTEM_PROMPT).not.toContain('surfacePolarity');
 	});
 });

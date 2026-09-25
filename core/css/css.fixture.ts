@@ -206,7 +206,6 @@ export const GENERATED_SET: TokenSet = (() => {
 			},
 		],
 		neutralTemperature: null,
-		surfacePolarity: null,
 		radiusCharacter: null,
 		shadowCharacter: null,
 		trackingFeel: null,

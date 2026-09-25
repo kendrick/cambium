@@ -33,7 +33,6 @@ function seedWith(hue: number): BrandSeed {
 			},
 		],
 		neutralTemperature: null,
-		surfacePolarity: null,
 		radiusCharacter: null,
 		shadowCharacter: null,
 		trackingFeel: null,
@@ -53,7 +52,7 @@ function makeVersion(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		tokenSet: null,
 		provider: 'anthropic',
 		model: 'claude-opus-5',
-		promptVersion: 'seed-v3',
+		promptVersion: 'seed-v4',
 		rawResponse: '{"keyColors":[]}',
 		scaleEngine: 'cambium-oklch-1',
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
@@ -68,7 +67,15 @@ function makeRecord(versions: BrandVersion[] = [makeVersion()]): BrandRecord {
 		id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
 		schemaVersion: SCHEMA_VERSION,
 		revision: 1,
-		images: [{ id: 'img-1', downscaled: 'data:image/png;base64,AA==', originalHash: 'sha256-aa' }],
+		brandUrl: null,
+		images: [
+			{
+				id: 'img-1',
+				downscaled: 'data:image/png;base64,AA==',
+				originalHash: 'sha256-aa',
+				tag: 'auto',
+			},
+		],
 		versions,
 	};
 }
@@ -250,7 +257,6 @@ describe('the workspace store', () => {
 		expect(store.getState().draftSeed).toEqual({
 			keyColors: null,
 			neutralTemperature: null,
-			surfacePolarity: null,
 			radiusCharacter: null,
 			shadowCharacter: null,
 			trackingFeel: 'wide',
@@ -426,7 +432,7 @@ describe('the workspace store', () => {
 		expect(next.versions[1]).toMatchObject({
 			provider: 'anthropic',
 			model: 'claude-opus-5',
-			promptVersion: 'seed-v3',
+			promptVersion: 'seed-v4',
 			fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 			// Null exactly because no model call produced this version, which is what the schema's own
 			// comment says null there means.

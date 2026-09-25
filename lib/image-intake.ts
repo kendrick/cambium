@@ -1,10 +1,14 @@
 import type { ReferenceImage } from '../core/brand-record';
 
 /**
- * Turns a file the user picked into the `ReferenceImage` a `BrandRecord` stores: sniff the real
- * format, downscale it if it is bigger than the model needs, and hash the original for
+ * Turns a file the user picked into everything a `ReferenceImage` needs except its `tag`: sniff
+ * the real format, downscale it if it is bigger than the model needs, and hash the original for
  * provenance. One module because those are three steps of one pipeline and every caller wants
  * one answer, not three functions to wire together the same way each time.
+ *
+ * The tag is left out because intake runs before a person has chosen one. `tag` on
+ * `ReferenceImageSchema` is required (#77), so `components/landing/upload-form.tsx` adds it from
+ * the form's own state at save time, rather than this module inventing a second default.
  *
  * `ReferenceImage` is imported as a type only. `core/brand-record.ts` imports zod at module
  * scope, and zod costs about 93 kB gzip against a 200 kB first-load budget that already spends
@@ -253,9 +257,16 @@ export const platformImageCodec: ImageCodec = {
 	},
 };
 
+/**
+ * A `ReferenceImage` missing its `tag`. Intake has no tag to give: it is the picker's own read of
+ * a person's choice, made after this module has already returned. `components/landing/upload-form.tsx`
+ * fills it in before the image reaches `BrandRecord`.
+ */
+export type UntaggedReferenceImage = Omit<ReferenceImage, 'tag'>;
+
 /** What `prepareReferenceImage` hands back on success. */
 export type PreparedImage = {
-	image: ReferenceImage;
+	image: UntaggedReferenceImage;
 	mediaType: AcceptedImageType;
 	/** Read back off the ENCODED blob, never off the resize that was requested. */
 	width: number;
@@ -367,7 +378,8 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 
 /**
- * Turns a picked file into the `ReferenceImage` a `BrandRecord` stores.
+ * Turns a picked file into everything a stored `ReferenceImage` holds except its `tag`, which the
+ * form adds once a person has picked one.
  *
  * Rejects by returning rather than throwing: picking the wrong file is an ordinary user action,
  * not an exceptional one, the same reasoning `LocalExtraction` uses in
@@ -442,7 +454,7 @@ export async function prepareReferenceImage(
 	const storedBytes = passthrough ? original : new Uint8Array(await stored.arrayBuffer());
 	const downscaled = `data:${mediaType};base64,${toBase64(storedBytes)}`;
 
-	const image: ReferenceImage = { id: crypto.randomUUID(), downscaled, originalHash };
+	const image: UntaggedReferenceImage = { id: crypto.randomUUID(), downscaled, originalHash };
 
 	return {
 		kind: 'prepared',

@@ -28,8 +28,7 @@ import { type BrandRecord, FIRST_REVISION } from '../../core/brand-record';
  *
  * The guarantee covers every field, because `revision` counts commits of the record rather than
  * entries in its history. A write that adds a reference image and appends no version still moves
- * the revision, so `put` stores it. That covers `images` today, and an image tag and a brand URL
- * once #77 lands.
+ * the revision, so `put` stores it. That covers `images`, each image's `tag`, and `brandUrl`.
  *
  * A caller carries `revision` through a commit unchanged, images-only ones included, because it
  * says which revision the copy was read at and committing does not change that. The record `put`
@@ -180,7 +179,7 @@ export type RecordStore = {
  * being null; and `z.array` yields dense arrays, so no hole does either. Both sides have been
  * through that parse: the incoming record at the top of `put`, the stored one when it was written.
  * A change relaxing any of those weakens this comparison with nothing failing to say so. #77 is not
- * that change: it adds a tag to `ReferenceImageSchema` and an optional brand URL to
+ * that change: it added a tag to `ReferenceImageSchema` and a nullable brand URL to
  * `BrandRecordSchema`, and neither sits inside `versions`.
  *
  * `-0` is the one value the schema admits that serialises like another. It collapses to `0` here,

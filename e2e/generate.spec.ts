@@ -224,7 +224,6 @@ async function commitVersionFromAnotherTab(page: Page, recordId: string): Promis
 			},
 		],
 		neutralTemperature: null,
-		surfacePolarity: null,
 		radiusCharacter: null,
 		shadowCharacter: null,
 		trackingFeel: null,

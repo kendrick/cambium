@@ -6,12 +6,12 @@ import { ExpressiveAxisSchema } from '../../core/brand-seed';
  * a model returns: the recorded fixtures under `core/fixtures/raw-responses/` are pinned to a
  * version, and a silently edited prompt makes them lie about what produced them.
  */
-export const SEED_PROMPT_VERSION = 'seed-v3';
+export const SEED_PROMPT_VERSION = 'seed-v4';
 
 export const SEED_TOOL_NAME = 'emit_brand_seed';
 
 export const SEED_TOOL_DESCRIPTION =
-	'Record the Brand Seed read off the reference images. Call once, with all eleven fields present and null wherever the images do not answer the question.';
+	'Record the Brand Seed read off the reference images. Call once, with all ten fields present and null wherever the images do not answer the question.';
 
 /**
  * Nullability as `anyOf`, never the `nullable` keyword, which is OpenAPI and not JSON Schema.
@@ -145,7 +145,6 @@ export const SEED_JSON_SCHEMA = {
 	required: [
 		'keyColors',
 		'neutralTemperature',
-		'surfacePolarity',
 		'radiusCharacter',
 		'shadowCharacter',
 		'trackingFeel',
@@ -173,10 +172,6 @@ export const SEED_JSON_SCHEMA = {
 				},
 			},
 		}),
-		surfacePolarity: nullable(
-			'Whether the brand reads as dark ink on a light ground or the reverse. Judge the brand, not the photograph’s exposure.',
-			{ type: 'string', enum: ['light-first', 'dark-first'] },
-		),
 		radiusCharacter: nullable('How the brand treats corners.', {
 			type: 'object',
 			additionalProperties: false,
@@ -309,7 +304,7 @@ A Brand Seed is a compact description of a brand's visual character. A determini
 
 This is interpretation, not extraction. A logo or a screenshot almost never contains a destructive colour, a full neutral ramp, or a popover surface, and the pipeline invents those from what you give it. Your job is to be right about the few things the images actually show.
 
-Return the seed as a single JSON object. All eleven fields must be present: keyColors, neutralTemperature, surfacePolarity, radiusCharacter, shadowCharacter, trackingFeel, typeClassification, suggestedPairing, typeScaleRatio, imageClassifications, expressive. Where the images do not answer a question, the value is null. Null is a real answer and beats a plausible guess, because a user can see a null and fill it in but cannot tell an invented value from an observed one.
+Return the seed as a single JSON object. All ten fields must be present: keyColors, neutralTemperature, radiusCharacter, shadowCharacter, trackingFeel, typeClassification, suggestedPairing, typeScaleRatio, imageClassifications, expressive. Where the images do not answer a question, the value is null. Null is a real answer and beats a plausible guess, because a user can see a null and fill it in but cannot tell an invented value from an observed one.
 
 Read the field descriptions in the JSON schema. They say what each field means and what range it takes.
 

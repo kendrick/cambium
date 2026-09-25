@@ -130,7 +130,7 @@ function version(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		tokenSet: null,
 		provider: 'anthropic',
 		model: 'claude-opus-5',
-		promptVersion: 'seed-v3',
+		promptVersion: 'seed-v4',
 		rawResponse: '{"earlier":true}',
 		scaleEngine: engine.id,
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
@@ -149,12 +149,19 @@ function record(versions: BrandVersion[]): BrandRecord {
 		id: RECORD_ID,
 		schemaVersion: SCHEMA_VERSION,
 		revision: 1,
+		brandUrl: null,
 		images: [
-			{ id: 'img-logo', downscaled: 'data:image/png;base64,AA==', originalHash: 'sha256-logo' },
+			{
+				id: 'img-logo',
+				downscaled: 'data:image/png;base64,AA==',
+				originalHash: 'sha256-logo',
+				tag: 'auto',
+			},
 			{
 				id: 'img-packaging',
 				downscaled: 'data:image/png;base64,AQ==',
 				originalHash: 'sha256-pack',
+				tag: 'auto',
 			},
 		],
 		versions,
@@ -225,7 +232,12 @@ async function overtaken(start: BrandRecord): Promise<Stored> {
 		...setup.stored,
 		images: [
 			...setup.stored.images,
-			{ id: 'img-extra', downscaled: 'data:image/png;base64,Ag==', originalHash: 'sha256-x' },
+			{
+				id: 'img-extra',
+				downscaled: 'data:image/png;base64,Ag==',
+				originalHash: 'sha256-x',
+				tag: 'auto',
+			},
 		],
 	});
 	return setup;
