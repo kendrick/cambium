@@ -290,7 +290,6 @@ describe('deserializeDtcg', () => {
 		{ where: 'the root', group: [], key: '$description' },
 		{ where: 'the radius group', group: ['radius'], key: '$description' },
 		{ where: 'a primitive ramp', group: ['color', 'primitive', 'brand'], key: '$description' },
-		{ where: 'the radius group', group: ['radius'], key: '$extensions' },
 	];
 
 	const sides: { name: string; light: boolean; dark: boolean }[] = [
@@ -500,6 +499,43 @@ describe('deserializeDtcg', () => {
 			},
 			names: ['color.primitive.brand.$root', 'token'],
 		},
+		/**
+		 * #82's decision. `checkRepresentable` used to refuse only `$root` and `$extends` and read
+		 * every other reserved name past, `$extensions` included, which is right for `$schema` and
+		 * `$description` but not for this one: DTCG 5.2.3 requires a group's or the root's extension
+		 * data to survive, and a `TokenSet` has no slot on a group to hold it in. A probe that added
+		 * `$extensions` to `color`, `radius` and `spacing` on a serialized generated set found all
+		 * three silently dropped after a round trip; the three cases below are that probe's shapes—
+		 * the root, a category group, and a group nested two levels under one—each refused instead.
+		 * The falsifier below them is the other half: the same payload, moved onto a token, is kept.
+		 */
+		{
+			what: 'a foreign $extensions at the document root rather than dropping it',
+			spoil: (document) => {
+				(document as Record<string, unknown>).$extensions = structuredClone(
+					RESERVED_VALUES.$extensions,
+				);
+			},
+			names: ['$extensions', 'extension data'],
+		},
+		{
+			what: 'a foreign $extensions on a category group rather than dropping it',
+			spoil: (document) => {
+				(document.radius as Record<string, unknown>).$extensions = structuredClone(
+					RESERVED_VALUES.$extensions,
+				);
+			},
+			names: ['radius.$extensions', 'extension data'],
+		},
+		{
+			what: 'a foreign $extensions on a nested colour group rather than dropping it',
+			spoil: (document) => {
+				(document.color.primitive.brand as Record<string, unknown>).$extensions = structuredClone(
+					RESERVED_VALUES.$extensions,
+				);
+			},
+			names: ['color.primitive.brand.$extensions', 'extension data'],
+		},
 		{
 			what: 'a group that $extends another rather than dropping what it inherits',
 			spoil: (document) => {
@@ -554,6 +590,62 @@ describe('deserializeDtcg', () => {
 			});
 		}
 	}
+
+	/**
+	 * The falsifier the group-level `$extensions` refusals above need. Parsing the doctored document
+	 * proves nothing on its own: a reader that refused every `$extensions` anywhere, token included,
+	 * would also make those cases throw, and the two failures would look identical from the outside.
+	 * Moving the identical payload from `radius`—the group refused above—onto `radius.md`, a token
+	 * inside it, and then carrying it through `serializeDtcg` as well as `deserializeDtcg`, is what
+	 * shows the refusal keys on where the key sits rather than on what it holds: the very payload that
+	 * throws one node up here survives a full document round trip unchanged.
+	 */
+	it('round-trips the same foreign $extensions payload when it sits on a token instead of its group', () => {
+		const light = structuredClone(SPEC_LIGHT_DOCUMENT);
+		const dark = structuredClone(SPEC_DARK_DOCUMENT);
+		const payload = structuredClone((RESERVED_VALUES.$extensions as Extensions)['com.example']);
+
+		for (const document of [light, dark]) {
+			(document.radius.md.$extensions as Extensions)['com.example'] = payload;
+		}
+
+		expect(violationLines(light)).toEqual([]);
+		expect(violationLines(dark)).toEqual([]);
+
+		const emitted = serializeDtcg(deserializeDtcg(light, dark)) as unknown as {
+			light: typeof SPEC_LIGHT_DOCUMENT;
+			dark: typeof SPEC_DARK_DOCUMENT;
+		};
+
+		expect(violationLines(emitted.light)).toEqual([]);
+		expect(violationLines(emitted.dark)).toEqual([]);
+
+		for (const document of [emitted.light, emitted.dark]) {
+			expect((document.radius.md.$extensions as Extensions)['com.example']).toEqual(payload);
+		}
+	});
+
+	/**
+	 * The issue's own reproduction, rerun at this layer. The probe recorded in the plan for #82 took a
+	 * real generated set, serialized it, stamped a foreign `$extensions` onto `color`, `radius` and
+	 * `spacing` one at a time, and found all three parsed and then vanished on the way back out. Each
+	 * now refuses instead, on the real generated document rather than the hand-transcribed fixture the
+	 * cases above use, so a reader that happened to special-case the fixture's shape cannot pass here.
+	 */
+	it.each(['color', 'radius', 'spacing'] as const)(
+		"refuses a foreign $extensions stamped onto the generated set's %s group",
+		(group) => {
+			const documents = serializeDtcg(seedTokenSet);
+			const light = structuredClone(documents.light) as Record<string, unknown>;
+
+			(light[group] as Record<string, unknown>).$extensions = structuredClone(
+				RESERVED_VALUES.$extensions,
+			);
+
+			expect(violationLines(light)).toEqual([]);
+			expect(() => deserializeDtcg(light, documents.dark)).toThrow(`${group}.$extensions`);
+		},
+	);
 
 	const modelAcceptances: {
 		what: string;

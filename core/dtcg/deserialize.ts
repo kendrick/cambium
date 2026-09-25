@@ -44,11 +44,13 @@ import {
  *    which is an inner shadow silently turned into an outer one. A ramp step whose `alpha` is not
  *    1 is the same mistake: the model has no alpha there, so the colour would come back opaque.
  * 2. A feature that is itself a value the set would otherwise lose is refused by name. `$root` is a
- *    token by the vendored schema, not metadata, and an unmodelled group holds tokens. Reading past
- *    either hands back a set that is missing a value the document declared, with nothing to say so.
+ *    token by the vendored schema, not metadata, and an unmodelled group holds tokens. A group's or
+ *    the root's `$extensions` is the same case: DTCG 5.2.3 requires the payload to survive, and a
+ *    `TokenSet` has no slot on a group to hold it in. Reading past any of these hands back a set that
+ *    is missing a value the document declared, with nothing to say so.
  * 3. A feature that annotates a value which survives unchanged is read past, and the loss is
  *    recorded where it happens. `$description` and `$deprecated` on a token, and a group's
- *    `$description` or `$extensions`, all describe something whose value still round-trips exactly.
+ *    `$description`, describe something whose value still round-trips exactly.
  * 4. A feature the model can hold is held, even where the document leaves it implicit. A shadow
  *    colour with no `alpha` is DTCG's default of 1, which `ShadowColorSchema` holds perfectly, so
  *    refusing it would be this same failure pointing the other way: a conforming document rejected
@@ -224,13 +226,20 @@ function isReservedName(name: string): boolean {
  * Three kinds, which are the four-case rule above sorted by what the token set ends up holding:
  *
  * - `kept` is a token's own substance. `$type`, `$value` and `$extensions` land in the token set and
- *   stay there, so two documents disagreeing about one is a real disagreement.
+ *   stay there, so two documents disagreeing about one is a real disagreement. That is the whole of
+ *   what `kept` means here: a token's `$extensions`. On a group or the root the same key is refused,
+ *   but by `checkRepresentable` directly rather than by this table—see the note below its `$type`
+ *   check, and issue #82's decision to refuse rather than carry a group annotation nowhere on a
+ *   `TokenSet` to put it. Widening this table's `kind` to say so would also change what
+ *   `comparedAt` does with a token's own `$extensions`, which must stay `kept` there.
  * - `annotation` describes something whose value survives untouched, and the token set has nowhere
  *   to put it. Read past, and two documents disagreeing about one is not a disagreement about
  *   anything the set holds.
  * - `unrepresentable` carries a value the set would lose. `$root` is a token by the vendored schema
  *   (`$ref: token.json` at the root and on every group, beside a `$description` that is merely a
  *   string), and `$extends` names another group whose tokens this group also holds. Refused by name.
+ *   A group's or the root's `$extensions` is refused for the same reason and does not appear here,
+ *   again because this table's kind also drives token-position comparison.
  *
  * One table because the reader and the light-versus-dark comparison both have to sort reserved names
  * and used to do it separately. They agreed by coincidence and then stopped: the comparison skipped
@@ -282,12 +291,25 @@ function reservedKind(name: string): ReservedKind {
  * answer independent of which one happens to supply the values.
  *
  * The walk stops at tokens, which is the same boundary `firstDifference` keeps and for the same
- * reason. `$root` and `$extends` live on groups and on the document root; below a token everything
- * is a value, and a vendor's `$extensions` payload is free to hold a key spelled `$root` that means
- * nothing of the kind.
+ * reason. `$root`, `$extends` and `$extensions` live on groups and on the document root; below a
+ * token everything is a value, and a vendor's `$extensions` payload is free to hold a key spelled
+ * `$root` that means nothing of the kind.
+ *
+ * `$extensions` is checked by name here rather than through `RESERVED_NAMES`, because this walk
+ * never reaches a token: every `$extensions` this function sees sits on a group or the root. DTCG
+ * 5.2.3 requires the payload to survive, and a `TokenSet` has no slot on a group to hold it in, so
+ * it is refused for the same reason `$root` is. It cannot join the table as `unrepresentable`,
+ * because the table's kind also answers `comparedAt`'s question about a token's own `$extensions`,
+ * which has to stay `kept` there—#82 split the two questions apart on purpose.
  */
 function checkRepresentable(node: Node, doc: Doc, path: readonly string[]): void {
 	for (const name of Object.keys(node)) {
+		if (name === '$extensions') {
+			throw new Error(
+				`${label(doc, [...path, name])} is a group's extension data, and a token set has no slot to keep it in, so reading past it would drop it`,
+			);
+		}
+
 		if (isReservedName(name)) {
 			const reserved = RESERVED_NAMES[name];
 
