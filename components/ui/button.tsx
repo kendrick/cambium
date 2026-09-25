@@ -18,6 +18,9 @@ const buttonVariants = cva(
 					'bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40',
 				link: 'text-primary underline-offset-4 hover:underline',
 			},
+			// Upstream caps the small sizes at `rounded-[min(var(--radius-md),8px)]` and `...10px)]`. Left
+			// out on purpose: inside the preview that arbitrary value reads `--radius-md` off `:root`
+			// rather than the token, and the px cap is a literal radius either way.
 			size: {
 				default:
 					'h-9 gap-1.5 px-2.5 in-data-[slot=button-group]:rounded-md has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2',

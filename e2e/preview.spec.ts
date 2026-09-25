@@ -71,6 +71,8 @@ const SCHEMES = ['light', 'dark'] as const satisfies readonly SchemeName[];
 const RADIUS_STEPS = ['sm', 'md', 'lg', 'xl', '2xl', '3xl', '4xl'] as const;
 const TYPE_STEPS = ['xs', 'sm', 'base', 'lg', 'xl', '2xl', '3xl', '4xl'] as const;
 const SHADOW_STEPS = ['xs', 'sm', 'md', 'lg', 'xl'] as const;
+const WEIGHT_STEPS = ['regular', 'medium', 'semibold', 'bold'] as const;
+const TRACKING_STEPS = ['tighter', 'tight', 'normal', 'wide', 'wider'] as const;
 
 function declared(map: Record<string, string>, property: string): string {
 	const value = map[property];
@@ -97,12 +99,23 @@ function expectedFor(scheme: SchemeName) {
 			declared(map, NAMING.prefixedProperty(`shadow-${step}`)),
 		radii: RADIUS_STEPS.map((step) => declared(SCALARS, NAMING.prefixedProperty(`radius-${step}`))),
 		fontSizes: TYPE_STEPS.map((step) => declared(SCALARS, NAMING.prefixedProperty(`text-${step}`))),
+		fontWeights: WEIGHT_STEPS.map((step) =>
+			declared(SCALARS, NAMING.prefixedProperty(`font-weight-${step}`)),
+		),
+		tracking: TRACKING_STEPS.map((step) =>
+			declared(SCALARS, NAMING.prefixedProperty(`tracking-${step}`)),
+		),
 	};
 }
 
 const EXPECTED = { light: expectedFor('light'), dark: expectedFor('dark') };
 
-type ResolvableProperty = 'backgroundColor' | 'borderTopLeftRadius' | 'fontSize' | 'boxShadow';
+type ResolvableProperty =
+	| 'backgroundColor'
+	| 'borderTopLeftRadius'
+	| 'fontSize'
+	| 'fontWeight'
+	| 'boxShadow';
 
 /**
  * What the browser computes for each literal, read off a probe hung from `<body>`, outside the
@@ -137,7 +150,19 @@ async function resolveInBrowser(
 	);
 }
 
-type Allowed = { colours: string[]; opaqueColours: string[]; radii: string[]; fontSizes: string[] };
+type Allowed = {
+	colours: string[];
+	opaqueColours: string[];
+	radii: string[];
+	fontSizes: string[];
+	fontWeights: string[];
+	/**
+	 * Still the literal `em` text, unresolved. An `em` letter-spacing computes against the font size
+	 * of the element it lands on, so one probe at one size can't resolve it for every element; the
+	 * walk resolves it at each element's own size instead.
+	 */
+	tracking: string[];
+};
 
 async function allowedFor(page: Page, scheme: SchemeName): Promise<Allowed> {
 	const expected = EXPECTED[scheme];
@@ -151,11 +176,13 @@ async function allowedFor(page: Page, scheme: SchemeName): Promise<Allowed> {
 		),
 		radii: await resolveInBrowser(page, 'borderTopLeftRadius', expected.radii),
 		fontSizes: await resolveInBrowser(page, 'fontSize', expected.fontSizes),
+		fontWeights: await resolveInBrowser(page, 'fontWeight', expected.fontWeights),
+		tracking: expected.tracking,
 	};
 }
 
 /**
- * Every computed colour, radius and font size under `root` (itself included) that no token
+ * Every computed colour, radius, font size, font weight and letter spacing under `root` (itself included) that no token
  * accounts for, as one readable line apiece. Empty means the subtree renders from the tokens alone.
  *
  * Two rules sit beside plain membership, each narrow enough to still catch a literal:
@@ -172,12 +199,33 @@ async function offTokenStyles(root: Locator, allowed: Allowed): Promise<string[]
 		const opaqueColours = new Set(sets.opaqueColours);
 		const radii = new Set(['0px', ...sets.radii]);
 		const fontSizes = new Set(sets.fontSizes);
+		const fontWeights = new Set(sets.fontWeights);
+		const trackingAt = new Map<string, Set<string>>();
 		const probe = document.createElement('div');
 		document.body.appendChild(probe);
 
 		const opaque = (colour: string) => {
 			probe.style.backgroundColor = `oklab(from ${colour} l a b / 1)`;
 			return getComputedStyle(probe).backgroundColor;
+		};
+		// `normal` is what an element with no tracking utility computes to, so it passes as untouched.
+		const tracking = (fontSize: string) => {
+			let resolved = trackingAt.get(fontSize);
+			if (!resolved) {
+				probe.style.fontSize = fontSize;
+				resolved = new Set(['normal']);
+				for (const literal of sets.tracking) {
+					probe.style.letterSpacing = '';
+					probe.style.letterSpacing = literal;
+					if (probe.style.letterSpacing === '') {
+						throw new Error(`the browser refused letter-spacing: ${literal}`);
+					}
+					resolved.add(getComputedStyle(probe).letterSpacing);
+				}
+				probe.style.letterSpacing = '';
+				trackingAt.set(fontSize, resolved);
+			}
+			return resolved;
 		};
 		const transparent = new Set(['transparent', 'rgba(0, 0, 0, 0)']);
 		const translucent = / \/ 0?\.\d+\)$|, 0?\.\d+\)$/;
@@ -217,6 +265,14 @@ async function offTokenStyles(root: Locator, allowed: Allowed): Promise<string[]
 
 				if (!fontSizes.has(style.fontSize)) {
 					problems.push(`${label} font-size: ${style.fontSize}`);
+				}
+
+				if (!fontWeights.has(style.fontWeight)) {
+					problems.push(`${label} font-weight: ${style.fontWeight}`);
+				}
+
+				if (!tracking(style.fontSize).has(style.letterSpacing)) {
+					problems.push(`${label} letter-spacing: ${style.letterSpacing}`);
 				}
 			}
 		} finally {
@@ -326,7 +382,7 @@ function oklchFromFields({ l, c, h }: { l: number; c: number; h: number }): stri
 	return `oklch(${l} ${c} ${h})`;
 }
 
-test('every colour, radius and font size in the preview resolves to a declared token, in both schemes', async ({
+test('every colour, radius, font size, font weight and letter spacing in the preview resolves to a declared token, in both schemes', async ({
 	page,
 }) => {
 	const preview = await openPreview(page);

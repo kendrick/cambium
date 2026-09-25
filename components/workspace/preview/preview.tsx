@@ -2,6 +2,7 @@
 
 import { type CSSProperties, useCallback, useMemo, useRef, useState } from 'react';
 
+import type { SchemeName } from '../../../core/token-overrides';
 import type { TokenSet } from '../../../core/token-set';
 import { cssNaming } from '../../../core/css/globals-css';
 import { scalarDeclarations, schemeDeclarations } from '../../../core/css/scheme-declarations';
@@ -9,13 +10,11 @@ import { Button } from '@/components/ui/button';
 import { AppScreen } from '@/components/workspace/preview/app-screen';
 import { Gallery } from '@/components/workspace/preview/gallery';
 
-type Scheme = 'light' | 'dark';
-
 type Declared =
 	| { ok: true; style: CSSProperties; scalars: Record<string, string> }
 	| { ok: false; reason: string };
 
-function declare(tokenSet: TokenSet, scheme: Scheme): Declared {
+function declare(tokenSet: TokenSet, scheme: SchemeName): Declared {
 	const naming = cssNaming();
 
 	// These run the stylesheet export's own checks, so a set the export would refuse throws here too.
@@ -31,7 +30,7 @@ function declare(tokenSet: TokenSet, scheme: Scheme): Declared {
 }
 
 export function Preview({ tokenSet }: { tokenSet: TokenSet }) {
-	const [scheme, setScheme] = useState<Scheme>('light');
+	const [scheme, setScheme] = useState<SchemeName>('light');
 	const containerRef = useRef<HTMLDivElement>(null);
 	const declared = useMemo(() => declare(tokenSet, scheme), [tokenSet, scheme]);
 	const toggleScheme = useCallback(
