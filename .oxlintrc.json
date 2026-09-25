@@ -23,8 +23,20 @@
 		// binding nothing reads.
 		"react/react-in-jsx-scope": "off",
 		// `import './globals.css'` is how a stylesheet enters the bundle. There is nothing
-		// to assign it to.
-		"import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }]
+		// to assign it to. The three chroma-js modules register hex parsing, `rgb()` and
+		// `alpha()` on its `Color` class, which `core/contrast/check.ts` needs without the
+		// package index (see the comment there).
+		"import/no-unassigned-import": [
+			"error",
+			{
+				"allow": [
+					"**/*.css",
+					"chroma-js/src/io/hex/index.js",
+					"chroma-js/src/io/rgb/index.js",
+					"chroma-js/src/ops/alpha.js"
+				]
+			}
+		]
 	},
 	"env": {
 		"builtin": true,

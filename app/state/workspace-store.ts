@@ -2,6 +2,8 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 
 import type { BrandRecord, BrandVersion } from '../../core/brand-record';
 import type { BrandSeed } from '../../core/brand-seed';
+import { checkContrast, type ContrastEntry } from '../../core/contrast/check';
+import { type UnrepairedEntry, withContrastRepairs } from '../../core/contrast/repair';
 import { type ScaleEngine, type ScaleEngineResult } from '../../core/scale-engine';
 import { BALANCED, type InterpretationParams } from '../../core/interpretation';
 import { buildTokenSet } from '../../core/semantic-layer';
@@ -172,6 +174,19 @@ type CommitRequest = {
 	overrides: Record<string, TokenOverride>;
 };
 
+/**
+ * `checkContrast`'s report against the token set the workspace is showing right now, alongside the
+ * pairs #8's repair pass couldn't clear. `report` reflects the final set, overrides included, so a
+ * user override that re-breaks a pair a repair already fixed shows up as a failing entry instead of
+ * disappearing behind the repair that ran before it. `unrepaired` comes from the repair pass on the
+ * pre-override set: which pairs it couldn't reach is a question about pins, not about what the user
+ * later did to an unrelated token.
+ */
+export type ContrastState = {
+	report: ContrastEntry[];
+	unrepaired: UnrepairedEntry[];
+};
+
 export type WorkspaceState = {
 	/**
 	 * The record as storage last reported it. Never holds uncommitted edits.
@@ -226,6 +241,8 @@ export type WorkspaceState = {
 	 * doesn't throw, and nothing the user set is deleted.
 	 */
 	overrideIssues: Record<string, OverrideIssue[]>;
+	/** `null` exactly when `tokenSet` is, since there is nothing yet to check. See `ContrastState`. */
+	contrast: ContrastState | null;
 
 	open(record: BrandRecord): void;
 	close(): void;
@@ -267,6 +284,14 @@ export type WorkspaceStoreOptions = {
 	 * `pnpm test:bundle` cannot measure it either way. The landing route is a Server Component today,
 	 * so the engine runs at build time, reaches no client chunk, and the budget stays green no matter
 	 * what this file imports. The guard is the import list, in `workspace-store.test.ts`.
+	 *
+	 * #8's contrast repair rides the same lazy chunk. `core/contrast/check.ts` reaches `chroma-js`'s
+	 * APCA module, but this store is only ever reached through the same dynamic
+	 * `import('../../app/state/workspace-store')` in `workspace-route.tsx` that already carries the
+	 * engine and culori, and the landing route never imports this file at all. Nothing about that
+	 * import graph is unconditional the way `engine` is, so it needs no injection seam of its own.
+	 * `pnpm test:bundle`'s total-JS budget is what catches `chroma-js` growing the shipped bundle,
+	 * since first load stays unaffected either way.
 	 */
 	engine: ScaleEngine;
 	now?: () => string;
@@ -303,7 +328,7 @@ function derive(
 	return seed ? engine.generate(seed, PRESET_PARAMS[preset]) : null;
 }
 
-type Derivation = Pick<WorkspaceState, 'derived' | 'tokenSet' | 'overrideIssues'>;
+type Derivation = Pick<WorkspaceState, 'derived' | 'tokenSet' | 'overrideIssues' | 'contrast'>;
 
 /**
  * Applies each override on its own so one the base rejects is skipped and reported rather than
@@ -313,7 +338,7 @@ type Derivation = Pick<WorkspaceState, 'derived' | 'tokenSet' | 'overrideIssues'
 function withOverrides(
 	base: TokenSet,
 	overrides: Record<string, TokenOverride>,
-): Pick<WorkspaceState, 'tokenSet' | 'overrideIssues'> {
+): { tokenSet: TokenSet; overrideIssues: Record<string, OverrideIssue[]> } {
 	let tokenSet = base;
 	const overrideIssues: Record<string, OverrideIssue[]> = {};
 
@@ -331,25 +356,72 @@ function withOverrides(
 }
 
 /**
- * With no overrides, this returns the built set without parsing it. `applyOverrides` runs
- * `TokenSetSchema` twice per override and a seed edit re-derives on every keystroke, so only a
- * workspace holding overrides pays for the parse.
+ * `repairContrast` walks a bounded lightness search per failing pair. `setOverride` and
+ * `clearOverride` both reuse the `derived` already held rather than re-deriving, so without this
+ * cache a session of override edits would re-run that search on every keystroke for a repair
+ * nothing had changed. Keyed on `derived` rather than on the base `TokenSet` `buildTokenSet`
+ * returns, because that call produces a fresh object every time and leaves nothing to key on that
+ * survives past its own call; `derived` is the one thing every caller here already holds across
+ * such a sequence.
+ *
+ * `ScaleEngine.generate`'s contract never promises a fresh object per call, and `buildTokenSet`
+ * also reads `seed` directly for the non-colour categories. An engine that memoizes, or a test fake
+ * that hands back the same `derived` for two different seeds, would otherwise serve a stale
+ * repaired set for the second one. So each cache entry also carries the seed and preset that
+ * produced it, and a lookup that doesn't match both recomputes instead of trusting `derived`'s
+ * identity alone.
+ */
+const repairCache = new WeakMap<
+	Extract<ScaleEngineResult, { ok: true }>,
+	{ seed: BrandSeed; preset: Interpretation; repaired: TokenSet; unrepaired: UnrepairedEntry[] }
+>();
+
+function repairedBase(
+	derived: Extract<ScaleEngineResult, { ok: true }>,
+	seed: BrandSeed,
+	preset: Interpretation,
+): { repaired: TokenSet; unrepaired: UnrepairedEntry[] } {
+	const cached = repairCache.get(derived);
+
+	if (cached && cached.preset === preset && sameSeed(cached.seed, seed)) {
+		return cached;
+	}
+
+	const base = buildTokenSet(derived.schemes, seed, PRESET_PARAMS[preset]);
+	const { tokenSet, unrepaired } = withContrastRepairs(base);
+	const result = { seed, preset, repaired: tokenSet, unrepaired };
+
+	repairCache.set(derived, result);
+
+	return result;
+}
+
+/**
+ * Repairs land before the user's overrides, so exports and the preview are AA by default and a
+ * user override that breaks a pair is the user's own call (#8's decisions). With no user overrides,
+ * the repaired set is returned as-is; `applyOverrides` still runs once for the repair regardless,
+ * but a workspace holding none skips the second parse a user override would otherwise cost.
+ *
+ * `contrast.report` is checked against the *final* set, overrides included, so a user override that
+ * re-breaks a pair a repair already cleared shows up rather than reading as still fixed.
  */
 function tokensFor(
 	derived: ScaleEngineResult | null,
 	seed: BrandSeed | null,
 	preset: Interpretation,
 	overrides: Record<string, TokenOverride>,
-): Pick<WorkspaceState, 'tokenSet' | 'overrideIssues'> {
+): Pick<WorkspaceState, 'tokenSet' | 'overrideIssues' | 'contrast'> {
 	if (!seed || !derived?.ok) {
-		return { tokenSet: null, overrideIssues: {} };
+		return { tokenSet: null, overrideIssues: {}, contrast: null };
 	}
 
-	const base = buildTokenSet(derived.schemes, seed, PRESET_PARAMS[preset]);
+	const { repaired, unrepaired } = repairedBase(derived, seed, preset);
+	const { tokenSet, overrideIssues } =
+		Object.keys(overrides).length === 0
+			? { tokenSet: repaired, overrideIssues: {} }
+			: withOverrides(repaired, overrides);
 
-	return Object.keys(overrides).length === 0
-		? { tokenSet: base, overrideIssues: {} }
-		: withOverrides(base, overrides);
+	return { tokenSet, overrideIssues, contrast: { report: checkContrast(tokenSet), unrepaired } };
 }
 
 /** Every place that re-derives goes through here, so `tokenSet` cannot fall behind `derived`. */
@@ -708,6 +780,7 @@ export function createWorkspaceStore({
 			overrides: {},
 			tokenSet: null,
 			overrideIssues: {},
+			contrast: null,
 
 			open(record) {
 				// The last version is the current one—`BrandRecordSchema` guarantees the array runs

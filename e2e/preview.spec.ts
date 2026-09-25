@@ -11,6 +11,7 @@ import {
 	SCHEMA_VERSION,
 } from '../core/brand-record';
 import type { BrandSeed } from '../core/brand-seed';
+import { withContrastRepairs } from '../core/contrast/repair';
 import { cssNaming } from '../core/css/globals-css';
 import { scalarDeclarations, schemeDeclarations } from '../core/css/scheme-declarations';
 import { BALANCED } from '../core/interpretation';
@@ -58,7 +59,10 @@ if (!DERIVED.ok) {
 	throw new Error(`fixture seed failed to derive: ${DERIVED.error.kind}`);
 }
 
-const TOKEN_SET = buildTokenSet(DERIVED.schemes, SEED, BALANCED);
+// `repairedBase` in `app/state/workspace-store.ts` never paints the raw derived set: it repairs
+// contrast first and applies that repair's own overrides, so a fixture that skipped this step would
+// check the preview against colours nothing on screen ever shows.
+const TOKEN_SET = withContrastRepairs(buildTokenSet(DERIVED.schemes, SEED, BALANCED)).tokenSet;
 const NAMING = cssNaming();
 const SCALARS = scalarDeclarations(TOKEN_SET, NAMING);
 const SCHEMES = ['light', 'dark'] as const satisfies readonly SchemeName[];
@@ -533,8 +537,11 @@ test('an axe scan of the preview in both schemes, reported rather than asserted'
 
 		const results = await new AxeBuilder({ page }).include('[data-preview]').analyze();
 
-		// Reported, not asserted: contrast repair is #8's job, and until it lands a violation here is
-		// a finding about the token set rather than a regression in the preview.
+		// Reported, not asserted. #8's repair clears every pair `core/contrast/pairs.ts` declares, and
+		// what axe still finds here sits outside that list: the pinned brand colour as text on the
+		// page, `muted-foreground` on `sidebar-accent`, and destructive text over a tint of itself.
+		// No token repair reaches those, so a violation here is a finding about how the preview pairs
+		// tokens rather than a regression.
 		for (const violation of results.violations) {
 			test.info().annotations.push({
 				type: `axe ${scheme}`,

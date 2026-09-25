@@ -4,9 +4,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/brand-record';
 import type { BrandSeed } from '../../core/brand-seed';
+import { checkContrast } from '../../core/contrast/check';
 import { BALANCED } from '../../core/interpretation';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
 import type { RampSet, ScaleEngine, ScaleEngineResult } from '../../core/scale-engine';
+import { buildTokenSet } from '../../core/semantic-layer';
 import { overrideKey, type TokenOverride } from '../../core/token-overrides';
 import type { TokenSet } from '../../core/token-set';
 import { createInMemoryRecordStore } from '../storage/in-memory-record-store';
@@ -975,6 +977,25 @@ function reshapingEngine(): ScaleEngine {
 	};
 }
 
+/**
+ * `ScaleEngine.generate`'s contract never promises a fresh result object per call. This fake models
+ * the case the cache in `workspace-store.ts` has to survive: it derives from whichever seed it saw
+ * first and then hands back that same `derived` object for every seed after, the way a memoizing
+ * engine or a careless test double could.
+ */
+function constantDerivedEngine(): ScaleEngine {
+	const real = createOklchScaleEngine();
+	let cached: ScaleEngineResult | null = null;
+
+	return {
+		id: real.id,
+		generate(seed, params) {
+			cached ??= real.generate(seed, params);
+			return cached;
+		},
+	};
+}
+
 describe('the workspace store’s token set and overrides', () => {
 	it('builds the token set from the same derivation, and rebuilds it when the seed changes', () => {
 		const { store } = openWorkspace();
@@ -1361,5 +1382,133 @@ describe('the workspace store’s token set and overrides', () => {
 
 		expect(state.overrideIssues).toEqual({});
 		expect(state.tokenSet?.semantic.ring?.alias).toBe('spare.11');
+	});
+});
+
+describe('the workspace store’s contrast repair (#8)', () => {
+	/**
+	 * The seed every test in this file opens on by default (`makeVersion`'s own `seedWith(259.8)`).
+	 * It needs no fixture of its own to prove the store is applying a repair: `unrepairedReport`
+	 * below builds the same seed with the repair step skipped, and the first test in this block
+	 * asserts that report fails before checking what the store did with it.
+	 */
+	const failingSeed = seedWith(259.8);
+
+	/** What `tokensFor` would report with the repair step skipped, the baseline the tests below rule out. */
+	function unrepairedReport() {
+		const result = createOklchScaleEngine().generate(failingSeed, BALANCED);
+
+		if (!result.ok) {
+			throw new Error(`expected a derived ramp set, got ${result.error.kind}`);
+		}
+
+		return checkContrast(buildTokenSet(result.schemes, failingSeed, BALANCED));
+	}
+
+	it('repairs the derived base so the store’s token set passes AA, where the same seed built with no repair would not', () => {
+		// Grounds the rest of the test in the seed actually failing today, rather than trusting the
+		// docblock above: a seed the engine stopped breaking would make every assertion below vacuous.
+		expect(unrepairedReport().some((entry) => !entry.passes)).toBe(true);
+
+		const { store } = openWorkspace();
+		const { contrast } = store.getState();
+
+		expect(contrast).not.toBeNull();
+		expect(contrast?.report.every((entry) => entry.passes)).toBe(true);
+		expect(contrast?.unrepaired).toEqual([]);
+	});
+
+	it('keeps a user override that re-breaks a repaired pair, and reports it failing in contrast', () => {
+		const { store } = openWorkspace();
+		const mutedAlias = store.getState().tokenSet?.schemes.light.semantic.muted?.alias;
+
+		if (!mutedAlias) {
+			throw new Error('expected "muted" to resolve in the light scheme');
+		}
+
+		// Aliasing the foreground straight onto its own background is the bluntest re-break there
+		// is: contrast collapses to 1:1 no matter what the repair already did to either side.
+		store.getState().setOverride({
+			kind: 'alias',
+			scheme: 'light',
+			token: 'muted-foreground',
+			alias: mutedAlias,
+		});
+
+		const { tokenSet, contrast } = store.getState();
+		const mutedEntry = contrast?.report.find(
+			(entry) => entry.scheme === 'light' && entry.foreground === 'muted-foreground',
+		);
+
+		expect(tokenSet?.schemes.light.semantic['muted-foreground']?.alias).toBe(mutedAlias);
+		expect(mutedEntry).toMatchObject({ passes: false });
+	});
+
+	it('stores only the user’s overrides on commit, never the repair, which is recomputed on load', async () => {
+		const { store, recordStore } = openWorkspace();
+
+		// No `setOverride` call: this workspace is open on `failingSeed` and passes AA only because
+		// of the repair the first test above proves ran.
+		await store.getState().commit();
+
+		const written = recordStore.puts.at(-1)!.versions.at(-1)!;
+
+		expect(written.tokenSet).toBeNull();
+		expect(written.overrides).toEqual([]);
+	});
+
+	it('stores exactly the user’s override on commit, with the repair left out, when both apply', async () => {
+		const { store, recordStore } = openWorkspace();
+		const mutedAlias = store.getState().tokenSet?.schemes.light.semantic.muted?.alias;
+
+		if (!mutedAlias) {
+			throw new Error('expected "muted" to resolve in the light scheme');
+		}
+
+		// The same re-break as the test above, so this workspace needs both a repair (for the pairs
+		// the user left alone) and the user's own override to survive it.
+		const userOverride: TokenOverride = {
+			kind: 'alias',
+			scheme: 'light',
+			token: 'muted-foreground',
+			alias: mutedAlias,
+		};
+
+		store.getState().setOverride(userOverride);
+
+		await store.getState().commit();
+
+		const written = recordStore.puts.at(-1)!.versions.at(-1)!;
+
+		expect(written.tokenSet).toBeNull();
+		expect(written.overrides).toEqual([userOverride]);
+	});
+});
+
+describe('the repair cache’s seed and preset check', () => {
+	it('recomputes the repaired token set when the seed changes but `derived` does not', () => {
+		const sharpSeed: BrandSeed = {
+			...seedWith(259.8),
+			radiusCharacter: { base: 4, progression: 'sharp' },
+		};
+		const pillSeed: BrandSeed = {
+			...seedWith(259.8),
+			radiusCharacter: { base: 24, progression: 'pill' },
+		};
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed: sharpSeed })]), {
+			engine: constantDerivedEngine(),
+		});
+		const derivedAfterOpen = store.getState().derived;
+		const sharpRadius = store.getState().tokenSet?.radius.values.lg?.value;
+
+		store.getState().editSeed({ radiusCharacter: pillSeed.radiusCharacter });
+
+		// The fake hands back the very same `derived` object for both seeds, which is the situation
+		// the cache has to notice rather than trust.
+		expect(store.getState().derived).toBe(derivedAfterOpen);
+
+		const pillRadius = store.getState().tokenSet?.radius.values.lg?.value;
+
+		expect(pillRadius).not.toBe(sharpRadius);
 	});
 });

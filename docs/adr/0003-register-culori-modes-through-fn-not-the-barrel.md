@@ -1,5 +1,7 @@
 # Register culori Modes Through `culori/fn`, Not the Barrel
 
+ADR-0005 supersedes this decision's APCA clause and its rule to import chroma-js only from its main entry. The culori policy below still holds.
+
 `culori@4.0.2` and `chroma-js@3.2.0` have sat in `package.json` since ADR-0002 pinned the dependency baseline, unused until issue #4 makes the first call into either. The barrel `import { ... } from 'culori'` costs 23.4 kB gzip; the same working set through `culori/fn` with explicit `useMode()` registration costs 8.0 kB. The build's first-load budget measures 175.4 kB against a 200 kB ceiling, so the 24.6 kB of headroom left is barely more than the barrel alone would cost. So Cambium's colour math reaches culori only through `culori/fn`, registers exactly the modes a call site needs, and keeps chroma-js's advisory APCA figure out of every module the browser bundle can reach.
 
 ## Considered Options

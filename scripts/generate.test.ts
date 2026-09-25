@@ -2,7 +2,9 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
+import { checkContrast } from '../core/contrast/check';
 import { RAMP_NAMES } from '../core/scale-engine';
+import { TokenSetSchema } from '../core/token-set';
 
 const execFileAsync = promisify(execFile);
 
@@ -29,6 +31,18 @@ describe('generate CLI', () => {
 		}
 
 		expect(Object.keys(tokenSet.semantic).length).toBeGreaterThan(0);
+	});
+
+	// Read back off stdout, the only thing a CLI consumer gets, so this fails if the CLI ever prints
+	// the raw derived set again: `seed.json` misses AA on `primary-foreground` and
+	// `muted-foreground` before repair (#8).
+	it('prints a token set whose declared pairs all pass AA in both schemes', async () => {
+		const { stdout } = await runCli([`${FIXTURES}seed.json`]);
+		const failing = checkContrast(TokenSetSchema.parse(JSON.parse(stdout))).filter(
+			(entry) => !entry.passes,
+		);
+
+		expect(failing).toEqual([]);
 	});
 
 	// The acceptance criterion is "exits non-zero with a readable message"; readable is what a
