@@ -25,7 +25,7 @@ export type GeneratePanelProps = {
 };
 
 /**
- * Carries the formatted ceiling, so the render never touches the formatter's module. The measured
+ * Carries the formatted estimate, so the render never touches the formatter's module. The measured
  * dimensions ride along so a repair can be priced without decoding the images again.
  */
 type Estimate =
@@ -151,8 +151,8 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 
 	/**
 	 * #23 wants a cost shown before every generation, and a repair is one. It resends the images
-	 * under the same output ceiling and adds the answer being fixed and its issues, so it costs at
-	 * least as much as the first run. Never throws, since a price it can't work out is still
+	 * under the same output ceiling and adds the answer being fixed and its issues, so its estimate
+	 * is never below the first run's. Never throws, since a price it can't work out is still
 	 * something to say next to the button.
 	 */
 	async function priceRepair(repair: SeedRepair): Promise<RepairEstimate> {
@@ -229,29 +229,38 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 					} else {
 						if (!record) throw new Error('the record is no longer stored');
 
-						const engine = createOklchScaleEngine();
+						// The route offers this panel only while the record has no versions, and it decided that
+						// on its own read. Another tab can commit a first version since, and a generate here would
+						// pay for a second one nobody asked for, so it sends nothing and the person goes to the
+						// version that exists. A save-again skips the check: its seed is already paid for, and
+						// dropping it would throw that spend away.
+						if (attempt.kind === 'generate' && record.versions.length > 0) {
+							result = { ok: true, record };
+						} else {
+							const engine = createOklchScaleEngine();
 
-						result =
-							attempt.kind === 'generate'
-								? await generation.generate({
-										record,
-										key: attempt.key,
-										reader: generation.createGenerationReader(),
-										recordStore,
-										engine,
-										repair: attempt.repair,
-										signal,
-										// Past this point the answer is paid for and the abort is never checked again, so
-										// a Cancel left on screen would swallow the click. The commit can stall behind
-										// another tab's write for as long as that write takes.
-										onCommitting: () => setAbort(null),
-									})
-								: await generation.saveGeneratedVersion({
-										record,
-										...attempt.held,
-										recordStore,
-										engine,
-									});
+							result =
+								attempt.kind === 'generate'
+									? await generation.generate({
+											record,
+											key: attempt.key,
+											reader: generation.createGenerationReader(),
+											recordStore,
+											engine,
+											repair: attempt.repair,
+											signal,
+											// Past this point the answer is paid for and the abort is never checked again, so
+											// a Cancel left on screen would swallow the click. The commit can stall behind
+											// another tab's write for as long as that write takes.
+											onCommitting: () => setAbort(null),
+										})
+									: await generation.saveGeneratedVersion({
+											record,
+											...attempt.held,
+											recordStore,
+											engine,
+										});
+						}
 					}
 				} finally {
 					// Same reason as the route's read-back: an open connection is what an upgrade in another
@@ -362,7 +371,7 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 			<p className="text-muted-foreground text-sm" data-estimate>
 				{estimate.kind === 'pending' && 'Working out what this will cost…'}
 				{estimate.kind === 'ready' &&
-					`Generating costs at most ${estimate.maxUsdText} on your Anthropic account: about ${count.format(estimate.value.inputTokens)} input tokens and at most ${count.format(estimate.value.maxOutputTokens)} output tokens.`}
+					`Generating costs about ${estimate.maxUsdText} on your Anthropic account, an estimate from about ${count.format(estimate.value.inputTokens)} input tokens and at most ${count.format(estimate.value.maxOutputTokens)} output tokens.`}
 				{estimate.kind === 'failed' &&
 					"Cambium couldn't read these images back to estimate the cost, so it can't say what generating will spend."}
 			</p>
@@ -506,7 +515,7 @@ function FailureNotice({
 			{descriptor.recovery === 'repair-retry' && descriptor.repair && repairEstimate && (
 				<p className="text-muted-foreground text-sm" data-estimate>
 					{repairEstimate.kind === 'ready'
-						? `A repair is a second request that sends your images again, so it costs up to ${repairEstimate.maxUsdText} more on your Anthropic account.`
+						? `A repair is a second request that sends your images again, so it costs about ${repairEstimate.maxUsdText} more on your Anthropic account.`
 						: "A repair is a second request that sends your images again. Cambium couldn't work out what it will cost."}
 				</p>
 			)}

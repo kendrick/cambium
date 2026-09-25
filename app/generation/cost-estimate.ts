@@ -28,7 +28,11 @@ const TOKENS_PER_MILLION = 1_000_000;
 /** Anthropic's vision-docs approximation: a decoded image costs about one token per 750 px². */
 const PIXELS_PER_IMAGE_TOKEN = 750;
 
-/** Rough English-text estimate; good enough for a pre-flight ceiling, not a bill. */
+/**
+ * Rough English-text estimate, not a count. It ignores message-structure overhead and undercounts
+ * token-dense text, such as a malformed answer played back in a repair, so the input side of any
+ * total built on it can run low. That makes the total an estimate, never a spending ceiling.
+ */
 const CHARS_PER_TEXT_TOKEN = 4;
 
 /**
@@ -38,7 +42,9 @@ const CHARS_PER_TEXT_TOKEN = 4;
  * `createImageBitmap`); keeping this function free of the DOM lets it run in a test with plain
  * numbers. Output is priced at `SEED_REQUEST_MAX_TOKENS`, the request's hard ceiling, rather than
  * a guess at the true completion length, because thinking tokens count toward that ceiling and a
- * refusal or a long chain of thought can consume it even when the visible seed is short.
+ * refusal or a long chain of thought can consume it even when the visible seed is short. Only the
+ * output side is capped, though. Input is a heuristic, so `maxUsd` is an estimate the real bill can
+ * exceed, whatever its name says.
  */
 export function estimateGenerationCost({ images, promptChars }: CostEstimateInput): CostEstimate {
 	const imageTokens = images.reduce(
@@ -79,8 +85,9 @@ export function generationPromptChars(images: ReferenceImage[], repair?: SeedRep
 const CENT_PRECISION = 6;
 
 /**
- * Dollars rounded up to the cent, as the person reads them. Up, because the figure is a ceiling and
- * rounding it down would promise less than a run can spend.
+ * Dollars rounded up to the cent, as the person reads them. Up, so rounding never shows less than
+ * the estimate itself. The figure is still an estimate rather than a ceiling, because its input
+ * side is a heuristic; see `CHARS_PER_TEXT_TOKEN`.
  *
  * The cents are rounded to `CENT_PRECISION` before the ceiling, because binary floating point
  * nudges some exact amounts just past a whole cent. `0.07 * 100` is `7.000000000000001`, and a bare

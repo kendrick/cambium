@@ -14,6 +14,8 @@ import refusalFixture from '../app/readers/fixtures/refusal-thinking-first.json'
 import structuredSuccessFixture from '../app/readers/fixtures/structured-success.json' with { type: 'json' };
 import { SESSION_KEY_STORAGE_KEY } from '../app/generation/session-key';
 import { DATABASE_NAME, RECORD_STORE_NAME } from '../app/storage/indexed-db-record-store';
+import { BrandRecordSchema } from '../core/brand-record';
+import type { BrandSeed } from '../core/brand-seed';
 
 import { expect, test } from './fixtures';
 import { makePng } from './fixtures/png';
@@ -159,7 +161,7 @@ function successResponseBody(imageId: string): unknown {
 	};
 }
 
-type StoredRecord = { id: string; images: { id: string }[]; versions: unknown[] };
+type StoredRecord = { id: string; revision: number; images: { id: string }[]; versions: unknown[] };
 
 /**
  * Reads every stored record through raw IndexedDB, the way `e2e/landing-regressions.spec.ts` does,
@@ -196,6 +198,84 @@ async function readRecords(page: Page): Promise<StoredRecord[]> {
 
 async function readRecord(page: Page, recordId: string): Promise<StoredRecord | undefined> {
 	return (await readRecords(page)).find((record) => record.id === recordId);
+}
+
+/**
+ * Appends a first version to a stored record through raw IndexedDB, as a commit from another tab
+ * would land: behind the landing page's back, after it has already rendered the Generate panel.
+ * The result is parsed through `BrandRecordSchema` first, since the panel's fresh `get` parses on
+ * the way out and a fixture it rejected would reach the unexpected outcome rather than the branch
+ * under test. The key color cites the record's own image so the provenance refinement passes, and
+ * `revision` moves by one because a real commit moves it.
+ */
+async function commitVersionFromAnotherTab(page: Page, recordId: string): Promise<void> {
+	const stored = await readRecord(page, recordId);
+	if (!stored) throw new Error('no stored record to append a version to');
+	const imageId = stored.images[0]?.id;
+	if (!imageId) throw new Error('the stored record holds no image for a seed to cite');
+
+	const seed: BrandSeed = {
+		keyColors: [
+			{
+				oklch: [0.6231, 0.188, 259.8],
+				proposedRole: 'brand',
+				sourceImageId: imageId,
+				sourceRegion: null,
+			},
+		],
+		neutralTemperature: null,
+		surfacePolarity: null,
+		radiusCharacter: null,
+		shadowCharacter: null,
+		trackingFeel: null,
+		typeClassification: null,
+		suggestedPairing: null,
+		typeScaleRatio: null,
+		imageClassifications: null,
+		expressive: null,
+	};
+
+	const next = BrandRecordSchema.parse({
+		...stored,
+		revision: stored.revision + 1,
+		versions: [
+			{
+				createdAt: new Date().toISOString(),
+				ordinal: 1,
+				seed,
+				tokenSet: null,
+				provider: 'cambium-e2e-other-tab',
+				model: 'cambium-e2e-other-tab',
+				promptVersion: 'cambium-e2e-other-tab',
+				rawResponse: 'raw model output from the other tab',
+				scaleEngine: 'cambium-oklch-1',
+				fontTable: { source: 'cambium-e2e-other-tab', version: '1' },
+				interpretation: 'balanced',
+			},
+		],
+	});
+
+	await page.evaluate(
+		async ([databaseName, storeName, value]) => {
+			const db = await new Promise<IDBDatabase>((resolve, reject) => {
+				const request = indexedDB.open(databaseName);
+				request.addEventListener('success', () => resolve(request.result));
+				request.addEventListener('error', () => reject(request.error));
+			});
+
+			try {
+				await new Promise<void>((resolve, reject) => {
+					const transaction = db.transaction(storeName, 'readwrite');
+					transaction.objectStore(storeName).put(value);
+					transaction.addEventListener('complete', () => resolve());
+					transaction.addEventListener('error', () => reject(transaction.error));
+				});
+			} finally {
+				db.close();
+			}
+		},
+		[DATABASE_NAME, RECORD_STORE_NAME, next] as const,
+	);
 }
 
 function pngFile(name: string, width = 2, height = 2) {
@@ -329,7 +409,7 @@ test('the key dialog links to the Anthropic console, and a cost estimate is show
 
 	// Read as the person reads it: the dollar figure in the rendered sentence. The bounds are worked
 	// out by hand from the published rates ($4/M input, $20/M output), not from `cost-estimate.ts`.
-	//   Floor: the output ceiling alone, 16,000 tokens x $20/M = $0.32. No prompt can cost less.
+	//   Floor: the output ceiling alone, 16,000 tokens x $20/M = $0.32. No prompt is estimated lower.
 	//   Ceiling: the fixture PNG is 2x2 px, and intake never upscales, so the image is at most
 	//   ceil(4/750) = 1 token. The prompt text is about 13,000 characters, as `generationPromptChars`
 	//   counts it; 100,000 characters is a generous bound, which at 4 characters a token is 25,000
@@ -532,6 +612,27 @@ test('a successful generation reaches the workspace, and the key touches nothing
 	);
 	expect(stored.session).toBe(TEST_KEY);
 	expect(stored.localStorageHoldsKey).toBe(false);
+});
+
+// The landing page offers Generate only for a record with no versions, and it decided that when it
+// rendered. Another tab can commit the first version after that, and a click here would then pay
+// for a second one the person never asked for.
+test('Generate on a record another tab has since given a version sends nothing and opens that record', async ({
+	page,
+}) => {
+	const recordId = await saveOneRecord(page);
+	const sent = await mockAnthropic(page, (body) => ({
+		status: 200,
+		body: successResponseBody(imageIdFromRequest(body)),
+	}));
+
+	await waitForGenerateReady(page);
+	await commitVersionFromAnotherTab(page, recordId);
+	await generateWithFreshKey(page, TEST_KEY);
+
+	await expect(page).toHaveURL(new RegExp(`/workspace\\?record=${recordId}$`));
+	expect(sent).toHaveLength(0);
+	expect((await readRecord(page, recordId))?.versions).toHaveLength(1);
 });
 
 test('a rejected key (401) reopens the key dialog by itself with the key still in session, and no version is saved', async ({
@@ -776,7 +877,7 @@ test('a repair asked for after the key was cleared still goes out as a repair on
 
 	// A repair is a whole second request, images resent and the same output ceiling, so its price
 	// shows before the button is pressed. The floor is worked out by hand: 16,000 output tokens at
-	// $20/M is $0.32, and no repair can cost less than its output ceiling.
+	// $20/M is $0.32, and no repair is estimated below its output ceiling.
 	const repairEstimate = container.locator('[data-estimate]');
 	await expect(repairEstimate).toBeVisible();
 	const repairText = (await repairEstimate.textContent()) ?? '';
@@ -785,8 +886,8 @@ test('a repair asked for after the key was cleared still goes out as a repair on
 	expect(Number(repairDollars)).toBeGreaterThanOrEqual(0.32);
 
 	// The floor alone passes a repair priced on output only, since a 2x2 image's input rounds to a
-	// cent. A repair resends the first request's text and adds the answer and a directive, so it can't
-	// cost less than the first run shown on the same page.
+	// cent. A repair resends the first request's text and adds the answer and a directive, so its
+	// estimate can't be less than the first run's shown on the same page.
 	const firstText = (await page.locator('[data-estimate]').first().textContent()) ?? '';
 	const firstDollars = /\$(\d+\.\d{2})\b/.exec(firstText)?.[1];
 	expect(firstDollars, `no dollar amount in "${firstText}"`).toBeDefined();
