@@ -34,6 +34,7 @@ function makeRecord(overrides: Partial<BrandRecord> = {}): BrandRecord {
 		id: crypto.randomUUID(),
 		schemaVersion: SCHEMA_VERSION,
 		revision: FIRST_REVISION,
+		brandUrl: null,
 		images: [],
 		versions: [makeVersion()],
 		...overrides,
@@ -58,7 +59,6 @@ function makeSeedWithHue(hue: number): BrandSeed {
 			},
 		],
 		neutralTemperature: null,
-		surfacePolarity: null,
 		radiusCharacter: null,
 		shadowCharacter: null,
 		trackingFeel: null,
@@ -81,6 +81,7 @@ function makeRecordWithHue(hue: number): BrandRecord {
 				id: REFERENCE_IMAGE_ID,
 				downscaled: 'data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==',
 				originalHash: 'sha256:abc',
+				tag: 'auto',
 			},
 		],
 		versions: [makeVersion({ seed: makeSeedWithHue(hue) })],
@@ -180,6 +181,37 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 
 			expect(await store.get(record.id)).toEqual(record);
 		});
+
+		// #77: a person tags each image and, optionally, names the brand's site at upload. Both used
+		// to have nowhere to land. Two distinct non-default tags stand in for every tag a form could
+		// send, so a store that dropped or collapsed one would be caught here rather than by a case
+		// that happens to use the same tag twice.
+		it('keeps every image tag and the brand URL through a put and a get', async () => {
+			const record = makeRecord({
+				brandUrl: 'acme.com',
+				images: [
+					{
+						id: 'img-logo',
+						downscaled: 'data:image/png;base64,AA==',
+						originalHash: 'sha256:logo',
+						tag: 'logo',
+					},
+					{
+						id: 'img-storefront',
+						downscaled: 'data:image/png;base64,BB==',
+						originalHash: 'sha256:storefront',
+						tag: 'photo',
+					},
+				],
+			});
+
+			await store.put(record);
+			const reread = await read(store, record.id);
+
+			expect(reread.brandUrl).toBe('acme.com');
+			expect(reread.images.map((image) => image.tag)).toEqual(['logo', 'photo']);
+			expect(reread).toEqual(record);
+		});
 	});
 
 	describe('put', () => {
@@ -268,6 +300,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 						id: 'img-from-b',
 						downscaled: 'data:image/png;base64,BB==',
 						originalHash: 'sha256:b',
+						tag: 'auto',
 					}),
 				);
 
@@ -277,6 +310,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 						id: `img-from-a-${commit}`,
 						downscaled: 'data:image/png;base64,AA==',
 						originalHash: `sha256:a${commit}`,
+						tag: 'auto',
 					});
 				}
 
@@ -320,6 +354,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 					id: 'img-from-the-winner',
 					downscaled: 'data:image/png;base64,BB==',
 					originalHash: 'sha256:b',
+					tag: 'auto',
 				}),
 			);
 
@@ -330,6 +365,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 					id: 'img-from-the-loser',
 					downscaled: 'data:image/png;base64,AA==',
 					originalHash: 'sha256:a',
+					tag: 'auto',
 				}),
 				revision: readByLoser.revision + 1,
 			};
@@ -369,6 +405,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 							id: 'img-from-the-first-insert',
 							downscaled: 'data:image/png;base64,AA==',
 							originalHash: 'sha256:a',
+							tag: 'auto',
 						},
 					],
 				}),
@@ -382,6 +419,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 						id: 'img-from-the-second-insert',
 						downscaled: 'data:image/png;base64,BB==',
 						originalHash: 'sha256:b',
+						tag: 'auto',
 					},
 				],
 			});
@@ -488,6 +526,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 				id: REFERENCE_IMAGE_ID,
 				downscaled: 'data:image/png;base64,AA==',
 				originalHash: 'sha256:a',
+				tag: 'auto',
 			});
 			await store.put(landed);
 
@@ -497,6 +536,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 						id: 'img-2',
 						downscaled: 'data:image/png;base64,BB==',
 						originalHash: 'sha256:b',
+						tag: 'auto',
 					}),
 				),
 			).rejects.toBeInstanceOf(StaleRecordWriteError);
@@ -650,6 +690,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 				id: 'img-1',
 				downscaled: 'data:image/png;base64,AA==',
 				originalHash: 'sha256:a',
+				tag: 'auto',
 			});
 			await store.put(commit);
 
@@ -689,6 +730,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 					id: 'img-1',
 					downscaled: 'data:image/png;base64,AA==',
 					originalHash: 'sha256:a',
+					tag: 'auto',
 				}),
 			);
 			await store.put(
@@ -696,6 +738,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 					id: 'img-2',
 					downscaled: 'data:image/png;base64,BB==',
 					originalHash: 'sha256:b',
+					tag: 'auto',
 				}),
 			);
 
@@ -705,6 +748,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 						id: 'img-3',
 						downscaled: 'data:image/png;base64,CC==',
 						originalHash: 'sha256:c',
+						tag: 'auto',
 					}),
 				)
 				.then(
@@ -741,6 +785,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 						id: 'img-1',
 						downscaled: 'data:image/png;base64,AA==',
 						originalHash: 'sha256:a',
+						tag: 'auto',
 					}),
 				)
 				.then(
@@ -784,6 +829,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 					id: REFERENCE_IMAGE_ID,
 					downscaled: 'data:image/png;base64,AA==',
 					originalHash: 'sha256:a',
+					tag: 'auto',
 				});
 
 				await expect(store.put(withImage)).resolves.toMatchObject({ images: withImage.images });
@@ -857,6 +903,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 				id: 'img-from-a-deleted-incarnation',
 				downscaled: 'data:image/png;base64,AA==',
 				originalHash: 'sha256:ghost',
+				tag: 'auto',
 			});
 
 			await expect(store.put(fromTheDeadIncarnation)).resolves.toMatchObject({
@@ -885,6 +932,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 				id: 'img-the-first-brand-had',
 				downscaled: 'data:image/png;base64,AA==',
 				originalHash: 'sha256:first',
+				tag: 'auto',
 			});
 			await store.put(firstBrandWithImage);
 			const staleCopy = await read(store, original.id);
@@ -899,6 +947,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 				id: 'img-the-owner-added',
 				downscaled: 'data:image/png;base64,BB==',
 				originalHash: 'sha256:owner',
+				tag: 'auto',
 			});
 			await store.put(ownersImage);
 			expect((await read(store, original.id)).revision).toBe(staleCopy.revision);
@@ -907,6 +956,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 				id: 'img-from-a-deleted-incarnation',
 				downscaled: 'data:image/png;base64,CC==',
 				originalHash: 'sha256:ghost',
+				tag: 'auto',
 			});
 			await expect(store.put(fromTheDeadIncarnation)).resolves.toMatchObject({
 				images: fromTheDeadIncarnation.images,
@@ -943,6 +993,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 				id: 'img-from-a-deleted-incarnation',
 				downscaled: 'data:image/png;base64,AA==',
 				originalHash: 'sha256:ghost',
+				tag: 'auto',
 			});
 
 			await expect(store.put(fromTheDeadIncarnation)).rejects.toBeInstanceOf(StaleRecordWriteError);
@@ -954,6 +1005,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 						id: 'img-the-live-record-added',
 						downscaled: 'data:image/png;base64,BB==',
 						originalHash: 'sha256:live',
+						tag: 'auto',
 					}),
 				),
 			).resolves.toMatchObject({ revision: live.revision + 1 });
@@ -984,6 +1036,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 					id: 'img-the-record-had',
 					downscaled: 'data:image/png;base64,BB==',
 					originalHash: 'sha256:had',
+					tag: 'auto',
 				}),
 			);
 			// Read past `FIRST_REVISION`, so the assertion below shows the copy's revision discarded
@@ -997,6 +1050,7 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 				id: 'img-from-a-deleted-record',
 				downscaled: 'data:image/png;base64,AA==',
 				originalHash: 'sha256:ghost',
+				tag: 'auto',
 			});
 
 			await expect(store.put(fromTheDeletedRecord)).resolves.toMatchObject({

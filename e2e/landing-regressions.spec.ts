@@ -18,7 +18,14 @@ import { makeFatPng, makePng } from './fixtures/png';
  * panel's copy. #24 is rewriting that outcome, and wording is not what any of these defects broke.
  */
 
-type StoredRecordSummary = { imageCount: number; payloadLengths: (number | null)[] };
+type StoredRecordSummary = {
+	imageCount: number;
+	payloadLengths: (number | null)[];
+	/** Each image's `tag`, in storage order, matching `payloadLengths`. */
+	tags: string[];
+	/** `BrandRecordSchema.brandUrl`, read exactly as stored: never parsed, never followed. */
+	brandUrl: string | null;
+};
 
 /**
  * Every stored record, reduced to what these scenarios assert, read through raw IndexedDB calls
@@ -30,6 +37,9 @@ type StoredRecordSummary = { imageCount: number; payloadLengths: (number | null)
  * the base64 after the header as the image's `data`, so that's what the per-image limit applies to.
  * The URL prefix and the record's other fields never reach it. A URL the reader wouldn't split
  * comes back `null`, which is where the reader would throw.
+ *
+ * `tags` and `brandUrl` are read the same way, off the row IndexedDB actually holds, so a scenario
+ * asserting either one is checking storage rather than the saved view's retelling of it (#77).
  */
 async function readStoredRecords(page: Page): Promise<StoredRecordSummary[]> {
 	return page.evaluate(
@@ -56,7 +66,10 @@ async function readStoredRecords(page: Page): Promise<StoredRecordSummary[]> {
 				});
 
 				return rows.map((row) => {
-					const { images } = row as { images: { downscaled: string }[] };
+					const { images, brandUrl } = row as {
+						images: { downscaled: string; tag: string }[];
+						brandUrl: string | null;
+					};
 
 					return {
 						imageCount: images.length,
@@ -64,6 +77,8 @@ async function readStoredRecords(page: Page): Promise<StoredRecordSummary[]> {
 							({ downscaled }) =>
 								/^data:([^;,]+);base64,(.+)$/s.exec(downscaled)?.[2]?.length ?? null,
 						),
+						tags: images.map((image) => image.tag),
+						brandUrl,
 					};
 				});
 			} finally {
@@ -324,4 +339,49 @@ test('a small PNG carrying a 12 MB ancillary chunk is re-encoded rather than sto
 	expect(records[0]!.payloadLengths).toHaveLength(1);
 	expect(payloadLength).not.toBeNull();
 	expect(payloadLength!).toBeLessThanOrEqual(MAX_ENCODED_BASE64_BYTES);
+});
+
+/**
+ * Closes #22's two deferred criteria: a tag chosen at upload survives a reload, and a brand URL
+ * entered at upload is present on the stored record. Both used to die with the page, per the
+ * comment `components/landing/landing-route.tsx` carried until #77.
+ *
+ * Asserted twice and two different ways, on purpose. The saved view is read after a real
+ * `page.reload()` rather than off the same in-memory state the save left behind, so this cannot
+ * pass on state that a reload would have thrown away. `readStoredRecords` then reads the row
+ * IndexedDB itself holds, independent of how the saved view chooses to word it, per the consumer
+ * boundary in `AGENTS.md`.
+ *
+ * The brand URL is asserted as the plain text `acme.com`, never as a link: this spec's `test`
+ * comes from `./fixtures`, whose `consoleErrors` fixture is `auto` and fails the scenario on any
+ * console error, including the CORS failure a stray `fetch('acme.com')` would log. A scenario that
+ * requested the URL would fail here rather than pass by coincidence.
+ */
+test('a tag chosen at upload and a brand URL entered at upload survive a reload', async ({
+	page,
+}) => {
+	await page.goto('/');
+
+	await page
+		.getByLabel('Reference images')
+		.setInputFiles([pngFile('mark.png', makePng(2, 2)), pngFile('shot.png', makePng(3, 3))]);
+
+	await expect(stagedRow(page, 'mark.png')).toBeVisible();
+	await expect(stagedRow(page, 'shot.png')).toBeVisible();
+
+	await page.getByLabel('Type of mark.png').selectOption('logo');
+	await page.getByLabel(/Brand site/).fill('acme.com');
+
+	await page.getByRole('button', { name: 'Save these references' }).click();
+	await expectSaved(page);
+
+	await page.reload();
+
+	await expect(page.getByText('Logo', { exact: true })).toBeVisible();
+	await expect(page.getByText('acme.com')).toBeVisible();
+
+	const records = await readStoredRecords(page);
+	expect(records).toHaveLength(1);
+	expect(records[0]!.tags[0]).toBe('logo');
+	expect(records[0]!.brandUrl).toBe('acme.com');
 });

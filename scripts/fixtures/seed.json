@@ -22,7 +22,6 @@
 		"hue": 259.8,
 		"chroma": 0.008
 	},
-	"surfacePolarity": "light-first",
 	"radiusCharacter": {
 		"base": 8,
 		"progression": "soft"

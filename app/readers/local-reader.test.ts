@@ -22,7 +22,7 @@ const FIXTURES = [LOGO_FIXTURE, SCREENSHOT_FIXTURE, NEUTRAL_PAGE_FIXTURE];
 
 /** The stored shape of a reference image. The data URL is never decoded here; see the reader. */
 function storedImage(id: string): ReferenceImage {
-	return { id, downscaled: `data:image/webp;base64,AA`, originalHash: `sha256:${id}` };
+	return { id, downscaled: `data:image/webp;base64,AA`, originalHash: `sha256:${id}`, tag: 'auto' };
 }
 
 /**

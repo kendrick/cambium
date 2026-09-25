@@ -387,7 +387,6 @@ export function chooseKeyColors(opinions: readonly ImageOpinions[]): LocalExtrac
  */
 const UNINFORMED: Omit<BrandSeed, 'keyColors'> = {
 	neutralTemperature: null,
-	surfacePolarity: null,
 	radiusCharacter: null,
 	shadowCharacter: null,
 	trackingFeel: null,

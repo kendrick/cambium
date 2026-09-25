@@ -14,7 +14,6 @@ import type { ColorScheme, SemanticEntry, TokenExtensions } from './token-set';
 const BLANK = {
 	keyColors: null,
 	neutralTemperature: null,
-	surfacePolarity: null,
 	radiusCharacter: null,
 	shadowCharacter: null,
 	trackingFeel: null,

@@ -15,7 +15,7 @@ import {
 } from './seed-prompt';
 
 function image(id: string, downscaled: string): ReferenceImage {
-	return { id, downscaled, originalHash: `sha256:${id}` };
+	return { id, downscaled, originalHash: `sha256:${id}`, tag: 'auto' };
 }
 
 const MODEL = 'claude-opus-5';
@@ -191,7 +191,7 @@ describe('buildSeedRequestBody', () => {
 describe('buildSeedRequestBody with a repair', () => {
 	const repair = {
 		rawResponse: 'Here is the seed you asked for: {"keyColors": [',
-		issues: ['keyColors: Required', 'surfacePolarity: Invalid enum value'],
+		issues: ['keyColors: Required', 'radiusCharacter: Invalid enum value'],
 	};
 
 	type Message = { role: string; content: { type: string; text?: string }[] };

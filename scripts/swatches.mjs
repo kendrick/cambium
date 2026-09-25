@@ -79,7 +79,6 @@ function seedFrom(oklch) {
 	return {
 		keyColors: [{ oklch, proposedRole: 'brand', sourceImageId: 'swatch-seed', sourceRegion: null }],
 		neutralTemperature: null,
-		surfacePolarity: null,
 		radiusCharacter: null,
 		shadowCharacter: null,
 		trackingFeel: null,

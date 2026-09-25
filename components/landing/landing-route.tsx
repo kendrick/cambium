@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 
 import { KeyIndicator } from '@/components/landing/generate/key-indicator';
-import { UploadForm } from '@/components/landing/upload-form';
+import { TAG_LABELS, UploadForm } from '@/components/landing/upload-form';
 import { isSchemaRejection, Outcome, RECORD_PARAM } from '@/components/stored-record';
 
 import type { BrandRecord } from '../../core/brand-record';
@@ -186,7 +186,7 @@ function LandingOutcome({ onKeyStored }: { onKeyStored: (stored: boolean) => voi
 		);
 	}
 
-	const { images, versions } = saved.record;
+	const { images, versions, brandUrl } = saved.record;
 	const count =
 		images.length === 1 ? 'One reference image is' : `${images.length} reference images are`;
 	const workspaceLink = (
@@ -204,15 +204,21 @@ function LandingOutcome({ onKeyStored }: { onKeyStored: (stored: boolean) => voi
 				Saved. {count} stored in this browser under{' '}
 				<code className="bg-muted rounded px-1 py-0.5 text-xs">{recordId}</code>.
 			</p>
-			{/* States what this build can keep rather than what this visit lost. Asserting a loss was
-			    wrong whenever every tag was left on Automatic and the brand site was blank, which is the
-			    common case: it claimed something had gone when nothing had. The route cannot tell those
-			    apart on a reload either, because the form's state is gone by then. #77 adds the fields;
-			    until it lands, saying nothing at all would still be the worse surprise. */}
-			<p className="text-muted-foreground text-sm">
-				The images are stored. Image tags and the brand site are not stored yet, so they do not
-				outlive this page.
-			</p>
+			{/* #77 gave `ReferenceImageSchema` and `BrandRecordSchema` a slot for the tag and the URL,
+			    so a reload can now show what was actually chosen instead of asserting a loss that, before
+			    this landed, was wrong whenever every tag was left on Automatic and the brand site was
+			    blank — the common case. */}
+			<ul className="flex flex-col gap-0.5">
+				{images.map((image) => (
+					<li className="text-muted-foreground text-sm" key={image.id}>
+						{TAG_LABELS[image.tag]}
+					</li>
+				))}
+			</ul>
+			{/* Plain text, never a link: `BrandRecordSchema.brandUrl` is never fetched, parsed as a URL,
+			    or navigated to from here, so rendering it as one would promise a check this route never
+			    makes. */}
+			{brandUrl && <p className="text-muted-foreground text-sm">Brand site: {brandUrl}</p>}
 			{versions.length === 0 ? (
 				<>
 					<p className="text-muted-foreground text-sm">

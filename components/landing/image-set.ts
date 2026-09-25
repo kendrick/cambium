@@ -6,17 +6,12 @@
  * keys off the tags present, which is why the vocabulary and the suggestion live in one module.
  */
 
-/**
- * The tag a person applies, which is a different thing from `BrandSeed.imageClassifications`, where
- * the model states what it thinks each image actually is. Issue #1 asks for the disagreement
- * between the two to be surfaced rather than hidden, so the four kinds are spelled the same here as
- * they are there and `auto` is the extra option only a person has.
- */
-export type ImageTag = 'auto' | 'logo' | 'ui' | 'photo' | 'artwork';
+import type { ImageTag } from '../../core/image-tag';
 
-export const IMAGE_TAGS: readonly ImageTag[] = ['auto', 'logo', 'ui', 'photo', 'artwork'];
-
-export const DEFAULT_IMAGE_TAG: ImageTag = 'auto';
+// The vocabulary itself lives in `core/image-tag.ts` now that #77 gives `ReferenceImageSchema` a
+// `tag` field: `core/` can't import from `components/`, so the schema needed its own copy and this
+// module re-exports it rather than keeping a second one to drift out of sync.
+export { DEFAULT_IMAGE_TAG, IMAGE_TAGS, type ImageTag } from '../../core/image-tag';
 
 /**
  * One image is enough to generate from; three is where a single Messages API call stops paying for

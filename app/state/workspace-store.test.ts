@@ -33,7 +33,6 @@ function seedWith(hue: number): BrandSeed {
 			},
 		],
 		neutralTemperature: null,
-		surfacePolarity: null,
 		radiusCharacter: null,
 		shadowCharacter: null,
 		trackingFeel: null,
@@ -68,7 +67,15 @@ function makeRecord(versions: BrandVersion[] = [makeVersion()]): BrandRecord {
 		id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
 		schemaVersion: SCHEMA_VERSION,
 		revision: 1,
-		images: [{ id: 'img-1', downscaled: 'data:image/png;base64,AA==', originalHash: 'sha256-aa' }],
+		brandUrl: null,
+		images: [
+			{
+				id: 'img-1',
+				downscaled: 'data:image/png;base64,AA==',
+				originalHash: 'sha256-aa',
+				tag: 'auto',
+			},
+		],
 		versions,
 	};
 }
@@ -250,7 +257,6 @@ describe('the workspace store', () => {
 		expect(store.getState().draftSeed).toEqual({
 			keyColors: null,
 			neutralTemperature: null,
-			surfacePolarity: null,
 			radiusCharacter: null,
 			shadowCharacter: null,
 			trackingFeel: 'wide',

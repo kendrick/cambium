@@ -285,7 +285,6 @@ export type WorkspaceStoreOptions = {
 const EMPTY_SEED: BrandSeed = {
 	keyColors: null,
 	neutralTemperature: null,
-	surfacePolarity: null,
 	radiusCharacter: null,
 	shadowCharacter: null,
 	trackingFeel: null,

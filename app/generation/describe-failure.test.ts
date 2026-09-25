@@ -45,7 +45,6 @@ const PROSE = 'The brand reads as a deep forest green on warm cream.';
 const UNKNOWN_KEY = JSON.stringify({
 	keyColors: null,
 	neutralTemperature: null,
-	surfacePolarity: null,
 	radiusCharacter: null,
 	shadowCharacter: null,
 	trackingFeel: null,

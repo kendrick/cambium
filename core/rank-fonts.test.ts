@@ -116,7 +116,6 @@ const LOUD_SEED: ExpressiveScore[] = [{ axis: 'Loud', score: 100 }];
 const emptySeed: BrandSeed = {
 	keyColors: null,
 	neutralTemperature: null,
-	surfacePolarity: null,
 	radiusCharacter: null,
 	shadowCharacter: null,
 	trackingFeel: null,

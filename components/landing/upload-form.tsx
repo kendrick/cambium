@@ -24,17 +24,9 @@ import type { BrandRecord } from '../../core/brand-record';
  * A picked image as the form holds it: what was stored, what the person called it, and the tag they
  * applied.
  *
- * `tag` lives here and nowhere else. `ReferenceImageSchema` is a `z.strictObject` holding an id, a
- * downscaled data URL, and a hash of the original, with no slot for a tag, so a tag drives the
- * guidance below and then dies with the page.
- *
- * Storing it beside the record rather than in it was considered and rejected. `app/storage/` could
- * hold a second object store keyed by image id without touching `core/`, and that is the wrong
- * trade: issue #1 makes the export archive the only migration path, and `SCHEMA_VERSION` exists so
- * that a record whose shape moved fails loudly. Metadata the archive cannot see would migrate
- * silently and wrongly, which is worse than metadata that is honestly absent. Closing this properly
- * needs a field on `ReferenceImageSchema` and a `SCHEMA_VERSION` bump, which is `core/` work. #77
- * owns it and is blocked on this ticket and #9.
+ * `tag` lives here rather than on `PreparedImage`, because intake runs before a person has chosen
+ * one. `save` below folds it onto `prepared.image` to build the `ReferenceImage`
+ * `ReferenceImageSchema` now requires (#77).
  */
 type PickedImage = {
 	name: string;
@@ -42,7 +34,8 @@ type PickedImage = {
 	prepared: PreparedImage;
 };
 
-const TAG_LABELS: Record<ImageTag, string> = {
+/** Exported so the saved view in `landing-route.tsx` prints the same words the picker offered. */
+export const TAG_LABELS: Record<ImageTag, string> = {
 	auto: 'Automatic',
 	logo: 'Logo',
 	ui: 'Interface',
@@ -328,7 +321,13 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				id: crypto.randomUUID(),
 				schemaVersion: SCHEMA_VERSION,
 				revision: FIRST_REVISION,
-				images: picked.map((image) => image.prepared.image),
+				// `tag` folded on here rather than carried on `PreparedImage`: intake runs before the
+				// person has chosen one, and this is the one place that holds both halves.
+				images: picked.map(({ tag, prepared }) => ({ ...prepared.image, tag })),
+				// Trimmed, and empty collapses to null rather than "". `BrandRecordSchema.brandUrl` is
+				// `.min(1).nullable()`, so an empty string would fail the parse instead of just meaning
+				// "nothing typed".
+				brandUrl: brandUrl.trim() || null,
 				// No versions yet. Producing the first one needs a key and a model call, which is #23.
 				versions: [],
 			};
@@ -479,11 +478,10 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				/>
 				{/* Captured and never fetched. Nothing on this route makes a network call, and crawling a
 				    site somebody named would be a different product with a different privacy story.
-				    It reaches no further than this form for now, for the same reason the tag above does:
-				    `BrandRecordSchema` is strict and has no field for it. #77 adds one. */}
-				<p className="text-muted-foreground text-sm">
-					Cambium never opens it, and it is not saved with the record yet.
-				</p>
+				    `BrandRecordSchema.brandUrl` stores it as plain text for exactly that reason (#77): a
+				    field that is never parsed or requested cannot fail on the domains-without-scheme people
+				    actually type. */}
+				<p className="text-muted-foreground text-sm">Cambium never opens it.</p>
 			</div>
 
 			<Button disabled={picked.length < MIN_REFERENCE_IMAGES || busy} type="submit">

@@ -23,7 +23,6 @@ function fixtureFor(oklch: [number, number, number], character: Partial<BrandSee
 	const seed = BrandSeedSchema.parse({
 		keyColors: [{ oklch, proposedRole: 'brand', sourceImageId: 'img-1', sourceRegion: null }],
 		neutralTemperature: null,
-		surfacePolarity: null,
 		radiusCharacter: null,
 		shadowCharacter: null,
 		trackingFeel: null,
