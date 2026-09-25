@@ -1,4 +1,11 @@
-import { contrastAPCA } from 'chroma-js';
+// chroma-js's package index pulls in the whole library, about 85 kB gzipped, and took the build's
+// total JS past its 450 kB budget. The deep module is in chroma-js's own `exports` map. Its `Color`
+// only parses hex and exposes `rgb()` and `alpha()` once these three side-effect modules register
+// them, so without them every call throws "unknown format".
+import 'chroma-js/src/io/hex/index.js';
+import 'chroma-js/src/io/rgb/index.js';
+import 'chroma-js/src/ops/alpha.js';
+import contrastAPCA from 'chroma-js/src/utils/contrastAPCA.js';
 
 import { renderedContrast, toSrgbHex } from '../oklch';
 import { resolveScheme } from '../resolve-scheme';
