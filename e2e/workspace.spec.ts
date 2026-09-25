@@ -26,7 +26,7 @@ const RECORD_PARAM = 'record';
  * reason. Every other field stays null, which `BrandSeedSchema` accepts, because this scenario
  * suite only needs a token list with rows in it, not a particular brand.
  */
-const FIXTURE_SEED = {
+const FIXTURE_SEED: BrandSeed = {
 	keyColors: [
 		{
 			oklch: [0.6231, 0.188, 259.8],
@@ -53,8 +53,10 @@ const FIXTURE_SEED = {
  *
  * Parsed through `BrandRecordSchema` before anything writes it to IndexedDB, so a shape this schema
  * has moved past fails here, loudly, rather than as a silent mismatch the app's own read-back trips
- * over later. `sourceImageId` on the seed's one key color has to name an id this record's `images`
- * actually carries, or the same schema's refinement rejects the fixture outright.
+ * over later. The literal is also held to `BrandRecord` at compile time, because `parse` takes
+ * `unknown` and would otherwise let a new required field through until a browser run.
+ * `sourceImageId` on the seed's one key color has to name an id this record's `images` actually
+ * carries, or the same schema's refinement rejects the fixture outright.
  *
  * `seed` and `rawResponse` are overridable: repair round 1 needs a seed with no key colors (the
  * engine's `no-key-colors` branch) and a version with a null raw response (the re-derivation
@@ -87,9 +89,10 @@ function buildRecordWithOneVersion(
 				scaleEngine: 'cambium-oklch-1',
 				fontTable: { source: 'cambium-e2e-fixture', version: '1' },
 				interpretation: 'balanced',
+				overrides: [],
 			},
 		],
-	});
+	} satisfies BrandRecord);
 }
 
 /**
@@ -105,7 +108,7 @@ function buildEmptyRecord(): BrandRecord {
 		revision: FIRST_REVISION,
 		images: [],
 		versions: [],
-	});
+	} satisfies BrandRecord);
 }
 
 /**

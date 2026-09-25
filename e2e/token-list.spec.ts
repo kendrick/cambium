@@ -17,6 +17,7 @@ import { createOklchScaleEngine } from '../core/oklch-scale-engine';
 import { CAMBIUM_NAMESPACE } from '../core/provenance';
 import { buildTokenSet } from '../core/semantic-layer';
 import { STEP_ROLES } from '../core/step-roles';
+import { applyOverrides, type TokenOverride } from '../core/token-overrides';
 import { stepForAlias, type TokenSet } from '../core/token-set';
 
 import { expect, test } from './fixtures';
@@ -265,8 +266,10 @@ function expectedRowCount(): number {
  * A record holding one version whose seed derives real tokens. Parsed through `BrandRecordSchema`
  * before anything writes it to IndexedDB, the same guard `workspace.spec.ts`'s own builder applies,
  * so a shape the schema has moved past fails here rather than as a silent mismatch on read-back.
+ * The literal is also held to `BrandRecord` at compile time: `parse` takes `unknown`, so without
+ * that a new required field only surfaces once a browser run trips over it.
  */
-function buildRecordWithSeed(seed: BrandSeed): BrandRecord {
+function buildRecordWithSeed(seed: BrandSeed, overrides: TokenOverride[] = []): BrandRecord {
 	const createdAt = new Date().toISOString();
 
 	return BrandRecordSchema.parse({
@@ -289,9 +292,10 @@ function buildRecordWithSeed(seed: BrandSeed): BrandRecord {
 				scaleEngine: 'cambium-oklch-1',
 				fontTable: { source: 'cambium-e2e-fixture', version: '1' },
 				interpretation: 'balanced',
+				overrides,
 			},
 		],
-	});
+	} satisfies BrandRecord);
 }
 
 /**
@@ -750,6 +754,93 @@ test('an override survives a preset switch', async ({ page }) => {
 	await expect
 		.poll(async () => paintDistance(await paintedCentre(swatch), target))
 		.toBeLessThanOrEqual(1);
+});
+
+/**
+ * The computed `background-color` of a throwaway element painted with `oklchCss`, so the swatch's
+ * computed value is compared against one the browser normalised the same way rather than against a
+ * spelling this spec guessed at. Hung off `<body>` so nothing the list does to its own rows can
+ * reach the probe.
+ */
+async function probeComputedColour(page: Page, oklchCss: string): Promise<string> {
+	return page.evaluate((fill) => {
+		const probe = document.createElement('div');
+		probe.style.backgroundColor = fill;
+		document.body.appendChild(probe);
+
+		try {
+			return getComputedStyle(probe).backgroundColor;
+		} finally {
+			probe.remove();
+		}
+	}, oklchCss);
+}
+
+test('a version saved with overrides opens with them applied, and still does after a reload', async ({
+	page,
+}) => {
+	const derivedLg = TOKEN_SET.radius.values.lg!.value;
+	const overrides: TokenOverride[] = [
+		{ kind: 'alias', scheme: 'light', token: 'primary', alias: 'brand.3' },
+		{ kind: 'value', category: 'radius', path: ['lg', 'value'], value: derivedLg + 1 },
+	];
+
+	// Expectations come from applying the stored list in Node, not from the seed alone, so a page
+	// that ignores the version's overrides shows the derived values and fails every check below.
+	const applied = applyOverrides(TOKEN_SET, overrides);
+	if (!applied.ok) throw new Error(`fixture overrides refused: ${JSON.stringify(applied.issues)}`);
+
+	const expectedAlias = applied.tokenSet.schemes.light.semantic.primary!.alias;
+	const expectedLg = applied.tokenSet.radius.values.lg!.value;
+	const expectedStep = stepForAlias(applied.tokenSet.schemes.light.primitives, expectedAlias)!;
+
+	expect(expectedAlias).not.toBe(LIGHT.semantic.primary!.alias);
+	expect(expectedLg).not.toBe(derivedLg);
+	expect(expectedStep).toBeDefined();
+
+	const record = buildRecordWithSeed(SEED, overrides);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const primaryRow = page.locator('[data-token="semantic.primary"]');
+	const radiusRow = page.locator('[data-token="radius.lg"]');
+	const swatch = primaryRow.locator('[data-swatch]');
+
+	// brand.3 and brand.9 have to paint differently for this seed, or the colour checks below would
+	// pass on a page still showing the derived alias.
+	const derivedStep = stepForAlias(LIGHT.primitives, LIGHT.semantic.primary!.alias)!;
+	await expect(swatch).toBeVisible();
+	expect(
+		paintDistance(
+			await referencePaint(page, swatch, oklchFromFields(expectedStep)),
+			await referencePaint(page, swatch, oklchFromFields(derivedStep)),
+		),
+	).toBeGreaterThan(1);
+
+	async function expectOverridesShown(): Promise<void> {
+		await expect(primaryRow).toHaveAttribute('data-overridden', '');
+		await expect(radiusRow).toHaveAttribute('data-overridden', '');
+		await expect(page.getByLabel('primary alias', { exact: true })).toHaveValue(expectedAlias);
+		await expect(page.getByLabel('radius.lg value', { exact: true })).toHaveValue(
+			String(expectedLg),
+		);
+
+		const probe = await probeComputedColour(page, oklchFromFields(expectedStep));
+		await expect(swatch).toHaveCSS('background-color', probe);
+
+		// The computed value is what the cascade settled on; the pixel is what reached the screen.
+		const target = await referencePaint(page, swatch, oklchFromFields(expectedStep));
+		await expect
+			.poll(async () => paintDistance(await paintedCentre(swatch), target))
+			.toBeLessThanOrEqual(1);
+	}
+
+	await expectOverridesShown();
+
+	await page.reload();
+
+	await expectOverridesShown();
 });
 
 test('every semantic row resolves to a real primitive step, checked against the token set rather than the map that proposed it', async ({
