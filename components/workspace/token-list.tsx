@@ -15,6 +15,7 @@ import {
 	type SchemeName,
 	type TokenOverride,
 	type ValueCategory,
+	type ValuePath,
 } from '../../core/token-overrides';
 import { CategoryGroup } from './token-list/category-group';
 import { PrimitiveRow } from './token-list/primitive-row';
@@ -39,6 +40,29 @@ const NON_COLOUR_CATEGORIES: readonly (ValueCategory | 'shadow')[] = [
 	'focusRing',
 	'zIndex',
 ];
+
+/**
+ * Whether any leaf under `tokens` currently holds an override, by the same key `ValueRow` computes
+ * for its own reset control. `CategoryGroup` needs this at the category level, one call before
+ * `ValueRow` ever mounts a row, to decide whether the section still counts as untouched.
+ */
+function categoryHasOverride(
+	category: ValueCategory | 'shadow',
+	scheme: SchemeName,
+	tokens: { path: ValuePath; leaves: { suffix: ValuePath; value: number }[] }[],
+	overrides: Record<string, TokenOverride>,
+): boolean {
+	return tokens.some((token) =>
+		token.leaves.some((leaf) => {
+			const path = [...token.path, ...leaf.suffix];
+			const override: TokenOverride =
+				category === 'shadow'
+					? { kind: 'value', category: 'shadow', scheme, path, value: leaf.value }
+					: { kind: 'value', category, path, value: leaf.value };
+			return Object.hasOwn(overrides, overrideKey(override));
+		}),
+	);
+}
 
 export type TokenListProps = {
 	tokenSet: TokenSet | null;
@@ -228,9 +252,15 @@ export function TokenList({
 				// is a schema-fixed literal on this category, so the top-level copy still answers that.
 				const values = category === 'shadow' ? colorScheme.shadow.values : topEntry.values;
 				const tokens = walkCategoryTokens(values);
+				const hasOverride = categoryHasOverride(category, scheme, tokens, overrides);
 
 				return (
-					<CategoryGroup key={category} name={category} source={topEntry.source}>
+					<CategoryGroup
+						key={category}
+						name={category}
+						source={topEntry.source}
+						hasOverride={hasOverride}
+					>
 						{tokens.map((token) => (
 							<ValueRow
 								// Shadow is the one category here that differs by scheme; see `PrimitiveRow`'s

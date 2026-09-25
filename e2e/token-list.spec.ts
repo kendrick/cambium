@@ -638,6 +638,7 @@ test('every system-constant category is labelled an untouched default, and no de
 	for (const category of SYSTEM_CATEGORIES) {
 		const section = tokensSection.locator(`section[data-category="${category}"]`);
 		await expect(section).toHaveAttribute('data-source', 'system');
+		await expect(section).toHaveAttribute('data-untouched', '');
 		await expect(section.getByText('Untouched default')).toBeVisible();
 	}
 
@@ -646,8 +647,45 @@ test('every system-constant category is labelled an untouched default, and no de
 	for (const category of derivedCategories) {
 		const section = tokensSection.locator(`section[data-category="${category}"]`);
 		await expect(section).not.toHaveAttribute('data-source', /.+/);
+		await expect(section).not.toHaveAttribute('data-untouched', /.+/);
 		await expect(section.getByText('Untouched default')).toHaveCount(0);
 	}
+});
+
+test('overriding a system value drops the untouched label without changing its source, and reset restores it', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const tokensSection = page.getByRole('region', { name: 'Tokens' });
+	const section = tokensSection.locator('section[data-category="spacing"]');
+	const row = section.locator('[data-token="spacing.md"]');
+	const field = page.getByLabel('spacing.md value', { exact: true });
+	const shown = TOKEN_SET.spacing.values.md!.value;
+
+	await expect(section).toHaveAttribute('data-source', 'system');
+	await expect(section).toHaveAttribute('data-untouched', '');
+
+	await field.fill(String(shown + 1));
+	await field.blur();
+
+	await expect(row).toHaveAttribute('data-overridden', '');
+	// The source never moves: overriding a value doesn't change where it came from, only whether it
+	// still matches what shipped.
+	await expect(section).toHaveAttribute('data-source', 'system');
+	await expect(section).not.toHaveAttribute('data-untouched', /.+/);
+	await expect(section.getByText('Untouched default')).toHaveCount(0);
+	await expect(section.getByText('Default, edited')).toBeVisible();
+
+	await row.getByRole('button', { name: 'Reset' }).click();
+
+	await expect(row).not.toHaveAttribute('data-overridden', '');
+	await expect(section).toHaveAttribute('data-untouched', '');
+	await expect(section.getByText('Untouched default')).toBeVisible();
+	await expect(section.getByText('Default, edited')).toHaveCount(0);
 });
 
 test("re-aliasing primary to another step marks the row overridden and repaints its swatch as that step's colour", async ({
