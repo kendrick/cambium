@@ -3,7 +3,7 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { BrandRecord, BrandVersion } from '../../core/brand-record';
 import type { BrandSeed } from '../../core/brand-seed';
 import { checkContrast, type ContrastEntry } from '../../core/contrast/check';
-import { repairContrast, type UnrepairedEntry } from '../../core/contrast/repair';
+import { type UnrepairedEntry, withContrastRepairs } from '../../core/contrast/repair';
 import { type ScaleEngine, type ScaleEngineResult } from '../../core/scale-engine';
 import { BALANCED, type InterpretationParams } from '../../core/interpretation';
 import { buildTokenSet } from '../../core/semantic-layer';
@@ -388,17 +388,8 @@ function repairedBase(
 	}
 
 	const base = buildTokenSet(derived.schemes, seed, PRESET_PARAMS[preset]);
-	const { overrides, unrepaired } = repairContrast(base);
-	const applied = applyOverrides(base, overrides);
-
-	// `repairContrast` only ever proposes overrides it has already applied to its own working copy
-	// of `base` (`core/contrast/repair.ts`), so a rejection here would mean the two disagree about
-	// what `base` can take.
-	if (!applied.ok) {
-		throw new Error(`contrast repair produced an override the base could not take: ${applied.key}`);
-	}
-
-	const result = { seed, preset, repaired: applied.tokenSet, unrepaired };
+	const { tokenSet, unrepaired } = withContrastRepairs(base);
+	const result = { seed, preset, repaired: tokenSet, unrepaired };
 
 	repairCache.set(derived, result);
 

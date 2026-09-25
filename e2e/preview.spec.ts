@@ -11,6 +11,7 @@ import {
 	SCHEMA_VERSION,
 } from '../core/brand-record';
 import type { BrandSeed } from '../core/brand-seed';
+import { withContrastRepairs } from '../core/contrast/repair';
 import { cssNaming } from '../core/css/globals-css';
 import { scalarDeclarations, schemeDeclarations } from '../core/css/scheme-declarations';
 import { BALANCED } from '../core/interpretation';
@@ -58,7 +59,10 @@ if (!DERIVED.ok) {
 	throw new Error(`fixture seed failed to derive: ${DERIVED.error.kind}`);
 }
 
-const TOKEN_SET = buildTokenSet(DERIVED.schemes, SEED, BALANCED);
+// `repairedBase` in `app/state/workspace-store.ts` never paints the raw derived set: it repairs
+// contrast first and applies that repair's own overrides, so a fixture that skipped this step would
+// check the preview against colours nothing on screen ever shows.
+const TOKEN_SET = withContrastRepairs(buildTokenSet(DERIVED.schemes, SEED, BALANCED)).tokenSet;
 const NAMING = cssNaming();
 const SCALARS = scalarDeclarations(TOKEN_SET, NAMING);
 const SCHEMES = ['light', 'dark'] as const satisfies readonly SchemeName[];

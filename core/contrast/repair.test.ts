@@ -10,7 +10,14 @@ import { buildTokenSet } from '../semantic-layer';
 import { applyOverrides, type TokenOverride } from '../token-overrides';
 import type { TokenSet } from '../token-set';
 import { checkContrast } from './check';
-import { defaultPins, type PinKey, pinKey, type RepairEntry, repairContrast } from './repair';
+import {
+	defaultPins,
+	type PinKey,
+	pinKey,
+	type RepairEntry,
+	repairContrast,
+	withContrastRepairs,
+} from './repair';
 
 /**
  * Real engine output for the same ten seeds `check.test.ts` sweeps. Repeated rather than imported
@@ -431,5 +438,29 @@ describe('pins', () => {
 			expect(defaultPins(recoloured)).toEqual(defaultPins(base));
 			expect(defaultPins(base)).toEqual(observedSteps(base));
 		});
+	});
+});
+
+describe('withContrastRepairs', () => {
+	/**
+	 * Checked against `applyOverrides(base, repairContrast(base).overrides).tokenSet` rather than
+	 * against a second call to `withContrastRepairs` itself, or the function would only ever be shown
+	 * to agree with its own output. `applyOverrides` and `repairContrast` are each tested on their
+	 * own terms elsewhere in this file; this is the one test that reads the compose back as those two
+	 * calls made by hand.
+	 */
+	it('deep-equals repairContrast composed onto applyOverrides by hand, for blue', () => {
+		const base = sweptSet('blue');
+		const { overrides, unrepaired } = repairContrast(base);
+
+		expect(withContrastRepairs(base)).toEqual({ tokenSet: applied(base, overrides), unrepaired });
+	});
+
+	it('passes AA everywhere for every seed in the sweep', () => {
+		for (const { tokenSet } of swept) {
+			const { tokenSet: repaired } = withContrastRepairs(tokenSet);
+
+			expect(checkContrast(repaired).filter((entry) => !entry.passes)).toEqual([]);
+		}
 	});
 });

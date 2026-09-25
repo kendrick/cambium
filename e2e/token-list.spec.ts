@@ -11,6 +11,7 @@ import {
 	SCHEMA_VERSION,
 } from '../core/brand-record';
 import type { BrandSeed } from '../core/brand-seed';
+import { withContrastRepairs } from '../core/contrast/repair';
 import { serializeDtcg } from '../core/dtcg/serialize';
 import { BALANCED } from '../core/interpretation';
 import { createOklchScaleEngine } from '../core/oklch-scale-engine';
@@ -67,7 +68,12 @@ if (!DERIVED.ok) {
 	throw new Error(`fixture seed failed to derive: ${DERIVED.error.kind}`);
 }
 
-const TOKEN_SET: TokenSet = buildTokenSet(DERIVED.schemes, SEED, BALANCED);
+// `repairedBase` in `app/state/workspace-store.ts` never paints the raw derived set: it repairs
+// contrast first and applies that repair's own overrides, so a fixture that skipped this step would
+// check the token list against colours nothing on screen ever shows.
+const TOKEN_SET: TokenSet = withContrastRepairs(
+	buildTokenSet(DERIVED.schemes, SEED, BALANCED),
+).tokenSet;
 const LIGHT = TOKEN_SET.schemes.light;
 
 const SEMANTIC_TOKENS = Object.keys(LIGHT.semantic);

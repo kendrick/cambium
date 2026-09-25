@@ -316,3 +316,26 @@ export function repairContrast(tokenSet: TokenSet, options: RepairOptions = {}):
 
 	return { overrides: [...moves.values()], unrepaired, report: finalReport };
 }
+
+export type ContrastRepairedTokenSet = { tokenSet: TokenSet; unrepaired: UnrepairedEntry[] };
+
+/**
+ * Runs `repairContrast` and applies its overrides in one call, so every caller that wants the
+ * repaired set itself—rather than the moves that produce it—builds it the same way. The workspace
+ * store and both e2e fixtures go through here for that reason: a fixture that composed the two
+ * calls on its own could drift from what the store actually paints.
+ *
+ * `repairContrast` only ever proposes overrides it has already applied to its own working copy of
+ * `tokenSet` (see the loop above), so a rejection here would mean the two disagree about what the
+ * base can take.
+ */
+export function withContrastRepairs(tokenSet: TokenSet): ContrastRepairedTokenSet {
+	const { overrides, unrepaired } = repairContrast(tokenSet);
+	const applied = applyOverrides(tokenSet, overrides);
+
+	if (!applied.ok) {
+		throw new Error(`contrast repair produced an override the base could not take: ${applied.key}`);
+	}
+
+	return { tokenSet: applied.tokenSet, unrepaired };
+}
