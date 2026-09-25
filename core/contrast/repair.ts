@@ -107,7 +107,8 @@ function strictlyInSrgb(color: Oklch): boolean {
 /**
  * The stated tolerance from #8: hue 0, chroma 0 unless the new lightness can't hold the original
  * chroma inside sRGB, and then reduced to the sRGB boundary at that lightness and hue, and no
- * further.
+ * further. Hue 0 holds because `quantizeToSrgb` rounds hue to 4 places and every step
+ * `buildTokenSet` hands over is already on that grid; an unquantized input would drift under 5e-5.
  *
  * Every candidate is the colour the stylesheet will print, not a full-precision one. `toOklchCss`
  * rounds each channel to six places, and a chroma `fitToSrgbGamut` left at 0.009274781… printed as

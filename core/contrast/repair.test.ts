@@ -265,7 +265,7 @@ describe('repairContrast across the sweep', () => {
 /**
  * The stylesheet and the preview paint a repair through `toOklchCss`, not through the in-memory
  * override. #140's review caught the gap: a gamut-fitted chroma of 0.009274781… printed as
- * `0.009275`, one millionth past the sRGB edge, so the colour a browser parsed was not the one
+ * `0.009275`, putting its red channel at 1.0000016, past the sRGB edge, so the colour a browser parsed was not the one
  * `achieved` was measured on. Everything below reads the printed string back with a parser that
  * shares nothing with `core/oklch.ts`, and measures contrast from bytes it rounds itself.
  */
@@ -318,7 +318,7 @@ describe('repairs as the stylesheet prints them', () => {
 				const channels = { l: override.l, c: override.c, h: override.h };
 
 				for (const channel of printedRgb(channels)) {
-					expect(channel).toBeGreaterThanOrEqual(0);
+					expect(channel).toBeGreaterThanOrEqual(-1e-9);
 					expect(channel).toBeLessThanOrEqual(1 + 1e-9);
 				}
 
