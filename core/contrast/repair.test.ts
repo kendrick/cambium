@@ -1,6 +1,8 @@
+import { converter } from 'culori/fn';
 import { describe, expect, it } from 'vitest';
 
 import { BrandSeedSchema } from '../brand-seed';
+import { toOklchCss } from '../css/oklch-css';
 import { BALANCED } from '../interpretation';
 import { createOklchScaleEngine } from '../oklch-scale-engine';
 import { isInSrgb, type Oklch } from '../oklch';
@@ -87,6 +89,16 @@ function primitiveOverrides(overrides: readonly TokenOverride[]) {
 
 		return override;
 	});
+}
+
+const toRgb = converter('rgb');
+
+function outsideSrgb(color: Oklch): boolean {
+	const rgb = toRgb({ mode: 'oklch', ...color })!;
+
+	return [rgb.r ?? 0, rgb.g ?? 0, rgb.b ?? 0].some(
+		(channel) => channel < -1e-9 || channel > 1 + 1e-9,
+	);
 }
 
 /**
@@ -190,6 +202,8 @@ describe('repairContrast across the sweep', () => {
 	 * lightness can't hold the original chroma inside sRGB, and then it may drop to the sRGB boundary
 	 * at that lightness and no further. The boundary is checked as "in gamut here, out of gamut a
 	 * millionth further out", so a repair that shaves more chroma than the gamut asks for fails.
+	 * "Out" is a channel past 0..1 by more than float noise, not by `isInSrgb`'s millionth: that
+	 * slack is what let a printed repair land outside sRGB (see the printed-repair suite below).
 	 */
 	it.each(SWEEP.map(([name]) => name))(
 		'%s: every override keeps hue exactly and chroma exactly or at the sRGB edge',
@@ -205,7 +219,7 @@ describe('repairContrast across the sweep', () => {
 
 				const chromaKept = override.c === original.c;
 				const chromaAtEdge =
-					override.c < original.c && !isInSrgb({ ...moved, c: override.c + 1e-6 });
+					override.c < original.c && outsideSrgb({ ...moved, c: override.c + 1e-6 });
 
 				expect(chromaKept || chromaAtEdge).toBe(true);
 			}
@@ -246,6 +260,100 @@ describe('repairContrast across the sweep', () => {
 
 		expect(JSON.parse(JSON.stringify(result))).toEqual(result);
 	});
+});
+
+/**
+ * The stylesheet and the preview paint a repair through `toOklchCss`, not through the in-memory
+ * override. #140's review caught the gap: a gamut-fitted chroma of 0.009274781… printed as
+ * `0.009275`, one millionth past the sRGB edge, so the colour a browser parsed was not the one
+ * `achieved` was measured on. Everything below reads the printed string back with a parser that
+ * shares nothing with `core/oklch.ts`, and measures contrast from bytes it rounds itself.
+ */
+function parseOklchCss(css: string): Oklch {
+	const match = /^oklch\(([^ ]+) ([^ ]+) ([^ )]+)\)$/.exec(css);
+
+	if (!match) throw new Error(`not a bare oklch() triple: ${css}`);
+
+	return { l: Number(match[1]), c: Number(match[2]), h: Number(match[3]) };
+}
+
+function printedRgb(color: Oklch) {
+	const rgb = toRgb({ mode: 'oklch', ...parseOklchCss(toOklchCss(color)) })!;
+
+	return [rgb.r ?? 0, rgb.g ?? 0, rgb.b ?? 0];
+}
+
+/** WCAG 2.2 relative luminance of the 8-bit colour a browser paints for `color`'s printed CSS. */
+function paintedLuminance(color: Oklch): number {
+	const [r, g, b] = printedRgb(color).map((channel) => {
+		const byte = Math.round(Math.min(1, Math.max(0, channel)) * 255) / 255;
+
+		return byte <= 0.04045 ? byte / 12.92 : ((byte + 0.055) / 1.055) ** 2.4;
+	});
+
+	return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+}
+
+function paintedContrast(a: Oklch, b: Oklch): number {
+	const [x, y] = [paintedLuminance(a), paintedLuminance(b)];
+
+	return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
+
+function primitiveFor(tokenSet: TokenSet, scheme: SchemeName, token: string): Oklch {
+	const alias = tokenSet.schemes[scheme].semantic[token]!.alias;
+	const dot = alias.lastIndexOf('.');
+	const { l, c, h } = stepOf(tokenSet, scheme, alias.slice(0, dot), Number(alias.slice(dot + 1)));
+
+	return { l, c, h };
+}
+
+describe('repairs as the stylesheet prints them', () => {
+	it.each(SWEEP.map(([name]) => name))(
+		'%s: every override prints exactly its own channels, and they are in sRGB',
+		(name) => {
+			const { overrides, report } = repairContrast(sweptSet(name));
+
+			for (const override of primitiveOverrides(overrides)) {
+				const channels = { l: override.l, c: override.c, h: override.h };
+
+				for (const channel of printedRgb(channels)) {
+					expect(channel).toBeGreaterThanOrEqual(0);
+					expect(channel).toBeLessThanOrEqual(1 + 1e-9);
+				}
+
+				expect(parseOklchCss(toOklchCss(channels))).toEqual(channels);
+			}
+
+			for (const entry of report) {
+				expect(parseOklchCss(toOklchCss(entry.to))).toEqual(entry.to);
+			}
+		},
+	);
+
+	/**
+	 * Every declared pair, not only the repaired ones: a move for one pair shifts every token aliased
+	 * to that step, so the printed set has to pass as a whole.
+	 */
+	it.each(SWEEP.map(([name]) => name))(
+		'%s: every declared pair clears its target on the printed colours, in both schemes',
+		(name) => {
+			const base = sweptSet(name);
+			const final = applied(base, repairContrast(base).overrides);
+
+			for (const pair of checkContrast(final)) {
+				const measured = paintedContrast(
+					primitiveFor(final, pair.scheme, pair.foreground),
+					primitiveFor(final, pair.scheme, pair.background),
+				);
+
+				expect(
+					measured,
+					`${pair.scheme} ${pair.foreground} on ${pair.background}`,
+				).toBeGreaterThanOrEqual(pair.target);
+			}
+		},
+	);
 });
 
 describe('the repair report', () => {

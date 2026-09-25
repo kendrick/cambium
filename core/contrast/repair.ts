@@ -1,4 +1,6 @@
-import { fitToSrgbGamut, isInSrgb, type Oklch, renderedContrast, toSrgbHex } from '../oklch';
+import { converter } from 'culori/fn';
+
+import { type Oklch, quantizeToSrgb, renderedContrast, toSrgbHex } from '../oklch';
 import { CAMBIUM_NAMESPACE } from '../provenance';
 import { SCHEME_NAMES, type SchemeName } from '../scale-engine';
 import { applyOverrides, overrideKey, type TokenOverride } from '../token-overrides';
@@ -85,17 +87,42 @@ const L_UNITS = 1_000_000;
  */
 const COARSE_STRIDE = 10_000;
 
+const toRgb = converter('rgb');
+
+/**
+ * Float noise only. `isInSrgb`'s `SRGB_EPSILON` lets a channel sit a millionth past 1, and
+ * `quantizeToSrgb` stops at that edge, so magenta's dark repair printed a red channel of
+ * 1.00000056: a colour outside sRGB, rescued by the browser's clamp rather than by the token.
+ */
+const STRICT_EPSILON = 1e-9;
+
+function strictlyInSrgb(color: Oklch): boolean {
+	const rgb = toRgb({ mode: 'oklch', ...color })!;
+
+	return [rgb.r ?? 0, rgb.g ?? 0, rgb.b ?? 0].every(
+		(channel) => channel >= -STRICT_EPSILON && channel <= 1 + STRICT_EPSILON,
+	);
+}
+
 /**
  * The stated tolerance from #8: hue 0, chroma 0 unless the new lightness can't hold the original
  * chroma inside sRGB, and then reduced to the sRGB boundary at that lightness and hue, and no
- * further. `fitToSrgbGamut` bisects chroma at fixed l and h and returns the in-gamut side, so the
- * result is always displayable and `renderedContrast` measures exactly what gets painted, with no
- * clamp between the token and the pixel.
+ * further.
+ *
+ * Every candidate is the colour the stylesheet will print, not a full-precision one. `toOklchCss`
+ * rounds each channel to six places, and a chroma `fitToSrgbGamut` left at 0.009274781… printed as
+ * 0.009275, past the edge (#140 review). `quantizeToSrgb` puts l, c and h on that grid, the rule
+ * every engine ramp step already went through; the loop then takes chroma the last millionth or so
+ * from `SRGB_EPSILON`'s edge to the real one. What the search measures, what the override stores,
+ * and what a browser parses are then one colour.
  */
 function colourAt(units: number, original: Oklch): Oklch {
-	const candidate = { l: units / L_UNITS, c: original.c, h: original.h };
+	const { l, c, h } = quantizeToSrgb({ l: units / L_UNITS, c: original.c, h: original.h });
+	let chroma = Math.round(c * L_UNITS);
 
-	return isInSrgb(candidate) ? candidate : fitToSrgbGamut(candidate);
+	while (chroma > 0 && !strictlyInSrgb({ l, c: chroma / L_UNITS, h })) chroma -= 1;
+
+	return { l, c: chroma / L_UNITS, h };
 }
 
 /**
