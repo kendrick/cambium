@@ -104,6 +104,7 @@ type ExportedRow = {
 	/** Each control's accessible name, mapped to the alias or number the export holds for it. */
 	controls: Record<string, number | string>;
 	provenance: string;
+	rationale: string;
 };
 
 /** DTCG fixes a cubic-bezier's `$value` as the tuple `[x1, y1, x2, y2]`. */
@@ -191,15 +192,22 @@ const EXPORTED_ROWS: ReadonlyMap<string, ExportedRow> = (() => {
 			return;
 		}
 
-		const extensions = record.$extensions as Record<string, { provenance: string }>;
-		const provenance = extensions[CAMBIUM_NAMESPACE]!.provenance;
+		const extensions = record.$extensions as Record<
+			string,
+			{ provenance: string; rationale: string }
+		>;
+		const { provenance, rationale } = extensions[CAMBIUM_NAMESPACE]!;
 		const value = record.$value;
 
 		// The export nests both colour groups under `color`; the list names them on their own.
 		if (path[0] === 'color' && path[1] === 'semantic') {
 			const token = path.slice(2).join('.');
 			const alias = String(value).replace(/^\{color\.primitive\.(.+)\}$/, '$1');
-			rows.set(`semantic.${token}`, { controls: { [`${token} alias`]: alias }, provenance });
+			rows.set(`semantic.${token}`, {
+				controls: { [`${token} alias`]: alias },
+				provenance,
+				rationale,
+			});
 			return;
 		}
 
@@ -208,6 +216,7 @@ const EXPORTED_ROWS: ReadonlyMap<string, ExportedRow> = (() => {
 		rows.set(id, {
 			controls: Object.fromEntries(leaves.map(([name, number]) => [`${id} ${name}`, number])),
 			provenance,
+			rationale,
 		});
 	}
 
@@ -471,7 +480,8 @@ test('every category is grouped, and every row carries a value control, a proven
 		expect(controls.length, `${row.id} control count`).toBe(Object.keys(exported.controls).length);
 		expect(Object.fromEntries(controls), `${row.id} controls`).toEqual(exported.controls);
 		expect(row.provenance, `${row.id} provenance`).toBe(exported.provenance);
-		expect(row.rationale.length, `${row.id} should carry a rationale`).toBeGreaterThan(0);
+		// The whole sentence, since the one-line truncation is CSS and `textContent` ignores it.
+		expect(row.rationale, `${row.id} rationale`).toBe(exported.rationale);
 	}
 
 	// One row's exact text, tied to the Node-computed set rather than to the count above: `primary`
