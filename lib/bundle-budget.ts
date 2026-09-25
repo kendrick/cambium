@@ -17,9 +17,13 @@
  * Total is the backstop. Code-splitting moves weight out of first-load rather than removing it,
  * and without a second number the lazy chunks grow unwatched.
  *
+ * Total rose from 400 kB to 450 kB at #26 and #28. The build measured 398.6 kB just before, so the
+ * backstop had no room for any lazy code. #26's override schema added 4.4 kB, and #28's token
+ * preview about 36 kB, 25 kB of that Floating UI for the popover. First-load didn't move.
+ *
  * These live in TypeScript rather than JSON so they are typechecked, greppable, and can carry
  * this comment.
  */
 export const FIRST_LOAD_BUDGET_BYTES = 200_000;
 
-export const TOTAL_JS_BUDGET_BYTES = 400_000;
+export const TOTAL_JS_BUDGET_BYTES = 450_000;
