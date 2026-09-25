@@ -21,9 +21,14 @@
  * backstop had no room for any lazy code. #26's override schema added 4.4 kB, and #28's token
  * preview about 36 kB, 25 kB of that Floating UI for the popover. First-load didn't move.
  *
+ * Total rose again, from 450 kB to 500 kB, ahead of #25 and #29 (ADR-0006). After #8 the build
+ * measured 449.0 kB, leaving 1.0 kB, and both issues add new code to the lazy workspace chunk:
+ * #29 the DTCG and stylesheet adapters the chunk doesn't load yet, #25 an editor for every seed
+ * field. Each PR states its measured delta. First-load stays at 200 kB.
+ *
  * These live in TypeScript rather than JSON so they are typechecked, greppable, and can carry
  * this comment.
  */
 export const FIRST_LOAD_BUDGET_BYTES = 200_000;
 
-export const TOTAL_JS_BUDGET_BYTES = 450_000;
+export const TOTAL_JS_BUDGET_BYTES = 500_000;
