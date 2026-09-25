@@ -240,9 +240,9 @@ describe('the prompt', () => {
 		expect(SEED_SYSTEM_PROMPT.length).toBeGreaterThan(SEED_USER_DIRECTIVE.length * 4);
 	});
 
-	// #77 retired surfacePolarity from the seed. Deriving the count from BrandSeedSchema.shape,
-	// rather than writing 10 here, is what makes an eleventh field added later fail this test
-	// instead of leaving a stale field count in the prose.
+	// The prompt spells its field count as a word, which the key-list checks above can't see. Pinning
+	// the schema at ten here means a field added later fails this test until the "ten fields"
+	// sentences move with it.
 	it('says the field count the schema actually has, and drops the retired field', () => {
 		expect(seedKeys).toHaveLength(10);
 		expect(SEED_TOOL_DESCRIPTION).toContain('ten fields');

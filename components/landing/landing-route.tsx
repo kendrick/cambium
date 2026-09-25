@@ -204,10 +204,6 @@ function LandingOutcome({ onKeyStored }: { onKeyStored: (stored: boolean) => voi
 				Saved. {count} stored in this browser under{' '}
 				<code className="bg-muted rounded px-1 py-0.5 text-xs">{recordId}</code>.
 			</p>
-			{/* #77 gave `ReferenceImageSchema` and `BrandRecordSchema` a slot for the tag and the URL,
-			    so a reload can now show what was actually chosen instead of asserting a loss that, before
-			    this landed, was wrong whenever every tag was left on Automatic and the brand site was
-			    blank — the common case. */}
 			<ul className="flex flex-col gap-0.5">
 				{images.map((image) => (
 					<li className="text-muted-foreground text-sm" key={image.id}>

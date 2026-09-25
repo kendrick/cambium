@@ -7,9 +7,8 @@ import type { ReferenceImage } from '../core/brand-record';
  * one answer, not three functions to wire together the same way each time.
  *
  * The tag is left out because intake runs before a person has chosen one. `tag` on
- * `ReferenceImageSchema` is required (#77), so `components/landing/upload-form.tsx` adds it — the
- * form's own state, applied at save time — rather than this module inventing a default a second
- * time.
+ * `ReferenceImageSchema` is required (#77), so `components/landing/upload-form.tsx` adds it from
+ * the form's own state at save time, rather than this module inventing a second default.
  *
  * `ReferenceImage` is imported as a type only. `core/brand-record.ts` imports zod at module
  * scope, and zod costs about 93 kB gzip against a 200 kB first-load budget that already spends
