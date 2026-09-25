@@ -237,8 +237,6 @@ function isReservedName(name: string): boolean {
  * - `unrepresentable` carries a value the set would lose. `$root` is a token by the vendored schema
  *   (`$ref: token.json` at the root and on every group, beside a `$description` that is merely a
  *   string), and `$extends` names another group whose tokens this group also holds. Refused by name.
- *   A group's or the root's `$extensions` is refused for the same reason and does not appear here,
- *   again because this table's kind also drives token-position comparison.
  *
  * One table because the reader and the light-versus-dark comparison both have to sort reserved names
  * and used to do it separately. They agreed by coincidence and then stopped: the comparison skipped
