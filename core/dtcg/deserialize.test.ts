@@ -324,8 +324,8 @@ describe('deserializeDtcg', () => {
 	 * skipping reserved names there would read one document's payload and discard the other's without
 	 * a word.
 	 *
-	 * The placement above puts `$extensions` on the `radius` group, where the token set has no slot
-	 * and it is read past. These put it on the `radius.md` token, where it has one. Same key, and the
+	 * On the `radius` group the same key is refused, because the token set has no slot there (see the
+	 * refusal cases below). These put it on the `radius.md` token, where it has one. Same key, and the
 	 * answers differ because the node under it does.
 	 *
 	 * The `$`-prefixed cases are the ones that caught a real defect. A payload is an arbitrary object
