@@ -369,6 +369,28 @@ describe('BrandRecordSchema overrides', () => {
 		]);
 	});
 
+	// Property access reads `1` and `'1'` as one key, so `applyOverrides` writes both spellings to
+	// the same slot of the bezier, and the second would win without a word on reopen.
+	it('refuses a second override to the same index spelled as a string, at the second one', () => {
+		const first = {
+			kind: 'value',
+			category: 'motion',
+			path: ['easing', 'standard', 'value', 1],
+			value: 0.3,
+		};
+		const again = { ...first, path: ['easing', 'standard', 'value', '1'], value: 0.4 };
+
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			versions: [{ ...version, overrides: [first, again] }],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues.map((issue) => issue.path)).toEqual([
+			['versions', 0, 'overrides', 1],
+		]);
+	});
+
 	// Both pairs share a token name or a dotted spelling, so a check keyed on anything looser than
 	// `overrideKey` would refuse them.
 	it.each([

@@ -413,6 +413,27 @@ describe('overrideKey', () => {
 
 		expect(new Set(keys).size).toBe(keys.length);
 	});
+
+	// `applyOverrides` walks the path with property access, which reads `1` and `'1'` as the same
+	// key, so a key that kept the segment's JS type would let two edits to one leaf sit side by side
+	// in the store map and past the duplicate check in `BrandRecordSchema`.
+	it('gives an index one key whether it is spelled as a number or a string', () => {
+		const asNumber: TokenOverride = {
+			kind: 'value',
+			category: 'motion',
+			path: ['easing', 'standard', 'value', 1],
+			value: 0.3,
+		};
+		const asString: TokenOverride = { ...asNumber, path: ['easing', 'standard', 'value', '1'] };
+
+		expect(applied([asString])).toEqual(applied([asNumber]));
+		expect(overrideKey(asString)).toBe(overrideKey(asNumber));
+		expect(
+			overrideKey({ ...asNumber, category: 'shadow', scheme: 'dark', path: ['md', 'x', 0] }),
+		).toBe(
+			overrideKey({ ...asNumber, category: 'shadow', scheme: 'dark', path: ['md', 'x', '0'] }),
+		);
+	});
 });
 
 describe('TokenOverrideSchema', () => {
@@ -447,7 +468,11 @@ describe('TokenOverrideSchema', () => {
 
 	it.each([
 		['a shadow leaf with no scheme', { kind: 'value', category: 'shadow', path: ['md'], value: 1 }],
-		['a category no token set holds', { kind: 'value', category: 'schemes', path: [], value: 1 }],
+		[
+			'a colour layer used as a value category',
+			{ kind: 'value', category: 'schemes', path: [], value: 1 },
+		],
+		['a category no token set holds', { kind: 'value', category: 'border', path: [], value: 1 }],
 		['a scheme nobody derives', { kind: 'alias', scheme: 'sepia', token: 'primary', alias: 'b.1' }],
 		[
 			'a path segment that is neither a key nor an index',

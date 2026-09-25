@@ -93,6 +93,12 @@ export type ApplyOverridesResult =
  *
  * JSON over a joined string because names may contain any separator we'd pick: `['a.b', 'value']`
  * and `['a', 'b.value']` would collide on a dot join.
+ *
+ * Path segments go through `String` first because `write` reaches the leaf by property access,
+ * which reads `1` and `'1'` as the same key. Left typed, the two spellings would get two keys for one
+ * leaf and both would pass the duplicate check in `BrandRecordSchema`. `String` is the conversion
+ * property access itself applies, so the key agrees with the walk on `-0`, `1e21` and the rest.
+ * `step` stays a number: the schema takes only numbers there and `write` matches it with `===`.
  */
 export function overrideKey(override: TokenOverride): string {
 	switch (override.kind) {
@@ -103,8 +109,8 @@ export function overrideKey(override: TokenOverride): string {
 		case 'value':
 			return JSON.stringify(
 				override.category === 'shadow'
-					? ['value', 'shadow', override.scheme, ...override.path]
-					: ['value', override.category, ...override.path],
+					? ['value', 'shadow', override.scheme, ...override.path.map(String)]
+					: ['value', override.category, ...override.path.map(String)],
 			);
 	}
 }
