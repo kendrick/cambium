@@ -238,6 +238,22 @@ describe('applyOverrides', () => {
 					value: -2,
 				},
 			],
+			[
+				// The schema puts no ceiling on chroma, so only `toOklchCss`'s overflow guard would catch
+				// this, and only mid-render, after the override already sat in the store.
+				'a chroma too large for toOklchCss to print',
+				{ kind: 'primitive', scheme: 'light', ramp: 'brand', step: 9, l: 0.5, c: 1e303, h: 30 },
+			],
+			[
+				'a shadow colour chroma too large for toOklchCss to print',
+				{
+					kind: 'value',
+					category: 'shadow',
+					scheme: 'dark',
+					path: ['md', 'color', 'c'],
+					value: 1e303,
+				},
+			],
 		];
 
 		it.each(rejected)('rejects %s', (_label, override) => {
@@ -279,6 +295,25 @@ describe('applyOverrides', () => {
 			expect(result).toMatchObject({ ok: false, key: overrideKey(override) });
 			expect(result.ok ? [] : result.issues.map((issue) => issue.message)).toEqual([
 				expect.stringContaining('$extensions'),
+			]);
+		});
+
+		it('refuses a chroma toOklchCss cannot print, naming the field, before anything is stored', () => {
+			const override: TokenOverride = {
+				kind: 'primitive',
+				scheme: 'light',
+				ramp: 'brand',
+				step: 9,
+				l: 0.5,
+				c: 1e303,
+				h: 30,
+			};
+
+			const result = applyOverrides(BASE, [override]);
+
+			expect(result).toMatchObject({ ok: false, key: overrideKey(override) });
+			expect(result.ok ? [] : result.issues.map((issue) => issue.message)).toEqual([
+				expect.stringContaining('c 1e+303'),
 			]);
 		});
 

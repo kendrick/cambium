@@ -1,3 +1,4 @@
+import { canPrintOklchCss } from './css/oklch-css';
 import { type TokenSet, TokenSetSchema } from './token-set';
 
 export type SchemeName = 'light' | 'dark';
@@ -124,6 +125,56 @@ function leafParent(
 	return { message: 'path is empty' };
 }
 
+const SHADOW_COLOR_CHANNELS = ['l', 'c', 'h', 'alpha'] as const;
+type ShadowColorChannel = (typeof SHADOW_COLOR_CHANNELS)[number];
+
+/** The colour channel a shadow value override targets, or null for one of its geometry leaves. */
+function shadowColorChannel(path: ValuePath): ShadowColorChannel | null {
+	const [parent, leaf] = path.slice(-2);
+
+	return parent === 'color' &&
+		typeof leaf === 'string' &&
+		(SHADOW_COLOR_CHANNELS as readonly string[]).includes(leaf)
+		? (leaf as ShadowColorChannel)
+		: null;
+}
+
+/**
+ * Refuses an override whose colour channel `toOklchCss` would throw printing. The schema bounds
+ * lightness and hue but not chroma, so a finite chroma such as `1e303` parses clean and would only
+ * fail mid-render, crashing the workspace instead of listing an issue on the row. The limit is
+ * `formatCssNumber`'s rounding arithmetic, so this asks `canPrintOklchCss` instead of copying it.
+ */
+function unprintableChannel(override: TokenOverride): OverrideIssue | null {
+	if (override.kind === 'primitive') {
+		if (canPrintOklchCss({ l: override.l, c: override.c, h: override.h })) return null;
+
+		return {
+			path: ['schemes', override.scheme, 'primitives', override.ramp, override.step],
+			message: `l ${override.l}, c ${override.c}, h ${override.h} cannot be printed as CSS`,
+		};
+	}
+
+	if (override.kind === 'value' && override.category === 'shadow') {
+		const channel = shadowColorChannel(override.path);
+
+		if (!channel) return null;
+
+		// A field edit changes one channel, and 0 always prints, so the probe tests only the new value.
+		const probe = { l: 0, c: 0, h: 0, alpha: 0 };
+		probe[channel] = override.value;
+
+		if (canPrintOklchCss(probe)) return null;
+
+		return {
+			path: ['schemes', override.scheme, 'shadow', 'values', ...override.path],
+			message: `${channel} ${override.value} cannot be printed as CSS`,
+		};
+	}
+
+	return null;
+}
+
 /** Writes the override into `draft` in place, or returns why it has no target. */
 function write(draft: Draft, override: TokenOverride): OverrideIssue | null {
 	switch (override.kind) {
@@ -210,6 +261,10 @@ export function applyOverrides(
 
 	for (const override of overrides) {
 		const key = overrideKey(override);
+		const unprintable = unprintableChannel(override);
+
+		if (unprintable) return { ok: false, key, issues: [unprintable] };
+
 		const draft = structuredClone(current) as unknown as Draft;
 		const missing = write(draft, override);
 

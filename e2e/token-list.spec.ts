@@ -995,6 +995,36 @@ test('refusals in two different fields of one row list as two items, not one', a
 	await expect(issueItems(primitive)).toHaveCount(2);
 });
 
+test('a chroma too large to print is refused rather than crashing the workspace', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	// `OklchChannelsSchema` bounds lightness and hue but puts no ceiling on chroma
+	// (core/token-set.ts), so this parses clean past the schema. Only `toOklchCss`'s overflow guard
+	// (core/css/oklch-css.ts) would ever catch it, which the swatch render calls well after the
+	// override already sat in the store — the crash this scenario guards against.
+	const step = LIGHT.primitives.brand!.find((candidate) => candidate.step === 1)!;
+	const row = page.locator('[data-token="primitive.brand.1"]');
+	const swatch = row.locator('[data-swatch]');
+	const chroma = page.getByLabel('primitive.brand.1 c', { exact: true });
+	const committed = await referencePaint(page, swatch, oklchFromFields(step));
+
+	await chroma.fill('1e303');
+	await chroma.blur();
+
+	await expect(issueItems(row)).toHaveCount(1);
+	await expect(row).not.toHaveAttribute('data-overridden', '');
+
+	// The workspace is still alive, not a crashed React tree: the whole token list survived, and the
+	// swatch still paints the last value the store actually committed.
+	await expect(page.getByRole('region', { name: 'Tokens' })).toBeVisible();
+	expect(paintDistance(await paintedCentre(swatch), committed)).toBeLessThanOrEqual(1);
+});
+
 test('two cleared fields of one shadow row list as two items, not one', async ({ page }) => {
 	const record = buildRecordWithSeed(SEED);
 	await seedWorkspaceRecord(page, record);
