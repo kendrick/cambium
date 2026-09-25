@@ -161,9 +161,10 @@ describe('schema strictness', () => {
 
 	/**
 	 * An override is the user's work, so a key stripped from one on the way to disk is an edit
-	 * that silently reads back different. `scheme` on a radius is the likeliest stray: it is the
-	 * one key that tells the shadow branch from the others, and stripping it would quietly turn a
-	 * malformed override into a well-formed one.
+	 * that silently reads back different. `scheme` on a radius is the likeliest stray. Among value
+	 * overrides, only the shadow branch declares a `scheme`, and `category: 'shadow'` is what
+	 * selects that branch. Stripping the key would quietly turn a malformed override into a
+	 * well-formed one.
 	 */
 	it.each([
 		['a key no override kind declares', { somethingNew: true }],

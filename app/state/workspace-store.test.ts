@@ -915,7 +915,10 @@ const BORDER_TO_8: TokenOverride = {
 	alias: 'neutral.8',
 };
 
-/** `radius.lg` derives to something other than 1 for every seed here. */
+/**
+ * `radius.lg` derives to something other than 1 from `seedWith(259.8)`, the one seed every test
+ * using this override opens on. The open test checks only that seed, through `underived`.
+ */
 const RADIUS_LG_TO_1: TokenOverride = {
 	kind: 'value',
 	category: 'radius',

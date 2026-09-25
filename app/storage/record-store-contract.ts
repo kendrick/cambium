@@ -1156,17 +1156,22 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			);
 		});
 
-		// `schemaVersion` is a `z.literal`, so a record stamped with the version this one superseded
-		// fails the same validation a smuggled field does above: `put` writes nothing, and the error
-		// names the field that tripped it rather than reading as a generic rejection.
+		// Matched against `Error` to stay implementation-blind, like the smuggled-field case. Putting
+		// the same record at the current version afterward shows the stamp is what `put` refused,
+		// because that put succeeds and the stamp is the only difference.
 		it('rejects a record stamped with the previous schema version', async () => {
+			const current = makeRecord();
 			const stale = {
-				...makeRecord(),
+				...current,
 				schemaVersion: SCHEMA_VERSION - 1,
 			} as unknown as BrandRecord;
 
-			await expect(store.put(stale)).rejects.toThrow(/schemaVersion/);
+			await expect(store.put(stale)).rejects.toThrow(Error);
 			expect(await store.get(stale.id)).toBeNull();
+			await expect(store.put(current)).resolves.toMatchObject({
+				id: stale.id,
+				schemaVersion: SCHEMA_VERSION,
+			});
 		});
 	});
 
