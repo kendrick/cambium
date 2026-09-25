@@ -32,7 +32,7 @@ const BOX_SHADOW =
  * `app/globals.css` (`git show 4ce449a:app/globals.css`) over the same candidates, never from the
  * file under test. A theme reference such as `var(--text-base)` is written out as the value
  * Tailwind's theme layer declared for it in that compile, because the edited stylesheet inlines the
- * entry and no longer declares the property.
+ * entry into each utility, which then reads `--cmb-*` and never the theme property.
  *
  * `--radius` stays a reference: it's the app's own `:root` property, not a theme entry.
  */

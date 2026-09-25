@@ -42,7 +42,8 @@
 	 * Scalars and shadows read the `--cmb-*` properties the workspace preview declares on its
 	 * container, so a token set restyles every utility under it. Nothing else declares them, so each
 	 * fallback is what the utility compiled to before this wiring, and the rest of the app looks as it
-	 * did. The shadow fallbacks keep Tailwind's `--tw-shadow-color` hooks, since the compiler stops
+	 * did. `font-regular` is the one exception: Tailwind has no `regular` weight, so it compiled to
+	 * nothing before and now falls back to 400, Tailwind's `normal`. The shadow fallbacks keep Tailwind's `--tw-shadow-color` hooks, since the compiler stops
 	 * inserting them once the value is a `var()`. `app/globals-css.test.ts` pins both halves.
 	 */
 	--radius-sm: var(--cmb-radius-sm, calc(var(--radius) * 0.6));
