@@ -29,6 +29,9 @@ import { makePng } from './fixtures/png';
 /** Distinctive enough that a stray match in a URL, storage dump, or console line can't be a coincidence. */
 const TEST_KEY = 'sk-ant-e2e-9f2c6a10b4d84e7fa9c1d2e3f4a5b6c7d8e9f0a1';
 
+/** Distinctive enough that finding it in the unexpected outcome can only mean the held id survived. */
+const DISTINCT_REQUEST_ID = 'req-e2e-save-again-unexpected-9f2c6a10';
+
 const PNG_NAME = 'brand.png';
 
 /**
@@ -1004,4 +1007,83 @@ test('Cancel ends a run stalled on the record lookup before anything is sent', a
 
 	await expect(await readRecord(page, recordId)).toMatchObject({ versions: [] });
 	expect(sent).toHaveLength(0);
+});
+
+type PutFailureMode = 'pass' | 'quota' | 'abort';
+
+/**
+ * Patches `IDBObjectStore.prototype.put` before the page's first script runs, since that's the one
+ * method both `saveOneRecord`'s own write and every commit under it call, however many layers of
+ * `idb` and `workspace-store` sit between the click and it. `pass` runs the original, so the record
+ * this scenario stages goes through the same patch it will later use to fail. Installed once per
+ * page load; `setPutFailureMode` flips the live mode without a reload.
+ */
+async function installPutFailure(page: Page): Promise<void> {
+	await page.addInitScript(() => {
+		const proto = IDBObjectStore.prototype;
+		const original = proto.put;
+		const state = { mode: 'pass' as string };
+		(window as unknown as { putFailure: { mode: string } }).putFailure = state;
+
+		proto.put = function (this: IDBObjectStore, ...args: Parameters<typeof original>) {
+			const mode = (window as unknown as { putFailure: { mode: string } }).putFailure.mode;
+			if (mode === 'quota') throw new DOMException('e2e: simulated quota', 'QuotaExceededError');
+			if (mode === 'abort') throw new DOMException('e2e: simulated abort', 'AbortError');
+			return original.apply(this, args);
+		};
+	});
+}
+
+async function setPutFailureMode(page: Page, mode: PutFailureMode): Promise<void> {
+	await page.evaluate((nextMode) => {
+		(window as unknown as { putFailure: { mode: string } }).putFailure.mode = nextMode;
+	}, mode);
+}
+
+test('a save-again that fails on an unrecognised error still names the paid read a storage-quota failure held', async ({
+	page,
+}) => {
+	// Installed before the record is even saved, so the same patch carries the fixture's own write
+	// and the generation commit that follows, and nothing here depends on a reload to pick it up.
+	await installPutFailure(page);
+	const recordId = await saveOneRecord(page);
+
+	const sent = await mockAnthropic(page, (body) => ({
+		status: 200,
+		body: successResponseBody(imageIdFromRequest(body)),
+		headers: {
+			'request-id': DISTINCT_REQUEST_ID,
+			'access-control-expose-headers': 'request-id',
+		},
+	}));
+
+	await waitForGenerateReady(page);
+
+	try {
+		// The paid read lands, then the commit's write throws quota-exceeded, which is recognised and
+		// held with the read's id for "Save again".
+		await setPutFailureMode(page, 'quota');
+		await generateWithFreshKey(page, TEST_KEY);
+
+		const quotaContainer = outcome(page, 'storage-quota-exceeded');
+		await expect(quotaContainer).toBeVisible();
+		const saveAgain = quotaContainer.getByRole('button', { name: 'Save again' });
+		await expect(saveAgain).toBeVisible();
+
+		// Save again makes no request of its own, so this is the one commit it triggers, and it throws
+		// something `saveGeneratedVersion` doesn't recognise. No new paid read follows it.
+		await setPutFailureMode(page, 'abort');
+		await saveAgain.click();
+
+		const unexpectedContainer = outcome(page, 'unexpected');
+		await expect(unexpectedContainer).toBeVisible();
+		// The id here is `attempt.held.requestId`, carried from the paid read before either write ran,
+		// not copy, so this checks the code element's data rather than the surrounding sentence.
+		await expect(unexpectedContainer.locator('code')).toHaveText(DISTINCT_REQUEST_ID);
+	} finally {
+		await setPutFailureMode(page, 'pass');
+	}
+
+	expect(sent).toHaveLength(1);
+	await expect(await readRecord(page, recordId)).toMatchObject({ versions: [] });
 });

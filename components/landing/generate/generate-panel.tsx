@@ -290,12 +290,18 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 		} catch (error) {
 			// `generate` throws only for failures it has no recovery for, and a chunk or the database can
 			// fail before it runs. Nothing is logged, because the thrown value could be anything and the
-			// key must never reach the console. The catch reads only the paid-read type, and only its
-			// request id.
+			// key must never reach the console. A save-again's paid read happened before this attempt, so
+			// `attempt.held.requestId` still names the billed request whatever the commit just threw; a
+			// `generate` attempt has no such fallback, so it names one only via the wrapped paid-read error.
 			next =
 				PaidReadError && error instanceof PaidReadError
 					? { kind: 'unexpected', requestId: error.requestId }
-					: { kind: 'unexpected' };
+					: attempt.kind === 'save-again'
+						? {
+								kind: 'unexpected',
+								...(attempt.held.requestId ? { requestId: attempt.held.requestId } : {}),
+							}
+						: { kind: 'unexpected' };
 		}
 
 		inFlight.current = false;
