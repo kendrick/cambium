@@ -1,8 +1,19 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// Written here and passed to the server, rather than left to the server's own default, so one
-// number decides both what the browser opens and what the server binds.
-const PORT = 4173;
+// Decided here and passed to the server, rather than left to the server's own default, so one
+// number decides both what the browser opens and what the server binds. `E2E_PORT` lets two
+// worktrees run the suite at once; on a shared 4173 the second run's server fails to bind.
+const PORT = e2ePort(process.env.E2E_PORT);
+
+function e2ePort(raw: string | undefined): number {
+	if (raw === undefined || raw === '') return 4173;
+	const port = Number(raw);
+	// `Number('abc')` is NaN, and a URL built from NaN fails far from this line, so throw here.
+	if (!Number.isInteger(port) || port < 1 || port > 65535) {
+		throw new Error(`E2E_PORT="${raw}" is not a TCP port (an integer from 1 to 65535)`);
+	}
+	return port;
+}
 
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
