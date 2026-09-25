@@ -227,7 +227,7 @@ function radiusEntries(tokenSet: TokenSet, naming: CssNaming): ThemeEntry[] {
 
 /**
  * Typography fans out across three Tailwind roots because Tailwind has no `typography` root of its
- * own. `toGlobalsCss`'s `scalarDeclarations` makes the same split for the same reason.
+ * own. `scalarDeclarationList` in `core/css/globals-css.ts` makes the same split for the same reason.
  */
 function typographyEntries(tokenSet: TokenSet, naming: CssNaming): ThemeEntry[] {
 	const { size, weight, lineHeight } = tokenSet.typography.values;

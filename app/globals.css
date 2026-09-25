@@ -38,13 +38,62 @@
 	--color-card: var(--card);
 	--color-foreground: var(--foreground);
 	--color-background: var(--background);
-	--radius-sm: calc(var(--radius) * 0.6);
-	--radius-md: calc(var(--radius) * 0.8);
-	--radius-lg: var(--radius);
-	--radius-xl: calc(var(--radius) * 1.4);
-	--radius-2xl: calc(var(--radius) * 1.8);
-	--radius-3xl: calc(var(--radius) * 2.2);
-	--radius-4xl: calc(var(--radius) * 2.6);
+	/*
+	 * Scalars and shadows read the `--cmb-*` properties the workspace preview declares on its
+	 * container, so a token set restyles every utility under it. Nothing else declares them, so each
+	 * fallback is what the utility compiled to before this wiring, and the rest of the app looks as it
+	 * did. The shadow fallbacks keep Tailwind's `--tw-shadow-color` hooks, since the compiler stops
+	 * inserting them once the value is a `var()`. `app/globals-css.test.ts` pins both halves.
+	 */
+	--radius-sm: var(--cmb-radius-sm, calc(var(--radius) * 0.6));
+	--radius-md: var(--cmb-radius-md, calc(var(--radius) * 0.8));
+	--radius-lg: var(--cmb-radius-lg, var(--radius));
+	--radius-xl: var(--cmb-radius-xl, calc(var(--radius) * 1.4));
+	--radius-2xl: var(--cmb-radius-2xl, calc(var(--radius) * 1.8));
+	--radius-3xl: var(--cmb-radius-3xl, calc(var(--radius) * 2.2));
+	--radius-4xl: var(--cmb-radius-4xl, calc(var(--radius) * 2.6));
+	--shadow-xs: var(--cmb-shadow-xs, 0 1px 2px 0 var(--tw-shadow-color, rgb(0 0 0 / 0.05)));
+	--shadow-sm: var(
+		--cmb-shadow-sm,
+		0 1px 3px 0 var(--tw-shadow-color, rgb(0 0 0 / 0.1)),
+		0 1px 2px -1px var(--tw-shadow-color, rgb(0 0 0 / 0.1))
+	);
+	--shadow-md: var(
+		--cmb-shadow-md,
+		0 4px 6px -1px var(--tw-shadow-color, rgb(0 0 0 / 0.1)),
+		0 2px 4px -2px var(--tw-shadow-color, rgb(0 0 0 / 0.1))
+	);
+	--shadow-lg: var(
+		--cmb-shadow-lg,
+		0 10px 15px -3px var(--tw-shadow-color, rgb(0 0 0 / 0.1)),
+		0 4px 6px -4px var(--tw-shadow-color, rgb(0 0 0 / 0.1))
+	);
+	--shadow-xl: var(
+		--cmb-shadow-xl,
+		0 20px 25px -5px var(--tw-shadow-color, rgb(0 0 0 / 0.1)),
+		0 8px 10px -6px var(--tw-shadow-color, rgb(0 0 0 / 0.1))
+	);
+	--text-xs: var(--cmb-text-xs, 0.75rem);
+	--text-sm: var(--cmb-text-sm, 0.875rem);
+	--text-base: var(--cmb-text-base, 1rem);
+	--text-lg: var(--cmb-text-lg, 1.125rem);
+	--text-xl: var(--cmb-text-xl, 1.25rem);
+	--text-2xl: var(--cmb-text-2xl, 1.5rem);
+	--text-3xl: var(--cmb-text-3xl, 1.875rem);
+	--text-4xl: var(--cmb-text-4xl, 2.25rem);
+	--font-weight-regular: var(--cmb-font-weight-regular, 400);
+	--font-weight-medium: var(--cmb-font-weight-medium, 500);
+	--font-weight-semibold: var(--cmb-font-weight-semibold, 600);
+	--font-weight-bold: var(--cmb-font-weight-bold, 700);
+	--leading-tight: var(--cmb-leading-tight, 1.25);
+	--leading-snug: var(--cmb-leading-snug, 1.375);
+	--leading-normal: var(--cmb-leading-normal, 1.5);
+	--leading-relaxed: var(--cmb-leading-relaxed, 1.625);
+	--tracking-tighter: var(--cmb-tracking-tighter, -0.05em);
+	--tracking-tight: var(--cmb-tracking-tight, -0.025em);
+	--tracking-normal: var(--cmb-tracking-normal, 0em);
+	--tracking-wide: var(--cmb-tracking-wide, 0.025em);
+	--tracking-wider: var(--cmb-tracking-wider, 0.05em);
 }
 
 :root {

@@ -18,6 +18,7 @@ import {
 	type TokenSet,
 	TokenSetSchema,
 } from '../token-set';
+import type { SchemeName } from '../token-overrides';
 import { formatCssNumber, toOklchCss } from './oklch-css';
 import { stepNumberName } from './step-numbers';
 
@@ -342,6 +343,36 @@ export type CssDeclaration = { property: string; value: string };
  * the whole file from the two halves and is what a caller should reach for.
  */
 export function toGlobalsCss(argument: TokenSet, naming: CssNaming): string {
+	const checked = checkTokenSet(argument);
+
+	const rootBody = [
+		...schemeDeclarationList(checked, 'light', naming),
+		...scalarDeclarationList(checked.tokenSet, naming),
+	];
+	const darkBody = schemeDeclarationList(checked, 'dark', naming);
+
+	return `${declarationBlock(LIGHT_SELECTOR, rootBody)}\n${declarationBlock(DARK_SELECTOR, darkBody)}`;
+}
+
+/** A token set that has passed every check {@link toGlobalsCss} makes, with both schemes resolved. */
+export type CheckedTokenSet = {
+	/** The parsed copy; never the caller's argument. */
+	tokenSet: TokenSet;
+	resolved: Record<SchemeName, Record<string, Oklch>>;
+	/**
+	 * Semantic token order for both schemes, taken from light, so a reader comparing `:root` with
+	 * `.dark` is looking at values instead of at a reordering. The mirror check makes the two sets of
+	 * names equal, so taking the order from one of them loses nothing.
+	 */
+	tokens: string[];
+};
+
+/**
+ * Parses, vocabulary-checks, resolves and mirror-checks a set, in that order. Every reader of the
+ * scheme declarations goes through this, so the preview refuses exactly what the stylesheet refuses,
+ * and with the same first error.
+ */
+export function checkTokenSet(argument: TokenSet): CheckedTokenSet {
 	const tokenSet = parseTokenSet(argument);
 	requireGeneratedVocabulary(tokenSet);
 
@@ -360,28 +391,28 @@ export function toGlobalsCss(argument: TokenSet, naming: CssNaming): string {
 		rampStepNames(tokenSet.schemes.dark.primitives),
 	);
 
-	// Both blocks run in the light scheme's order, so a reader comparing them is looking at values
-	// instead of at a reordering. The two token sets are equal by the check above, so taking the
-	// order from one of them loses nothing.
-	const tokens = Object.keys(light);
+	return { tokenSet, resolved: { light, dark }, tokens: Object.keys(light) };
+}
 
-	// The ramps trail the shadow rather than joining the semantic colours above it. Eighty-five of
-	// them land at once for a seven-ramp set, and a reader editing a pasted stylesheet is looking for
-	// the semantic names they recognise.
-	const rootBody = [
-		...colorDeclarations(tokens, light, naming),
-		...shadowDeclarations(tokenSet.schemes.light.shadow, naming),
-		...rampDeclarations(tokenSet.schemes.light.primitives, naming),
-		...scalarDeclarations(tokenSet, naming),
+/**
+ * One scheme's colours, shadows and ramps, in the order its stylesheet block declares them.
+ *
+ * The ramps trail the shadow rather than joining the semantic colours above it. Eighty-five of them
+ * land at once for a seven-ramp set, and a reader editing a pasted stylesheet is looking for the
+ * semantic names they recognise.
+ */
+export function schemeDeclarationList(
+	checked: CheckedTokenSet,
+	scheme: SchemeName,
+	naming: CssNaming,
+): CssDeclaration[] {
+	const source = checked.tokenSet.schemes[scheme];
+
+	return [
+		...colorDeclarations(checked.tokens, checked.resolved[scheme], naming),
+		...shadowDeclarations(source.shadow, naming),
+		...rampDeclarations(source.primitives, naming),
 	];
-
-	const darkBody = [
-		...colorDeclarations(tokens, dark, naming),
-		...shadowDeclarations(tokenSet.schemes.dark.shadow, naming),
-		...rampDeclarations(tokenSet.schemes.dark.primitives, naming),
-	];
-
-	return `${declarationBlock(LIGHT_SELECTOR, rootBody)}\n${declarationBlock(DARK_SELECTOR, darkBody)}`;
 }
 
 /**
@@ -407,20 +438,32 @@ export function toGlobalsCss(argument: TokenSet, naming: CssNaming): string {
  * every theme entry sits inside one.
  */
 export function declarationBlock(header: string, declarations: readonly CssDeclaration[]): string {
+	requireDistinctProperties(header, declarations);
+
+	const body = declarations.map(({ property, value }) => `\t${property}: ${value};\n`).join('');
+
+	return `${header} {\n${body}}\n`;
+}
+
+/**
+ * The repeat check {@link declarationBlock} makes, for a caller keying declarations into a record,
+ * where a repeat would collapse just as silently. `label` opens the message the way a selector
+ * opens a block's.
+ */
+export function requireDistinctProperties(
+	label: string,
+	declarations: readonly CssDeclaration[],
+): void {
 	const seen = new Set<string>();
 
 	for (const { property } of declarations) {
 		if (seen.has(property)) {
 			throw new Error(
-				`${header} would declare ${property} twice, so two tokens in this set map onto one name and the consumer keeps only the last; rename one of them`,
+				`${label} would declare ${property} twice, so two tokens in this set map onto one name and the consumer keeps only the last; rename one of them`,
 			);
 		}
 		seen.add(property);
 	}
-
-	const body = declarations.map(({ property, value }) => `\t${property}: ${value};\n`).join('');
-
-	return `${header} {\n${body}}\n`;
 }
 
 function colorDeclarations(
@@ -535,8 +578,10 @@ function boxShadow(shadow: Shadow): string {
  * their Tailwind entry names. Typography is the one category that fans out: Tailwind has no
  * `typography` root, and its sizes, weights and line heights land under `text`, `font-weight` and
  * `leading` respectively.
+ *
+ * Reads the set as given and checks nothing, so hand it a {@link CheckedTokenSet}'s `tokenSet`.
  */
-function scalarDeclarations(tokenSet: TokenSet, naming: CssNaming): CssDeclaration[] {
+export function scalarDeclarationList(tokenSet: TokenSet, naming: CssNaming): CssDeclaration[] {
 	const { size, weight, lineHeight } = tokenSet.typography.values;
 
 	return [
