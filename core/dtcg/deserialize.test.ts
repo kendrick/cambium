@@ -500,14 +500,14 @@ describe('deserializeDtcg', () => {
 			names: ['color.primitive.brand.$root', 'token'],
 		},
 		/**
-		 * #82's decision. `checkRepresentable` used to refuse only `$root` and `$extends` and read
-		 * every other reserved name past, `$extensions` included, which is right for `$schema` and
-		 * `$description` but not for this one: DTCG 5.2.3 requires a group's or the root's extension
-		 * data to survive, and a `TokenSet` has no slot on a group to hold it in. A probe that added
-		 * `$extensions` to `color`, `radius` and `spacing` on a serialized generated set found all
-		 * three silently dropped after a round trip; the three cases below are that probe's shapes—
-		 * the root, a category group, and a group nested two levels under one—each refused instead.
-		 * The falsifier below them is the other half: the same payload, moved onto a token, is kept.
+		 * #82's decision, argued in `checkRepresentable`'s docblock rather than restated here:
+		 * `checkRepresentable` used to refuse only `$root` and `$extends` and read every other reserved
+		 * name past, `$extensions` included, which is right for `$schema` and `$description` but not
+		 * for this one. A probe that added `$extensions` to `color`, `radius` and `spacing` on a
+		 * serialized generated set found all three silently dropped after a round trip; the cases below
+		 * are that probe's shapes—the root, a category group, and the two colour groups `core/token-
+		 * set.ts` names as having nowhere to put a group annotation—each refused instead. The falsifier
+		 * below them is the other half: the same payload, moved onto a token, is kept.
 		 */
 		{
 			what: 'a foreign $extensions at the document root rather than dropping it',
@@ -516,7 +516,7 @@ describe('deserializeDtcg', () => {
 					RESERVED_VALUES.$extensions,
 				);
 			},
-			names: ['$extensions', 'extension data'],
+			names: ['$extensions', "document's extension data"],
 		},
 		{
 			what: 'a foreign $extensions on a category group rather than dropping it',
@@ -525,7 +525,7 @@ describe('deserializeDtcg', () => {
 					RESERVED_VALUES.$extensions,
 				);
 			},
-			names: ['radius.$extensions', 'extension data'],
+			names: ['radius.$extensions', "a group's extension data"],
 		},
 		{
 			what: 'a foreign $extensions on a nested colour group rather than dropping it',
@@ -534,7 +534,16 @@ describe('deserializeDtcg', () => {
 					RESERVED_VALUES.$extensions,
 				);
 			},
-			names: ['color.primitive.brand.$extensions', 'extension data'],
+			names: ['color.primitive.brand.$extensions', "a group's extension data"],
+		},
+		{
+			what: 'a foreign $extensions on the semantic colour group rather than dropping it',
+			spoil: (document) => {
+				(document.color.semantic as Record<string, unknown>).$extensions = structuredClone(
+					RESERVED_VALUES.$extensions,
+				);
+			},
+			names: ['color.semantic.$extensions', "a group's extension data"],
 		},
 		{
 			what: 'a group that $extends another rather than dropping what it inherits',

@@ -45,9 +45,9 @@ import {
  *    1 is the same mistake: the model has no alpha there, so the colour would come back opaque.
  * 2. A feature that is itself a value the set would otherwise lose is refused by name. `$root` is a
  *    token by the vendored schema, not metadata, and an unmodelled group holds tokens. A group's or
- *    the root's `$extensions` is the same case: DTCG 5.2.3 requires the payload to survive, and a
- *    `TokenSet` has no slot on a group to hold it in. Reading past any of these hands back a set that
- *    is missing a value the document declared, with nothing to say so.
+ *    the root's `$extensions` is the same case, argued where `checkRepresentable` refuses it.
+ *    Reading past any of these hands back a set that is missing a value the document declared, with
+ *    nothing to say so.
  * 3. A feature that annotates a value which survives unchanged is read past, and the loss is
  *    recorded where it happens. `$description` and `$deprecated` on a token, and a group's
  *    `$description`, describe something whose value still round-trips exactly.
@@ -227,11 +227,10 @@ function isReservedName(name: string): boolean {
  *
  * - `kept` is a token's own substance. `$type`, `$value` and `$extensions` land in the token set and
  *   stay there, so two documents disagreeing about one is a real disagreement. That is the whole of
- *   what `kept` means here: a token's `$extensions`. On a group or the root the same key is refused,
- *   but by `checkRepresentable` directly rather than by this table—see the note below its `$type`
- *   check, and issue #82's decision to refuse rather than carry a group annotation nowhere on a
- *   `TokenSet` to put it. Widening this table's `kind` to say so would also change what
- *   `comparedAt` does with a token's own `$extensions`, which must stay `kept` there.
+ *   what `kept` means here: a token's `$extensions`. On a group or the root the same key is refused
+ *   instead, by `checkRepresentable` directly rather than by this table—its docblock argues why.
+ *   Widening this table's `kind` to say so would also change what `comparedAt` does with a token's
+ *   own `$extensions`, which must stay `kept` there.
  * - `annotation` describes something whose value survives untouched, and the token set has nowhere
  *   to put it. Read past, and two documents disagreeing about one is not a disagreement about
  *   anything the set holds.
@@ -297,16 +296,24 @@ function reservedKind(name: string): ReservedKind {
  *
  * `$extensions` is checked by name here rather than through `RESERVED_NAMES`, because this walk
  * never reaches a token: every `$extensions` this function sees sits on a group or the root. DTCG
- * 5.2.3 requires the payload to survive, and a `TokenSet` has no slot on a group to hold it in, so
- * it is refused for the same reason `$root` is. It cannot join the table as `unrepresentable`,
- * because the table's kind also answers `comparedAt`'s question about a token's own `$extensions`,
- * which has to stay `kept` there—#82 split the two questions apart on purpose.
+ * 5.2.3 requires the payload to survive, and a `TokenSet` has no slot on a group—or on the document
+ * itself—to hold it in, so it is refused for the same reason `$root` is. It cannot join the table as
+ * `unrepresentable`, because the table's kind also answers `comparedAt`'s question about a token's
+ * own `$extensions`, which has to stay `kept` there—#82 split the two questions apart on purpose.
+ * This is the one place that reasoning is written out; every other site that mentions it points back
+ * here rather than restating it.
+ *
+ * The message's noun follows `path`, empty only at the very first call: an empty path means the
+ * offending node is the document itself, and anything else means a group, so the two cases are not
+ * interchangeable and a reader should not have to guess which one they hit.
  */
 function checkRepresentable(node: Node, doc: Doc, path: readonly string[]): void {
 	for (const name of Object.keys(node)) {
 		if (name === '$extensions') {
+			const holder = path.length === 0 ? 'the document' : 'a group';
+
 			throw new Error(
-				`${label(doc, [...path, name])} is a group's extension data, and a token set has no slot to keep it in, so reading past it would drop it`,
+				`${label(doc, [...path, name])} is ${holder}'s extension data, and a token set has no slot to keep it in, so reading past it would drop it`,
 			);
 		}
 

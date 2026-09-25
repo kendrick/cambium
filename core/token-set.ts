@@ -583,6 +583,13 @@ function checkMirroredLayers(
  * Light and dark are both required. Dark is generated independently against the same step
  * roles rather than inverted from light, so a set holding one scheme is incomplete rather
  * than something the pipeline can finish later.
+ *
+ * No container here—this object, a scheme, a category, `primitives`, `semantic`—has a slot of its
+ * own for `$extensions`. `primitives` and `semantic` are records whose every key already reads as a
+ * ramp or a token, per #82, so there is nowhere to hang a group's foreign namespace without it being
+ * misread as one. `deserialize.ts` reads that absence as a refusal rather than a silent drop: a DTCG
+ * document's group-level or root-level `$extensions` throws on the way in. Deliberately unsupported
+ * for now; #136 tracks giving it a slot.
  */
 export const TokenSetSchema = z
 	.strictObject({
