@@ -81,15 +81,15 @@ export function toOklchCss(color: OklchCssColor, options: OklchCssOptions = {}):
  * trips over even though it is numerically indistinguishable.
  */
 export function formatCssNumber(value: number, places: number = DEFAULT_PLACES): string {
-	const rounded = roundTo(value, places);
-
 	// The schemas bound few of these numbers from above, and rounding scales by 10^places first, so
 	// a large enough value overflows here and would print `Infinity`, which CSS reads as an
 	// identifier. A custom property holding it still parses; the property reading it through
 	// `var()` goes invalid at computed-value time and quietly computes as `unset`.
-	if (!Number.isFinite(rounded)) {
+	if (!isPrintableCssNumber(value, places)) {
 		throw new Error(`${value} is too large to print as a CSS number at ${places} decimal places`);
 	}
+
+	const rounded = roundTo(value, places);
 
 	if (rounded === 0) return '0';
 
@@ -104,4 +104,27 @@ function roundTo(value: number, places: number): number {
 	const rounded = Math.round(value * scale) / scale;
 
 	return rounded === 0 ? 0 : rounded;
+}
+
+/**
+ * True when {@link formatCssNumber} can print `value` at `places` decimals without overflowing to
+ * `Infinity`. It runs the same scale-then-round arithmetic, so a caller deciding whether to accept a
+ * number can't disagree with the printer about what's too large.
+ */
+export function isPrintableCssNumber(value: number, places: number = DEFAULT_PLACES): boolean {
+	return Number.isFinite(roundTo(value, places));
+}
+
+/**
+ * True when {@link toOklchCss} can print every channel of `color` without throwing, alpha included
+ * at the percent scale it prints in, so a caller never needs to know about that scaling.
+ */
+export function canPrintOklchCss(color: OklchCssColor, options: OklchCssOptions = {}): boolean {
+	const places = options.places ?? DEFAULT_PLACES;
+	const channels =
+		color.alpha === undefined
+			? [color.l, color.c, color.h]
+			: [color.l, color.c, color.h, color.alpha * 100];
+
+	return channels.every((channel) => isPrintableCssNumber(channel, places));
 }
