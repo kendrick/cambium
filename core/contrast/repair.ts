@@ -353,10 +353,10 @@ export type ContrastRepairedTokenSet = { tokenSet: TokenSet; unrepaired: Unrepai
  * store and both e2e fixtures go through here for that reason: a fixture that composed the two
  * calls on its own could drift from what the store actually paints.
  *
- * `options` only ever forwards to `repairContrast`, so a caller with nothing to say about pins gets
- * exactly today's behaviour: the CLI calls this with no argument and stays on `defaultPins`. The
- * workspace store is the one caller that passes `{ pinned }`, built from the seed's own pins rather
- * than provenance, once a person can pin a field the model didn't mark `observed`.
+ * `options` only ever forwards to `repairContrast`, so a caller with nothing to say about pins
+ * stays on `defaultPins`, as the CLI does by passing no argument. The workspace store is the one
+ * caller that passes `{ pinned }`, built from the seed's own pins rather than provenance, because a
+ * person can pin a field the model didn't mark `observed`.
  *
  * `repairContrast` only ever proposes overrides it has already applied to its own working copy of
  * `tokenSet` (see the loop above), so a rejection here would mean the two disagree about what the

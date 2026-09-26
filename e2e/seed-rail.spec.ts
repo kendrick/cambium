@@ -216,9 +216,9 @@ test("editing the brand key colour's lightness repaints the preview's primary ac
 	await seedWorkspaceRecord(page, record);
 
 	const requestUrls: string[] = [];
-	// Attached before the navigation, so it also catches the initial load's own requests; those are
-	// only read for their count, never asserted against, which is what makes the count taken right
-	// before the edit below a clean baseline regardless of how many of them there were.
+	// Attached before the navigation, so it also sees the initial load's requests. Those only feed
+	// the count taken just before the edit below, which stays a clean baseline however many there
+	// were.
 	page.on('request', (request) => requestUrls.push(request.url()));
 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);

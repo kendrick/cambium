@@ -366,10 +366,9 @@ describe('generate', () => {
 			expect(after?.versions[0]?.overrides).toEqual([held]);
 		});
 
-		// Every key colour the model reports came from an image, so it starts pinned the same way
-		// #25 pins one read interactively in the rail. `defaultSeedPins` on the seed the response
-		// actually parsed to, rather than a literal list of indices, so this fails the moment the
-		// success fixture's key colours change shape without anyone updating a hand-counted list.
+		// Every key colour the model reports came from an image, so every one starts pinned. The
+		// expected value is `defaultSeedPins` on the seed the response parsed to, not a literal list
+		// of indices, so a change to the success fixture's key colours needs no hand-counted update.
 		it.each(STARTING_RECORDS)(
 			'pins every key colour on the generated version, regardless of what $label pinned',
 			async ({ build }) => {
@@ -387,9 +386,8 @@ describe('generate', () => {
 
 		// The prior version's pins name indices into a seed this commit replaces, so carrying them
 		// forward the way `open` ordinarily would could point past the new seed's key colours, or
-		// miss ones it has. This one starts from a version pinning `radiusCharacter`, a field the
-		// fresh generation's `defaultSeedPins` never pins, so a store that carried `active.pins`
-		// forward instead of computing fresh ones would show up as the wrong pin surviving.
+		// miss ones it has. Starting from a pin on `radiusCharacter`, which `defaultSeedPins` never
+		// pins, makes a store that carried `active.pins` forward show up as the wrong pin surviving.
 		it('does not carry the previous version’s pins into the newly generated one', async () => {
 			const setup = await storeWith(record([version({ pins: ['radiusCharacter'] })]));
 
@@ -953,8 +951,8 @@ describe('generate', () => {
 				{ ordinal: 1, model: 'claude-opus-5-5', rawResponse: SUCCESS_TEXT },
 			]);
 			// A save-again never asks the model again, so the kept seed is the only seed
-			// `saveGeneratedVersion` sees. It's still a generated seed, so it still pins every key
-			// colour, the same as the first attempt would have before storage rejected it.
+			// `saveGeneratedVersion` sees. It's still a generated seed, so it pins every key colour,
+			// as the first attempt would have before storage rejected it.
 			expect((await setup.store.get(RECORD_ID))?.versions[0]?.pins).toEqual(
 				defaultSeedPins(result.failure.seed),
 			);

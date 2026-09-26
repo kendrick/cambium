@@ -212,10 +212,9 @@ export type WorkspaceState = {
 	/** The seed being edited, uncommitted. Diverges from `versions[active].seed` until committed. */
 	draftSeed: BrandSeed | null;
 	/**
-	 * The pins being edited, uncommitted, the same way `draftSeed` is. Canonical: deduplicated and
-	 * sorted, so toggling a pin on and back off leaves this identical to never having toggled it, and
-	 * two paths that arrive at the same pinned set commit the same array rather than two spellings of
-	 * it. `keyof` order would do neither, since it depends on which order a person clicked in.
+	 * The pins being edited, uncommitted like `draftSeed`. Always canonical (`canonicalPins`), so two
+	 * paths that arrive at the same pinned set commit the same array, whatever order a person
+	 * clicked in.
 	 */
 	draftPins: SeedPinPath[];
 	preset: Interpretation;
@@ -262,9 +261,8 @@ export type WorkspaceState = {
 	togglePin(path: SeedPinPath): void;
 	/**
 	 * Replaces `draftPins` outright, for the one caller that isn't toggling one field at a time:
-	 * generation seeds every key colour's pin in one move, because every key colour it writes came
-	 * from an image (`app/generation/generate.ts`). Nothing in the rail calls this; a person only
-	 * ever has one field to toggle at a time.
+	 * generation pins every key colour in one move, because every key colour it writes came from an
+	 * image (`app/generation/generate.ts`). Nothing in the rail calls this.
 	 */
 	setDraftPins(pins: SeedPinPath[]): void;
 	selectPreset(preset: Interpretation): void;
@@ -356,7 +354,7 @@ function derive(
  * here needs numeric ordering to be stable, only to be the same ordering every time.
  *
  * Exported with `samePins` so the rail judges a pin toggle dirty by the same comparison the
- * store's commit uses. Two copies that only agree by luck are the divergent mirror in
+ * store's repair cache keys on. Two copies that only agree by luck are the divergent mirror in
  * `docs/agents/testing.md`'s #75 row.
  */
 export function canonicalPins(pins: readonly SeedPinPath[]): SeedPinPath[] {
@@ -414,7 +412,7 @@ function withOverrides(
  * produced it, and a lookup that doesn't match all three recomputes instead of trusting `derived`'s
  * identity alone.
  *
- * Pins joined the key in #25: a toggled pin changes what `repairPinsFor` protects without touching
+ * Pins are in the key too. A toggled pin changes what `repairPinsFor` protects without touching
  * `seed`, `preset`, or `derived`'s identity, so leaving pins out would serve a repair computed for
  * the wrong pinned set the moment someone toggled one.
  */

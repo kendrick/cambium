@@ -98,7 +98,7 @@ function defaultFor(field: Field, seed: BrandSeed, record: BrandRecord): BrandSe
 		case 'typeScaleRatio':
 			return 1.2;
 		case 'imageClassifications':
-			// A person's own tag is the better first guess than an arbitrary option, where they gave one.
+			// Where a person gave a tag, it's a better first guess than an arbitrary option.
 			return record.images.map((image) => ({
 				imageId: image.id,
 				detected: image.tag === 'auto' ? 'photo' : image.tag,
@@ -144,9 +144,8 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 		record && activeOrdinal !== null ? (record.versions[activeOrdinal - 1] ?? null) : null;
 	const seedEdited = active !== null && !sameJson(seed, active.seed);
 	// `draftPins` is already canonical; `active.pins` need not be, so it goes through the same
-	// canonicalise-then-compare the store's own commit guard uses. Sharing the function rather than
-	// each side re-deriving its own answer is what keeps this decision and the store's `sameSeed`
-	// commit guard from ever disagreeing about whether a pin change is real.
+	// `canonicalPins` and `samePins` the store's repair cache uses. Sharing the functions keeps the
+	// rail and the store from disagreeing about whether a pin change is real.
 	const pinsEdited = active !== null && !samePins(canonicalPins(active.pins), pins);
 	const dirty =
 		seedEdited ||

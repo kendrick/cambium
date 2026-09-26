@@ -27,14 +27,13 @@ import {
 } from './workspace-store';
 
 /**
- * `withContrastRepairs` still runs for real: only the call is now observable. Every SWEEP-scale
- * seed in this suite protects nothing but `brand.9`/`accent.9` through a seed pin, and the search
- * in `core/contrast/repair.ts` never fails to find a passing lightness for that pair's foreground
- * (grayscale at either lightness extreme clears any WCAG target this repo declares), so the
- * background side these pins name never has to move whether it's pinned or not. Output equality
- * can't tell a wired pin apart from an ignored one here, the same trap `docs/agents/testing.md`
- * describes for #79's shadow branch, so the pin-vs-repair tests below read the call this store
- * actually made rather than only the tokens that came back.
+ * `withContrastRepairs` still runs for real; the spy only records the call. A seed pin on any
+ * SWEEP-scale seed in this suite protects only `brand.9`/`accent.9`, and the search in
+ * `core/contrast/repair.ts` always finds a passing lightness for that pair's foreground (grayscale
+ * at either lightness extreme clears any WCAG target this repo declares), so the pinned background
+ * never has to move. Output equality can't tell a wired pin from an ignored one, the trap
+ * `docs/agents/testing.md` describes for #79's shadow branch, so the pin-vs-repair tests below read
+ * the call this store made rather than only the tokens that came back.
  */
 vi.mock('../../core/contrast/repair', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('../../core/contrast/repair')>();
@@ -75,9 +74,8 @@ function seedWith(hue: number): BrandSeed {
 
 /**
  * Two key colours from two different roles, so `repairPinsFor` has both `brand` and `accent` to
- * place and a pin on either names a different ramp. Blue and green, the same two hues
- * `check.test.ts`'s `SWEEP` uses, chosen for no reason beyond being two hues nowhere near each
- * other.
+ * place and a pin on either names a different ramp. Blue and green come from `check.test.ts`'s
+ * `SWEEP`, picked only because the two hues sit far apart.
  */
 function twoKeySeed(): BrandSeed {
 	return {
@@ -1579,12 +1577,12 @@ describe('the repair cache’s seed and preset check', () => {
 	});
 
 	/**
-	 * #25 adds pins to this cache's key. `constantDerivedEngine` again, so `derived`'s identity is
+	 * Pins are part of this cache's key. `constantDerivedEngine` again, so `derived`'s identity is
 	 * the one thing a toggle can't change, the way the radius test above pins down `seed` as the one
-	 * thing that can. Read off the call `withContrastRepairs` actually received rather than off the
-	 * token set: `repairPinsFor` only ever protects `brand.9`/`accent.9`, and no seed in this suite
-	 * makes either step the one a repair has to move (see the pin-vs-repair describe block below for
-	 * why), so a stale cache serving the pre-toggle repair would still hand back an equal token set.
+	 * thing that can. Read off the call `withContrastRepairs` received rather than off the token set:
+	 * `repairPinsFor` only ever protects `brand.9`/`accent.9`, and no seed in this suite makes either
+	 * step the one a repair has to move (see the pin-vs-repair describe block below for why), so a
+	 * stale cache serving the pre-toggle repair would still hand back an equal token set.
 	 */
 	it('recomputes the repaired base when pins change but `derived` does not', () => {
 		const seed = twoKeySeed();
@@ -1633,8 +1631,8 @@ describe('pins (#25)', () => {
 		store.getState().togglePin('keyColors.1');
 
 		expect(store.getState().draftPins).toEqual(original);
-		// Not just equal in value: the point of canonicalising is that a no-op toggle sequence
-		// commits the very same array a caller who never toggled anything would commit.
+		// A fresh array, but strictly equal: a no-op toggle sequence commits an array
+		// indistinguishable from the one a caller who never toggled anything would commit.
 		expect(store.getState().draftPins).not.toBe(original);
 		expect(store.getState().draftPins).toStrictEqual(original);
 	});
@@ -1805,18 +1803,15 @@ describe('a pinned key colour and contrast repair (#25)', () => {
 	});
 
 	/**
-	 * The literal wording of #25's acceptance criteria: "a pinned field is unchanged by an applied
-	 * contrast repair." True here, but for a reason worth stating rather than leaving implicit.
-	 * `repairPinsFor` only ever names a ramp's step 9, and both pairs `core/contrast/pairs.ts`
-	 * declares against it (`primary` on `primary-foreground`, and `sidebar-primary` on
-	 * `sidebar-primary-foreground`—`semantic-map.ts` aliases both surfaces to the same `brand.9`)
-	 * always try to move their foreground first—the step `resolveScheme` already chose for its own
-	 * best contrast—and that search clears any target this repo declares even at the grayscale
-	 * boundary. So the foreground wins before the background's pin state is ever consulted, and
-	 * step 9 never moves whether it's pinned or not, for either pair: unpinning it here proves no
-	 * move was needed, which is the outcome #25's own plan text allows for. The test above is the
-	 * one that would catch a store that stopped wiring the pin through at all; this one guards the
-	 * plainer, output-level claim.
+	 * #25's acceptance criterion as worded: "a pinned field is unchanged by an applied contrast
+	 * repair." It holds here without the pin doing any work. `repairPinsFor` only ever names a
+	 * ramp's step 9, and both pairs `core/contrast/pairs.ts` declares against it (`primary` on
+	 * `primary-foreground`, and `sidebar-primary` on `sidebar-primary-foreground`, both aliased to
+	 * `brand.9` in `semantic-map.ts`) try their foreground first, the step `resolveScheme` already
+	 * chose for its own best contrast. That search clears any target this repo declares even at the
+	 * grayscale boundary, so step 9 never moves for either pair, pinned or not. Unpinning it here
+	 * shows no move was needed, an outcome #25's plan allows. The test above catches a store that
+	 * stops wiring the pin through; this one guards the plainer, output-level claim.
 	 */
 	it('leaves the repaired token set unchanged whether the key colour is pinned or not', () => {
 		const seed = seedWith(259.8);
@@ -1831,12 +1826,12 @@ describe('a pinned key colour and contrast repair (#25)', () => {
 
 describe('a pinned field and a preset switch (#25)', () => {
 	/**
-	 * Structural today, not pin-dependent: `PRESET_PARAMS` maps every preset to `BALANCED`
+	 * Holds structurally for now: `PRESET_PARAMS` maps every preset to `BALANCED`
 	 * (`workspace-store.ts`'s own docblock), and `selectPreset` never touches `draftSeed` for any
-	 * field, pinned or not. Run against both a pinned and an unpinned key colour so the guarantee
-	 * #25 asks for is checked directly rather than inferred from a mechanism that would hold either
-	 * way; #37 is where a preset first gets the power to move a seed value; this test starts failing
-	 * on the pinned case then, which is the point of pinning it at all.
+	 * field, pinned or not. Both a pinned and an unpinned key colour run, so #25's guarantee is
+	 * checked directly rather than inferred from a mechanism that would hold either way. Once #37
+	 * gives a preset the power to move a seed value, the pinned case is what catches a preset that
+	 * ignores the pin.
 	 */
 	it.each([
 		['pinned', true],

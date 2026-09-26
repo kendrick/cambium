@@ -573,10 +573,9 @@ describe('withContrastRepairs', () => {
 	});
 
 	/**
-	 * The one caller-visible change #25 makes here: an options bag that reaches `repairContrast`
-	 * unchanged. Checked against a hand-composed call with the very same options, the same way the
-	 * no-argument case above is checked against a hand-composed call with none, so this can't pass by
-	 * quietly dropping the pin on the way through.
+	 * An options bag reaches `repairContrast` unchanged. Checked against a hand-composed call with
+	 * the same options, as the no-argument case above is checked against one with none, so this
+	 * can't pass by dropping the pin on the way through.
 	 */
 	it('forwards a pinned set to repairContrast, never falling back to defaultPins', () => {
 		const base = sweptSet('blue');
@@ -588,8 +587,8 @@ describe('withContrastRepairs', () => {
 			unrepaired,
 		});
 		// `brand.1` is the step the no-options case above moves for blue (see the "pins" describe
-		// block), so pinning it here and getting a different set proves the option actually reached
-		// `repairContrast` rather than reads as a no-op that happened to match.
+		// block), so pinning it here and getting a different set proves the option reached
+		// `repairContrast` and isn't a no-op that happened to match.
 		expect(withContrastRepairs(base)).not.toEqual(withContrastRepairs(base, { pinned }));
 	});
 });
