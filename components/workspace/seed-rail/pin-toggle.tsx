@@ -21,7 +21,11 @@ export function PinToggle({
 			type="button"
 			aria-pressed={pinned}
 			aria-label={`Pin ${label}`}
-			title={pinned ? `Pinned: presets and contrast repair leave ${label} alone` : `Pin ${label}`}
+			title={
+				pinned
+					? `Pinned: presets and contrast repair keep the value you set for ${label}`
+					: `Pin ${label}`
+			}
 			data-pinned={pinned ? '' : undefined}
 			onClick={onToggle}
 			className={cn(
