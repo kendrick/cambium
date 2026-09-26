@@ -492,6 +492,45 @@ test('choosing a display font puts it first as an invented pick, which survives 
 	expect(await selectedOptionText()).toContain('your pick');
 });
 
+test('a hand-typed family in an empty slot can still be corrected by typing, and the correction survives save and reload', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed();
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	// The seed's mono slot has no candidates (`SEED.suggestedPairing.mono`), so this starts as the
+	// text-entry path rather than a select.
+	const monoFont = page.getByLabel('Mono font', { exact: true });
+	await expect(monoFont).toBeVisible();
+
+	await monoFont.fill('Courier Prime');
+	await monoFont.blur();
+	await expect(monoFont).toHaveValue('Courier Prime');
+
+	// The regression this guards: once a hand-entered family is the slot's only candidate, the old
+	// code replaced this input with a select holding just that one pick, with no way back to typing.
+	await monoFont.fill('Courier New');
+	await monoFont.blur();
+	await expect(monoFont).toHaveValue('Courier New');
+
+	const save = page.getByRole('button', { name: 'Save', exact: true });
+	await save.click();
+	await expect(save).toBeDisabled();
+
+	await page.reload();
+
+	// Still a textbox after reload, prefilled with the corrected pick, and still open to another
+	// correction rather than frozen as a select.
+	await expect(page.getByLabel('Mono font', { exact: true })).toHaveValue('Courier New');
+
+	const stored = await readStoredRecord(page, record.id);
+	expect(stored?.versions.at(-1)?.seed?.suggestedPairing?.mono).toEqual([
+		{ provenance: 'invented', family: 'Courier New', score: null, rationale: expect.any(String) },
+	]);
+});
+
 test('a checkbox toggle, a moved expressive range, and a new expressive axis all persist through save and reload', async ({
 	page,
 }) => {

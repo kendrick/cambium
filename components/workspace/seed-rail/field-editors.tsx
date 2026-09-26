@@ -273,12 +273,22 @@ export function PairingEditor({
 		<>
 			{SLOTS.map((slot) => {
 				const candidates = value[slot];
+				// `.every` is vacuously true on an empty slot, so this also covers the slot that has never
+				// had a derived candidate. Either way there's no ranked option to fall back to, so the text
+				// path has to stay open rather than handing the field to a select with one entry and no way
+				// off it.
+				const handPick = candidates.find(isHandPick);
+				const onlyHandPicked = candidates.every(isHandPick);
 
 				return (
 					<Sub key={slot} label={capitalise(slot)}>
-						{candidates.length === 0 ? (
+						{onlyHandPicked ? (
 							<FamilyInput
+								// Remounts on a changed family so the uncontrolled input's initial value tracks a
+								// correction, a save-and-reload, or a Discard back to the active version.
+								key={handPick?.family ?? ''}
 								label={`${capitalise(slot)} font`}
+								defaultValue={handPick?.family}
 								onName={(family) => onChange({ ...value, [slot]: [namedByHand(family)] })}
 							/>
 						) : (
@@ -323,8 +333,20 @@ function isHandPick(candidate: FontCandidate): boolean {
 	return candidate.provenance === 'invented' && candidate.rationale === HAND_PICK_RATIONALE;
 }
 
-/** Commits on blur or Enter, like the number fields, so a half-typed name never reaches the draft. */
-function FamilyInput({ label, onName }: { label: string; onName: (family: string) => void }) {
+/**
+ * Commits on blur or Enter, like the number fields, so a half-typed name never reaches the draft.
+ * `defaultValue` is read once at mount, uncontrolled from then on: the caller forces a remount by
+ * keying on the family it's meant to show whenever that value changes underneath it.
+ */
+function FamilyInput({
+	label,
+	defaultValue,
+	onName,
+}: {
+	label: string;
+	defaultValue?: string;
+	onName: (family: string) => void;
+}) {
 	const settle = (raw: string) => {
 		const family = raw.trim();
 		if (family !== '') onName(family);
@@ -335,6 +357,7 @@ function FamilyInput({ label, onName }: { label: string; onName: (family: string
 			type="text"
 			aria-label={label}
 			placeholder="Name a family"
+			defaultValue={defaultValue}
 			onBlur={(event) => settle(event.target.value)}
 			onKeyDown={(event) => {
 				if (event.key === 'Enter') settle(event.currentTarget.value);
