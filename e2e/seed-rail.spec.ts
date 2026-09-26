@@ -710,4 +710,15 @@ test('an empty classification list still offers every reference image, and a cla
 	expect(stored?.versions.at(-1)?.seed?.imageClassifications).toEqual([
 		{ imageId: 'img-2', detected: 'artwork' },
 	]);
+
+	// A classification added by mistake has to come back out, or Discard after a save restores it.
+	await page.getByLabel('Image 2 classification').selectOption('');
+	await expect(page.locator('[data-tag-disagreement="img-2"]')).toHaveCount(0);
+	await save.click();
+	await expect(save).toBeDisabled();
+
+	await page.reload();
+	await expect(page.getByLabel('Image 2 classification')).toHaveValue('');
+	const cleared = await readStoredRecord(page, record.id);
+	expect(cleared?.versions.at(-1)?.seed?.imageClassifications).toEqual([]);
 });
