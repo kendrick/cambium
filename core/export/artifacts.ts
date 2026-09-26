@@ -24,28 +24,27 @@ const ARTIFACT_SUFFIXES = ['light.tokens.json', 'dark.tokens.json', 'tokens.css'
  * needs, and passing either through unfiltered would let a URL like `?x=../../etc` reach a
  * filesystem's save dialog. `core/brand-record.ts` stores `brandUrl` exactly as typed, and its
  * docblock says a bare domain like `acme.com` is the point, not a mistake, because a URL parse
- * would refuse it. `new URL()` bears that out, so a first failure gets a second try with `https://`
- * prepended before falling back to no prefix. A trailing dot is a valid FQDN terminator someone
- * might type or paste, not part of the name, so it's stripped after the hostname is in hand.
+ * would refuse it. So when the typed text yields no hostname, a second parse runs with `https://`
+ * prepended before falling back to no prefix. "No hostname" covers a throw (`acme.com`) and a parse
+ * that succeeds empty: `acme.com:8080` reads as the custom scheme `acme.com:` with no host. A
+ * trailing dot is a valid FQDN terminator someone might type or paste, not part of the name, so
+ * it's stripped after the hostname is in hand.
  */
 export function filenamePrefix(brandUrl: string | null): string {
 	if (brandUrl === null) return '';
 
-	let hostname: string;
-
-	try {
-		hostname = new URL(brandUrl).hostname.toLowerCase();
-	} catch {
-		try {
-			hostname = new URL(`https://${brandUrl}`).hostname.toLowerCase();
-		} catch {
-			return '';
-		}
-	}
-
+	const hostname = hostnameOf(brandUrl) || hostnameOf(`https://${brandUrl}`);
 	const cleaned = hostname.replace(/\.+$/, '').replace(/[^a-z0-9.-]/g, '');
 
 	return cleaned === '' ? '' : `${cleaned}-`;
+}
+
+function hostnameOf(text: string): string {
+	try {
+		return new URL(text).hostname.toLowerCase();
+	} catch {
+		return '';
+	}
 }
 
 /**

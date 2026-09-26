@@ -180,6 +180,13 @@ describe('filenamePrefix', () => {
 		expect(filenamePrefix('acme.com.')).toBe('acme.com-');
 	});
 
+	// `new URL('acme.com:8080')` parses: `acme.com:` reads as a custom scheme, and the hostname
+	// comes back empty. The retry has to fire on that as well as on a throw.
+	it('prefixes a scheme-less host with a port', () => {
+		expect(filenamePrefix('acme.com:8080')).toBe('acme.com-');
+		expect(filenamePrefix('localhost:3000')).toBe('localhost-');
+	});
+
 	it('drops userinfo and port from a fully-qualified URL, unaffected by the retry', () => {
 		expect(filenamePrefix('https://user:pw@acme.com:8080/x')).toBe('acme.com-');
 	});
