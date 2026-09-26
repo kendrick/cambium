@@ -16,6 +16,7 @@ import { serializeDtcg } from '../core/dtcg/serialize';
 import { BALANCED } from '../core/interpretation';
 import { createOklchScaleEngine } from '../core/oklch-scale-engine';
 import { CAMBIUM_NAMESPACE } from '../core/provenance';
+import { defaultSeedPins } from '../core/seed-pins';
 import { buildTokenSet } from '../core/semantic-layer';
 import { STEP_ROLES } from '../core/step-roles';
 import { applyOverrides, type TokenOverride } from '../core/token-overrides';
@@ -304,6 +305,7 @@ function buildRecordWithSeed(seed: BrandSeed, overrides: TokenOverride[] = []): 
 				fontTable: { source: 'cambium-e2e-fixture', version: '1' },
 				interpretation: 'balanced',
 				overrides,
+				pins: defaultSeedPins(seed),
 			},
 		],
 	} satisfies BrandRecord);

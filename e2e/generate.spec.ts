@@ -16,6 +16,7 @@ import { SESSION_KEY_STORAGE_KEY } from '../app/generation/session-key';
 import { DATABASE_NAME, RECORD_STORE_NAME } from '../app/storage/indexed-db-record-store';
 import { BrandRecordSchema } from '../core/brand-record';
 import type { BrandSeed } from '../core/brand-seed';
+import { defaultSeedPins } from '../core/seed-pins';
 
 import { expect, test } from './fixtures';
 import { makePng } from './fixtures/png';
@@ -251,6 +252,7 @@ async function commitVersionFromAnotherTab(page: Page, recordId: string): Promis
 				fontTable: { source: 'cambium-e2e-other-tab', version: '1' },
 				interpretation: 'balanced',
 				overrides: [],
+				pins: defaultSeedPins(seed),
 			},
 		],
 	});

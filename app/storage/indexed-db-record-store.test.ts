@@ -81,6 +81,7 @@ function makeRecordWithImage(): BrandRecord {
 				fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 				interpretation: 'balanced',
 				overrides: [],
+				pins: [],
 			},
 		],
 	};

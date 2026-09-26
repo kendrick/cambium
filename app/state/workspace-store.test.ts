@@ -8,6 +8,7 @@ import { checkContrast } from '../../core/contrast/check';
 import { BALANCED } from '../../core/interpretation';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
 import type { RampSet, ScaleEngine, ScaleEngineResult } from '../../core/scale-engine';
+import { defaultSeedPins } from '../../core/seed-pins';
 import { buildTokenSet } from '../../core/semantic-layer';
 import { overrideKey, type TokenOverride } from '../../core/token-overrides';
 import type { TokenSet } from '../../core/token-set';
@@ -46,11 +47,15 @@ function seedWith(hue: number): BrandSeed {
 	};
 }
 
+// Pins follow whichever seed the caller settles on, so swapping in a keyless seed can't leave a
+// key colour pin pointing past the end.
 function makeVersion(overrides: Partial<BrandVersion> = {}): BrandVersion {
+	const seed = overrides.seed === undefined ? seedWith(259.8) : overrides.seed;
+
 	return {
 		createdAt: '2026-01-01T00:00:00.000Z',
 		ordinal: 1,
-		seed: seedWith(259.8),
+		seed,
 		tokenSet: null,
 		provider: 'anthropic',
 		model: 'claude-opus-5',
@@ -60,6 +65,7 @@ function makeVersion(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 		interpretation: 'balanced',
 		overrides: [],
+		pins: seed ? defaultSeedPins(seed) : [],
 		...overrides,
 	};
 }

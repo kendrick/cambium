@@ -41,6 +41,7 @@ const version = {
 	fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 	interpretation: 'balanced',
 	overrides: [],
+	pins: ['keyColors.0'],
 };
 
 const record = {
@@ -130,6 +131,21 @@ describe('BrandRecordSchema', () => {
 			schemaVersion: 8,
 			images: untagged,
 			versions: [versionEight],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['schemaVersion']);
+	});
+
+	// The archive the bump to 10 exists for: stamped 9 and shaped like 9, so its versions carry no
+	// `pins`. The missing key fails too, and the version has to be what the reader hears first.
+	it('rejects a record from before pins were stored, naming schemaVersion first', () => {
+		const { pins: _dropped, ...versionNine } = version;
+
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			schemaVersion: 9,
+			versions: [versionNine],
 		});
 
 		expect(result.success).toBe(false);
@@ -232,6 +248,7 @@ describe('BrandRecordSchema integrity', () => {
 		const orphaned = {
 			...version,
 			seed: null,
+			pins: [],
 			tokenSet: {
 				...layer,
 				schemes: { light: layer, dark: layer },
@@ -249,7 +266,7 @@ describe('BrandRecordSchema integrity', () => {
 	});
 
 	it('accepts a version that has neither a seed nor a token set', () => {
-		const empty = { ...version, seed: null, tokenSet: null };
+		const empty = { ...version, seed: null, tokenSet: null, pins: [] };
 
 		expect(BrandRecordSchema.safeParse({ ...record, versions: [empty] }).success).toBe(true);
 	});
@@ -533,5 +550,81 @@ describe('BrandRecordSchema tags and brand URL', () => {
 		const result = BrandRecordSchema.safeParse({ ...record, brandUrl: 'a'.repeat(2049) });
 
 		expect(result.success).toBe(false);
+	});
+});
+
+describe('BrandRecordSchema pins', () => {
+	it('keeps pins across a parse round trip', () => {
+		const pinned = { ...version, pins: ['keyColors.0', 'radiusCharacter'] };
+
+		const reread = BrandRecordSchema.parse(
+			structuredClone(BrandRecordSchema.parse({ ...record, versions: [pinned] })),
+		);
+
+		expect(reread.versions[0]?.pins).toEqual(['keyColors.0', 'radiusCharacter']);
+	});
+
+	// Empty is a real answer, a version with everything unpinned, so a missing key can only be a
+	// writer that forgot, and defaulting it would hide that writer.
+	it('requires the key, holding an empty list when nothing is pinned', () => {
+		const { pins: _dropped, ...unpinned } = version;
+
+		expect(BrandRecordSchema.safeParse({ ...record, versions: [unpinned] }).success).toBe(false);
+		expect(
+			BrandRecordSchema.safeParse({ ...record, versions: [{ ...version, pins: [] }] }).success,
+		).toBe(true);
+	});
+
+	// The seed holds one key colour, so index 1 names nothing. Read back, that pin would either be
+	// dropped without a word or land on whatever colour later takes that slot.
+	it('refuses a pin on a key colour index the seed does not have', () => {
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			versions: [{ ...version, pins: ['keyColors.0', 'keyColors.1'] }],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['versions', 0, 'pins', 1]);
+	});
+
+	it('refuses a key colour pin on a seed whose key colours are null', () => {
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			versions: [{ ...version, seed: { ...seed, keyColors: null }, pins: ['keyColors.0'] }],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['versions', 0, 'pins', 0]);
+	});
+
+	// A version with no seed has no key colours to point at, but a field pin names no index, so
+	// it has nothing to fall out of range of.
+	it('lets a version with no seed carry field pins and nothing that names a key colour', () => {
+		const seedless = { ...version, seed: null };
+
+		expect(
+			BrandRecordSchema.safeParse({
+				...record,
+				versions: [{ ...seedless, pins: ['radiusCharacter'] }],
+			}).success,
+		).toBe(true);
+
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			versions: [{ ...seedless, pins: ['keyColors.0'] }],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['versions', 0, 'pins', 0]);
+	});
+
+	it('refuses a pin path that names no seed field', () => {
+		const result = BrandRecordSchema.safeParse({
+			...record,
+			versions: [{ ...version, pins: ['surfacePolarity'] }],
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['versions', 0, 'pins', 0]);
 	});
 });

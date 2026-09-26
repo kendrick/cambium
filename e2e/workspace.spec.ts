@@ -10,6 +10,7 @@ import {
 	SCHEMA_VERSION,
 } from '../core/brand-record';
 import type { BrandSeed } from '../core/brand-seed';
+import { defaultSeedPins } from '../core/seed-pins';
 
 import { expect, test } from './fixtures';
 
@@ -95,6 +96,7 @@ function buildRecordWithOneVersion(
 				fontTable: { source: 'cambium-e2e-fixture', version: '1' },
 				interpretation: 'balanced',
 				overrides: [],
+				pins: defaultSeedPins(seed),
 			},
 		],
 	} satisfies BrandRecord);

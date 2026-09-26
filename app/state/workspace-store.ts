@@ -639,6 +639,7 @@ export function createWorkspaceStore({
 				// stored instead, because they are the user's input the way the seed is the model's.
 				tokenSet: null,
 				overrides: Object.values(overrides),
+				pins: active?.pins ?? [],
 				scaleEngine: engine.id,
 				interpretation: preset,
 			};
