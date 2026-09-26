@@ -12,6 +12,8 @@ import {
 } from '../core/brand-record';
 import type { BrandSeed } from '../core/brand-seed';
 import { withContrastRepairs } from '../core/contrast/repair';
+import { toStylesheet } from '../core/css/stylesheet';
+import { serializeDtcg } from '../core/dtcg/serialize';
 import { exportArtifacts, type ExportArtifact } from '../core/export/artifacts';
 import { BALANCED } from '../core/interpretation';
 import { createOklchScaleEngine } from '../core/oklch-scale-engine';
@@ -54,12 +56,33 @@ if (!DERIVED.ok) {
 	throw new Error(`fixture seed failed to derive: ${DERIVED.error.kind}`);
 }
 
+const RAW_TOKEN_SET = buildTokenSet(DERIVED.schemes, SEED, BALANCED);
+
 /**
  * The set the workspace store actually paints (`repairedBase` in `app/state/workspace-store.ts`):
  * derive, then repair contrast. `exportArtifacts` below runs on this token set and never on the
  * page's own copy, so a broken download can't grade itself against its own wrong answer.
  */
-const TOKEN_SET = withContrastRepairs(buildTokenSet(DERIVED.schemes, SEED, BALANCED)).tokenSet;
+const TOKEN_SET = withContrastRepairs(RAW_TOKEN_SET).tokenSet;
+
+/**
+ * `core/export/artifacts.test.ts` documents this exact seed as one whose light `brand.1` moves
+ * under `withContrastRepairs`. Pinning that here too means the byte comparisons below can only
+ * pass if the page served the repaired set: a page stuck on `RAW_TOKEN_SET` would produce bytes
+ * that differ from every `expected` this file builds, and this is the one check that would say why.
+ */
+if (
+	JSON.stringify(serializeDtcg(RAW_TOKEN_SET).light) ===
+	JSON.stringify(serializeDtcg(TOKEN_SET).light)
+) {
+	throw new Error('fixture seed no longer repairs a light-scheme colour; pick a seed that does');
+}
+
+/**
+ * Computed from the adapters directly, not from `exportArtifacts`, so a bug that reorders or
+ * corrupts `exportArtifacts`' own output can't grade itself as correct against itself.
+ */
+const ADAPTER_ORACLE = { ...serializeDtcg(TOKEN_SET), css: toStylesheet(TOKEN_SET) };
 
 /**
  * One record per scenario, so a scenario that mutates its own overrides through the token list
@@ -188,14 +211,20 @@ async function downloadArtifact(
 	return { download, bytes: await readFile(path), blobType };
 }
 
-/** Every artifact's bytes and type checked in one round trip, against `expected` computed in Node. */
+/**
+ * Every artifact's bytes and type checked in one round trip: once against `expected`, computed
+ * with the same `exportArtifacts` the app runs, and once against `oracle`, computed with the two
+ * adapters directly. `exportArtifacts` sits between the two orders in the array it returns, so
+ * position 0 is light and 1 is dark for either check.
+ */
 async function expectArtifactsMatch(
 	page: Page,
 	expected: readonly ExportArtifact[],
+	oracle: { light: unknown; dark: unknown; css: string },
 ): Promise<void> {
 	await spyOnBlobTypes(page);
 
-	for (const artifact of expected) {
+	for (const [index, artifact] of expected.entries()) {
 		// One click and one `download` event at a time: firing every click together would race their
 		// `waitForEvent` calls against events that may land in a different order than the clicks did.
 		// oxlint-disable-next-line no-await-in-loop
@@ -206,13 +235,23 @@ async function expectArtifactsMatch(
 		// Exact bytes, not a trimmed or decoded comparison: a trailing-newline slip or a stray BOM
 		// would still "look equal" under a string comparison that normalized either side first.
 		expect(bytes.equals(Buffer.from(artifact.contents, 'utf-8')), artifact.filename).toBe(true);
+
+		if (artifact.mediaType === 'text/css') {
+			expect(bytes.toString('utf-8'), artifact.filename).toBe(oracle.css);
+		} else {
+			expect(JSON.parse(bytes.toString('utf-8')), artifact.filename).toEqual(
+				index === 0 ? oracle.light : oracle.dark,
+			);
+		}
 	}
 }
 
 test('downloads the light and dark DTCG documents and the stylesheet, each byte-identical to exportArtifacts and prefixed with the record brand URL', async ({
 	page,
 }) => {
-	const brandUrl = 'https://acme.example/about';
+	// A bare domain, no scheme: `core/brand-record.ts` stores `brandUrl` exactly as the landing
+	// form's input, and the form accepts `acme.example` on purpose, per its own docblock.
+	const brandUrl = 'acme.example';
 	const record = buildRecord(brandUrl);
 	const expected = exportArtifacts(TOKEN_SET, { brandUrl });
 
@@ -225,7 +264,7 @@ test('downloads the light and dark DTCG documents and the stylesheet, each byte-
 	]);
 
 	await openExportTab(page, record);
-	await expectArtifactsMatch(page, expected);
+	await expectArtifactsMatch(page, expected, ADAPTER_ORACLE);
 });
 
 test('downloads the same three artifacts unprefixed when the record carries no brand URL', async ({
@@ -241,7 +280,7 @@ test('downloads the same three artifacts unprefixed when the record carries no b
 	]);
 
 	await openExportTab(page, record);
-	await expectArtifactsMatch(page, expected);
+	await expectArtifactsMatch(page, expected, ADAPTER_ORACLE);
 });
 
 test('a re-alias applied through the token list shows up in the downloaded light document', async ({

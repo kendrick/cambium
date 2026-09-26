@@ -16,9 +16,10 @@ const Preview = lazy(() =>
 	import('@/components/workspace/preview/preview').then((module) => ({ default: module.Preview })),
 );
 
-// Also its own chunk: `exportArtifacts` pulls in `serializeDtcg` and `toStylesheet`, neither of
-// which the workspace route needed before #29, and nobody pays for that weight before opening
-// this tab.
+// Also its own chunk. Preview already pulls in `globals-css`, `scheme-declarations` and
+// `oklch-css`, and the store already carries `TokenSetSchema`, so the weight #29 actually adds is
+// `toStylesheet`'s composition functions and the DTCG builders, not either adapter whole; nobody
+// pays even that until opening this tab.
 const ExportPanel = lazy(() =>
 	import('@/components/workspace/export-panel').then((module) => ({ default: module.ExportPanel })),
 );

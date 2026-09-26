@@ -1,18 +1,12 @@
+import type { ExportArtifact } from '../core/export/artifacts';
+
 /**
- * The repo's first download code, and browser-only for that reason: `Blob` and
- * `URL.createObjectURL` have no equivalent under Node, so this stays out of `core/` and off any
- * import path a Vitest unit test walks. `e2e/export.spec.ts` (issue #29's browser wave) is the only
- * thing that proves it fires, per `docs/agents/testing.md`'s "no browser tier in Vitest".
+ * Browser-only, and kept out of `core/` and off any import path a Vitest unit test walks. `Blob`
+ * and `URL.createObjectURL` aren't why: Node 18+ ships both. What forces this out is
+ * `document.createElement` and the anchor click below, which need a DOM. `e2e/export.spec.ts` is
+ * the only thing that proves it fires, per `docs/agents/testing.md`'s "no browser tier in Vitest".
  */
-export function downloadFile({
-	filename,
-	mediaType,
-	contents,
-}: {
-	filename: string;
-	mediaType: string;
-	contents: string;
-}): void {
+export function downloadFile({ filename, mediaType, contents }: ExportArtifact): void {
 	const url = URL.createObjectURL(new Blob([contents], { type: mediaType }));
 	const anchor = document.createElement('a');
 

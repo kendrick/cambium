@@ -8,7 +8,7 @@ import { serializeDtcg } from '../dtcg/serialize';
 import { BALANCED } from '../interpretation';
 import { createOklchScaleEngine } from '../oklch-scale-engine';
 import { buildTokenSet } from '../semantic-layer';
-import { exportArtifacts, filenamePrefix } from './artifacts';
+import { artifactFilenames, exportArtifacts, filenamePrefix } from './artifacts';
 
 /**
  * Walks a DTCG document the same way `core/dtcg/serialize.test.ts` and `core/purity.test.ts` do,
@@ -156,5 +156,54 @@ describe('filenamePrefix', () => {
 
 	it('returns an empty string for a brandUrl new URL() cannot parse', () => {
 		expect(filenamePrefix('not a url')).toBe('');
+	});
+
+	/**
+	 * `core/brand-record.ts:164-166`: `brandUrl` is stored as the person typed it, and the form
+	 * accepts a bare domain like `acme.com` on purpose because a URL parse would refuse it. A bare
+	 * domain is the common case a landing-page brand field collects, not an edge case, so it has to
+	 * come out the same as a URL that spells out its scheme.
+	 */
+	it('prefixes a bare domain by retrying the parse with https:// prepended', () => {
+		expect(filenamePrefix('acme.com')).toBe('acme.com-');
+	});
+
+	it('keeps a bare domain’s subdomain intact', () => {
+		expect(filenamePrefix('www.acme.com')).toBe('www.acme.com-');
+	});
+
+	it('lowercases and strips the path from a bare domain with a path', () => {
+		expect(filenamePrefix('Acme.COM/about')).toBe('acme.com-');
+	});
+
+	it('strips a trailing dot from the hostname', () => {
+		expect(filenamePrefix('acme.com.')).toBe('acme.com-');
+	});
+
+	it('drops userinfo and port from a fully-qualified URL, unaffected by the retry', () => {
+		expect(filenamePrefix('https://user:pw@acme.com:8080/x')).toBe('acme.com-');
+	});
+});
+
+describe('artifactFilenames', () => {
+	/**
+	 * `export-panel.tsx` selects a downloaded artifact by matching this list's names against
+	 * `exportArtifacts`' own filenames. If the two ever drifted, the button labelled for one name
+	 * would silently download nothing (a lookup miss) rather than the wrong file, but only because
+	 * that button reads its own name from this same function; a caller reading names from anywhere
+	 * else would get the old silent-wrong-file failure back.
+	 */
+	it('matches exportArtifacts filenames, in order, with a brandUrl', () => {
+		const brandUrl = 'https://Acme.com/about';
+
+		expect(artifactFilenames(brandUrl)).toEqual(
+			exportArtifacts(SPEC_TOKEN_SET, { brandUrl }).map((artifact) => artifact.filename),
+		);
+	});
+
+	it('matches exportArtifacts filenames, in order, with no brandUrl', () => {
+		expect(artifactFilenames(null)).toEqual(
+			exportArtifacts(SPEC_TOKEN_SET, { brandUrl: null }).map((artifact) => artifact.filename),
+		);
 	});
 });
