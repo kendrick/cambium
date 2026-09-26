@@ -893,8 +893,11 @@ export function createWorkspaceStore({
 				const next = { ...(draftSeed ?? EMPTY_SEED), ...patch };
 
 				// Pins ride along unchanged. A pin names a field, not a value, so editing the value under
-				// a pinned field—recolouring a key colour, say—leaves the pin exactly where it was; #25's
-				// decisions cover the case where that field's `proposedRole` moves it to a different step.
+				// a pinned field—recolouring a key colour, say—leaves the pin exactly where it was. A key
+				// colour pin names an index rather than a role, and `repairPinsFor` re-reads which ramp
+				// that index sits on from the current seed every time derivation runs below, so a
+				// `proposedRole` edit that moves a pinned colour onto a different ramp keeps that ramp's
+				// step 9 protected instead of the old one.
 				// No storage write either way. An edit is uncommitted by definition, and derivation is
 				// cheap enough to run on every keystroke, which is the whole reason tokens are not stored.
 				set({ draftSeed: next, ...derivation(engine, next, preset, overrides, draftPins) });

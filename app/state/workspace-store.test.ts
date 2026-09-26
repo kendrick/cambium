@@ -1663,6 +1663,20 @@ describe('pins (#25)', () => {
 		expect(store.getState().draftPins).toEqual(['keyColors.0', 'keyColors.1']);
 	});
 
+	/**
+	 * A duplicate input already in sorted order, so a `canonicalPins` that dropped the `Set` and
+	 * kept only the sort would still land here: sorting two copies of the same string leaves them
+	 * both in place. Only the dedupe half can shrink this to one entry, which is what isolates it
+	 * from the sort test above.
+	 */
+	it('setDraftPins drops a duplicate pin rather than storing it twice', () => {
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed: twoKeySeed(), pins: [] })]));
+
+		store.getState().setDraftPins(['keyColors.0', 'keyColors.0']);
+
+		expect(store.getState().draftPins).toEqual(['keyColors.0']);
+	});
+
 	it('leaves pins untouched by an edit to an unrelated seed field', () => {
 		const { store } = openWorkspace(makeRecord([makeVersion({ seed: twoKeySeed() })]));
 
@@ -1821,6 +1835,24 @@ describe('a pinned key colour and contrast repair (#25)', () => {
 		store.getState().togglePin('keyColors.0');
 
 		expect(store.getState().tokenSet).toEqual(pinnedTokenSet);
+
+		// Pinned-equals-unpinned alone would also pass a repair that moved brand step 9 in lockstep
+		// on both runs. `unrepairedBase`, built the same way `unrepairedReport` above builds its
+		// baseline, is what step 9 was before repair touched it, so comparing against that catches a
+		// repair that drifts both runs together, not just one that treats them differently.
+		const unrepairedResult = createOklchScaleEngine().generate(seed, BALANCED);
+
+		if (!unrepairedResult.ok) {
+			throw new Error(`expected a derived ramp set, got ${unrepairedResult.error.kind}`);
+		}
+
+		const unrepairedBase = buildTokenSet(unrepairedResult.schemes, seed, BALANCED);
+
+		for (const scheme of ['light', 'dark'] as const) {
+			expect(pinnedTokenSet?.schemes[scheme].primitives.brand?.[8]).toEqual(
+				unrepairedBase.schemes[scheme].primitives.brand?.[8],
+			);
+		}
 	});
 });
 

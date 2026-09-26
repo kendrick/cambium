@@ -172,6 +172,39 @@ async function seedWorkspaceRecord(page: Page, record: BrandRecord): Promise<voi
 }
 
 /**
+ * Reads every stored row through raw IndexedDB, the same reason `writeIndexedDbRow` above bypasses
+ * `RecordStore`: the store is only reachable from inside the page. Parsed through
+ * `BrandRecordSchema` on the way out, so a save that wrote a shape the schema has moved past fails
+ * here rather than passing a comparison that only checks the fields this spec happens to read.
+ */
+async function readStoredRecord(page: Page, recordId: string): Promise<BrandRecord | undefined> {
+	const rows = await page.evaluate(
+		async ([databaseName, storeName]) => {
+			const db = await new Promise<IDBDatabase>((resolve, reject) => {
+				const request = indexedDB.open(databaseName, 1);
+				request.addEventListener('success', () => resolve(request.result));
+				request.addEventListener('error', () => reject(request.error));
+			});
+
+			try {
+				return await new Promise<unknown[]>((resolve, reject) => {
+					const request = db.transaction(storeName, 'readonly').objectStore(storeName).getAll();
+					request.addEventListener('success', () => resolve(request.result as unknown[]));
+					request.addEventListener('error', () => reject(request.error));
+				});
+			} finally {
+				db.close();
+			}
+		},
+		[DATABASE_NAME, RECORD_STORE_NAME] as const,
+	);
+
+	const match = rows.find((row) => (row as { id?: string }).id === recordId);
+
+	return match ? BrandRecordSchema.parse(match) : undefined;
+}
+
+/**
  * `Locator.boundingBox()` types its result nullable for an element that isn't rendered, which each
  * geometry scenario below has already ruled out with a `toBeVisible()` wait. This gives that
  * guarantee a type the comparisons can read without repeating the null check at every call.
@@ -457,4 +490,56 @@ test('choosing a display font puts it first as an invented pick, which survives 
 	await expect(page.getByLabel('Display font', { exact: true })).toBeVisible();
 	await expect.poll(selectedOptionText).toContain('Roboto');
 	expect(await selectedOptionText()).toContain('your pick');
+});
+
+test('a checkbox toggle, a moved expressive range, and a new expressive axis all persist through save and reload', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed();
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const displayDiffers = page.getByLabel('Display differs from body');
+	await expect(displayDiffers).not.toBeChecked();
+	await displayDiffers.check();
+	await expect(displayDiffers).toBeChecked();
+
+	const expressiveRow = page.locator('[data-seed-field="expressive"]');
+	const scoredAxisOrder = () =>
+		expressiveRow
+			.locator('input[type="range"]')
+			.evaluateAll((elements) => elements.map((element) => element.getAttribute('aria-label')));
+
+	const calmScore = page.getByLabel('Calm score');
+	await calmScore.fill('20');
+	await expect(calmScore).toHaveValue('20');
+
+	await expressiveRow.getByLabel('Add an expressive axis').selectOption('Playful');
+
+	// `ExpressiveEditor` (components/workspace/seed-rail/field-editors.tsx) re-sorts on every change
+	// through `ranked`, so Playful's default score of 50 outranks Calm's 20 and lands first, the
+	// order `rankedByExpressiveScore` (core/brand-seed.ts) requires of whatever gets saved.
+	await expect.poll(scoredAxisOrder).toEqual(['Playful score', 'Calm score']);
+	await expect(page.getByLabel('Playful score')).toHaveValue('50');
+
+	const save = page.getByRole('button', { name: 'Save', exact: true });
+	await save.click();
+	await expect(save).toBeDisabled();
+
+	await page.reload();
+
+	await expect(page.getByLabel('Display differs from body')).toBeChecked();
+	await expect.poll(scoredAxisOrder).toEqual(['Playful score', 'Calm score']);
+	await expect(page.getByLabel('Playful score')).toHaveValue('50');
+	await expect(page.getByLabel('Calm score')).toHaveValue('20');
+
+	const stored = await readStoredRecord(page, record.id);
+	const savedSeed = stored?.versions.at(-1)?.seed;
+
+	expect(savedSeed?.typeClassification?.displayDiffersFromBody).toBe(true);
+	expect(savedSeed?.expressive).toEqual([
+		{ axis: 'Playful', score: 50 },
+		{ axis: 'Calm', score: 20 },
+	]);
 });
