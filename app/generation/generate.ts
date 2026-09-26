@@ -7,6 +7,7 @@ import {
 	type SeedParseIssue,
 } from '../../core/parse-seed';
 import type { ScaleEngine } from '../../core/scale-engine';
+import { defaultSeedPins } from '../../core/seed-pins';
 import { isSchemaRejection } from '../../components/is-schema-rejection';
 import { resolveFontTable } from '../fonts/font-table-provider';
 import { anthropicAuth } from '../readers/anthropic-auth';
@@ -269,6 +270,10 @@ export async function saveGeneratedVersion({
 		workspace.clearOverride(key);
 	}
 	workspace.editSeed(seed);
+	// Every key colour here was read out of an image, whether this is the record's first version or
+	// a save-again after a storage failure retried the same read. `open` would otherwise carry the
+	// previous version's pins forward, which name indices into a seed this commit is replacing.
+	workspace.setDraftPins(defaultSeedPins(seed));
 
 	try {
 		return { ok: true, record: await workspace.commit(provenance) };

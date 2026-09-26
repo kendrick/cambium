@@ -1,14 +1,15 @@
 import { readFile } from 'node:fs/promises';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/brand-record';
 import type { BrandSeed } from '../../core/brand-seed';
 import { checkContrast } from '../../core/contrast/check';
+import { withContrastRepairs } from '../../core/contrast/repair';
 import { BALANCED } from '../../core/interpretation';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
 import type { RampSet, ScaleEngine, ScaleEngineResult } from '../../core/scale-engine';
-import { defaultSeedPins } from '../../core/seed-pins';
+import { defaultSeedPins, repairPinsFor } from '../../core/seed-pins';
 import { buildTokenSet } from '../../core/semantic-layer';
 import { overrideKey, type TokenOverride } from '../../core/token-overrides';
 import type { TokenSet } from '../../core/token-set';
@@ -25,12 +26,70 @@ import {
 	StaleWorkspaceError,
 } from './workspace-store';
 
+/**
+ * `withContrastRepairs` still runs for real: only the call is now observable. Every SWEEP-scale
+ * seed in this suite protects nothing but `brand.9`/`accent.9` through a seed pin, and the search
+ * in `core/contrast/repair.ts` never fails to find a passing lightness for that pair's foreground
+ * (grayscale at either lightness extreme clears any WCAG target this repo declares), so the
+ * background side these pins name never has to move whether it's pinned or not. Output equality
+ * can't tell a wired pin apart from an ignored one here, the same trap `docs/agents/testing.md`
+ * describes for #79's shadow branch, so the pin-vs-repair tests below read the call this store
+ * actually made rather than only the tokens that came back.
+ */
+vi.mock('../../core/contrast/repair', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('../../core/contrast/repair')>();
+
+	return {
+		...actual,
+		withContrastRepairs: vi.fn<typeof actual.withContrastRepairs>(actual.withContrastRepairs),
+	};
+});
+
+// Call history only, never the implementation: clearing it (rather than restoring) leaves the
+// pass-through in place for every test in this file, including the ones nowhere near pins.
+afterEach(() => {
+	vi.mocked(withContrastRepairs).mockClear();
+});
+
 function seedWith(hue: number): BrandSeed {
 	return {
 		keyColors: [
 			{
 				oklch: [0.62, 0.19, hue],
 				proposedRole: 'brand',
+				sourceImageId: 'img-1',
+				sourceRegion: null,
+			},
+		],
+		neutralTemperature: null,
+		radiusCharacter: null,
+		shadowCharacter: null,
+		trackingFeel: null,
+		typeClassification: null,
+		suggestedPairing: null,
+		typeScaleRatio: null,
+		imageClassifications: null,
+		expressive: null,
+	};
+}
+
+/**
+ * Two key colours from two different roles, so `repairPinsFor` has both `brand` and `accent` to
+ * place and a pin on either names a different ramp. Blue and green, the same two hues `check.ts`'s
+ * `SWEEP` uses, chosen for no reason beyond being two hues nowhere near each other.
+ */
+function twoKeySeed(): BrandSeed {
+	return {
+		keyColors: [
+			{
+				oklch: [0.6231, 0.188, 259.8],
+				proposedRole: 'brand',
+				sourceImageId: 'img-1',
+				sourceRegion: null,
+			},
+			{
+				oklch: [0.6959, 0.1491, 162.5],
+				proposedRole: 'accent',
 				sourceImageId: 'img-1',
 				sourceRegion: null,
 			},
@@ -1516,5 +1575,307 @@ describe('the repair cache’s seed and preset check', () => {
 		const pillRadius = store.getState().tokenSet?.radius.values.lg?.value;
 
 		expect(pillRadius).not.toBe(sharpRadius);
+	});
+
+	/**
+	 * #25 adds pins to this cache's key. `constantDerivedEngine` again, so `derived`'s identity is
+	 * the one thing a toggle can't change, the way the radius test above pins down `seed` as the one
+	 * thing that can. Read off the call `withContrastRepairs` actually received rather than off the
+	 * token set: `repairPinsFor` only ever protects `brand.9`/`accent.9`, and no seed in this suite
+	 * makes either step the one a repair has to move (see the pin-vs-repair describe block below for
+	 * why), so a stale cache serving the pre-toggle repair would still hand back an equal token set.
+	 */
+	it('recomputes the repaired base when pins change but `derived` does not', () => {
+		const seed = twoKeySeed();
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed })]), {
+			engine: constantDerivedEngine(),
+		});
+		const callsAfterOpen = vi.mocked(withContrastRepairs).mock.calls.length;
+
+		store.getState().togglePin('keyColors.1');
+
+		expect(vi.mocked(withContrastRepairs).mock.calls.length).toBe(callsAfterOpen + 1);
+		expect(vi.mocked(withContrastRepairs).mock.calls.at(-1)?.[1]?.pinned).toEqual(
+			repairPinsFor(seed, store.getState().draftPins),
+		);
+	});
+});
+
+describe('pins (#25)', () => {
+	it('starts pinned on every key colour the active version names, and empty with no record open', () => {
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed: twoKeySeed() })]));
+
+		expect(store.getState().draftPins).toEqual(['keyColors.0', 'keyColors.1']);
+
+		store.getState().close();
+
+		expect(store.getState().draftPins).toEqual([]);
+	});
+
+	it('toggles a pin on and off without touching draftSeed', () => {
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed: twoKeySeed() })]));
+		const seedBeforeToggle = store.getState().draftSeed;
+
+		store.getState().togglePin('keyColors.1');
+		expect(store.getState().draftPins).toEqual(['keyColors.0']);
+
+		store.getState().togglePin('keyColors.1');
+		expect(store.getState().draftPins).toEqual(['keyColors.0', 'keyColors.1']);
+		expect(store.getState().draftSeed).toBe(seedBeforeToggle);
+	});
+
+	it('canonicalises pins so a toggle-and-back leaves the array identical to never touching it', () => {
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed: twoKeySeed() })]));
+		const original = store.getState().draftPins;
+
+		store.getState().togglePin('keyColors.1');
+		store.getState().togglePin('keyColors.1');
+
+		expect(store.getState().draftPins).toEqual(original);
+		// Not just equal in value: the point of canonicalising is that a no-op toggle sequence
+		// commits the very same array a caller who never toggled anything would commit.
+		expect(store.getState().draftPins).not.toBe(original);
+		expect(store.getState().draftPins).toStrictEqual(original);
+	});
+
+	it('canonicalises pins into the same order however they were toggled on', () => {
+		const record = makeRecord([makeVersion({ seed: twoKeySeed(), pins: [] })]);
+		const { store: clickedZeroFirst } = openWorkspace(structuredClone(record));
+		const { store: clickedOneFirst } = openWorkspace(structuredClone(record));
+
+		clickedZeroFirst.getState().togglePin('keyColors.0');
+		clickedZeroFirst.getState().togglePin('keyColors.1');
+
+		clickedOneFirst.getState().togglePin('keyColors.1');
+		clickedOneFirst.getState().togglePin('keyColors.0');
+
+		expect(clickedZeroFirst.getState().draftPins).toEqual(['keyColors.0', 'keyColors.1']);
+		expect(clickedOneFirst.getState().draftPins).toEqual(clickedZeroFirst.getState().draftPins);
+	});
+
+	// Generation's own entry point: it replaces the set outright rather than toggling one field at a
+	// time, because every key colour it writes came from an image in the same read. Nothing in the
+	// rail calls this; a person only ever has one field to toggle.
+	it('setDraftPins replaces the held set outright', () => {
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed: twoKeySeed(), pins: [] })]));
+
+		store.getState().setDraftPins(['keyColors.1', 'keyColors.1', 'keyColors.0']);
+
+		expect(store.getState().draftPins).toEqual(['keyColors.0', 'keyColors.1']);
+	});
+
+	it('leaves pins untouched by an edit to an unrelated seed field', () => {
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed: twoKeySeed() })]));
+
+		store.getState().togglePin('keyColors.1');
+		store.getState().editSeed({ trackingFeel: 'wide' });
+
+		expect(store.getState().draftPins).toEqual(['keyColors.0']);
+	});
+
+	it('commits the draft pins, not the active version’s', async () => {
+		const record = makeRecord([makeVersion({ seed: twoKeySeed() })]);
+		const { store, recordStore } = openWorkspace(record);
+
+		store.getState().togglePin('keyColors.1');
+
+		await store.getState().commit();
+
+		expect(recordStore.puts.at(-1)!.versions.at(-1)!.pins).toEqual(['keyColors.0']);
+	});
+
+	// The hand-edited-seed guard reads `draftSeed` against the active version's; a pin toggle leaves
+	// `draftSeed` alone, so this has to go through with no provenance, the same as a plain re-derive.
+	it('commits a pin-only change with no provenance, since the seed itself is untouched', async () => {
+		const record = makeRecord([makeVersion({ seed: twoKeySeed() })]);
+		const { store } = openWorkspace(record);
+
+		store.getState().togglePin('keyColors.1');
+
+		const next = await store.getState().commit();
+		const committed = next.versions[1]!;
+
+		expect(committed.seed).toEqual(record.versions[0]!.seed);
+		expect(committed.provider).toBe(record.versions[0]!.provider);
+		expect(committed.model).toBe(record.versions[0]!.model);
+		expect(committed.pins).toEqual(['keyColors.0']);
+	});
+
+	it('restores pins from the version discardEdits returns to', () => {
+		const record = makeRecord([makeVersion({ seed: twoKeySeed() })]);
+		const { store } = openWorkspace(record);
+
+		store.getState().togglePin('keyColors.1');
+		store.getState().discardEdits();
+
+		expect(store.getState().draftPins).toEqual(['keyColors.0', 'keyColors.1']);
+	});
+
+	it('restores pins from the version selectVersion switches to', () => {
+		const record = makeRecord([
+			makeVersion({ seed: twoKeySeed(), pins: ['keyColors.0'] }),
+			makeVersion({
+				ordinal: 2,
+				createdAt: '2026-02-01T00:00:00.000Z',
+				seed: seedWith(30),
+				pins: [],
+			}),
+		]);
+		const { store } = openWorkspace(record);
+
+		expect(store.getState().draftPins).toEqual([]);
+
+		store.getState().selectVersion(1);
+
+		expect(store.getState().draftPins).toEqual(['keyColors.0']);
+	});
+
+	/**
+	 * `repairPinsFor` follows the engine's own placement rule (first key colour per role), so a pin
+	 * on an index protects whichever step that colour lands on *now*, not whichever step it landed
+	 * on when the pin was set.
+	 *
+	 * Two key colours, not one: `placedIndices` falls `brand` back to `keyColors[0]` whenever no key
+	 * colour claims it outright (`core/seed-pins.ts`'s own docblock), and with a single key colour
+	 * that fallback would land brand on the pinned index regardless of what this test edits, which
+	 * would make the assertion pass for the wrong reason. Starting `keyColors.0` at `accent` with
+	 * `keyColors.1` holding `brand` outright keeps the fallback from ever triggering, so the only
+	 * thing that moves the pin from `accent.9` to `brand.9` is the role edit itself.
+	 */
+	it('keeps protecting whatever step a pinned key colour lands on after its role changes', () => {
+		const seed: BrandSeed = {
+			...twoKeySeed(),
+			keyColors: [
+				{
+					oklch: [0.6959, 0.1491, 162.5],
+					proposedRole: 'accent',
+					sourceImageId: 'img-1',
+					sourceRegion: null,
+				},
+				{
+					oklch: [0.6231, 0.188, 259.8],
+					proposedRole: 'brand',
+					sourceImageId: 'img-1',
+					sourceRegion: null,
+				},
+			],
+		};
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed, pins: ['keyColors.0'] })]));
+
+		const before = vi.mocked(withContrastRepairs).mock.calls.at(-1)?.[1]?.pinned;
+
+		expect([...(before ?? [])]).toEqual(
+			expect.arrayContaining(['light:accent.9', 'dark:accent.9']),
+		);
+		expect([...(before ?? [])]).not.toContain('light:brand.9');
+
+		const asBrand: BrandSeed = {
+			...seed,
+			keyColors: [{ ...seed.keyColors![0]!, proposedRole: 'brand' }, seed.keyColors![1]!],
+		};
+
+		store.getState().editSeed({ keyColors: asBrand.keyColors });
+
+		const after = vi.mocked(withContrastRepairs).mock.calls.at(-1)?.[1]?.pinned;
+
+		expect(after).toEqual(repairPinsFor(asBrand, store.getState().draftPins));
+		expect([...(after ?? [])]).toEqual(expect.arrayContaining(['light:brand.9', 'dark:brand.9']));
+		expect([...(after ?? [])]).not.toContain('light:accent.9');
+	});
+});
+
+describe('a pinned key colour and contrast repair (#25)', () => {
+	it('hands repair the seed’s own pinned set rather than defaultPins, and drops it once unpinned', () => {
+		const seed = seedWith(259.8);
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed })]));
+
+		const pinnedCall = vi.mocked(withContrastRepairs).mock.calls.at(-1)!;
+
+		expect(pinnedCall[1]?.pinned).toEqual(repairPinsFor(seed, ['keyColors.0']));
+		expect([...(pinnedCall[1]?.pinned ?? [])]).toEqual(
+			expect.arrayContaining(['light:brand.9', 'dark:brand.9']),
+		);
+
+		store.getState().togglePin('keyColors.0');
+
+		const unpinnedCall = vi.mocked(withContrastRepairs).mock.calls.at(-1)!;
+
+		expect(unpinnedCall[1]?.pinned).toEqual(new Set());
+	});
+
+	/**
+	 * The literal wording of #25's acceptance criteria: "a pinned field is unchanged by an applied
+	 * contrast repair." True here, but for a reason worth stating rather than leaving implicit.
+	 * `repairPinsFor` only ever names a ramp's step 9, and the one pair `core/contrast/pairs.ts`
+	 * declares against it (`primary` on `primary-foreground`) always tries to move the foreground
+	 * first—the step `resolveScheme` already chose for its own best contrast—and that search clears
+	 * any target this repo declares even at the grayscale boundary. So the foreground wins before
+	 * the background's pin state is ever consulted, and step 9 never moves whether it's pinned or
+	 * not: unpinning it here proves no move was needed, which is the outcome #25's own plan text
+	 * allows for. The test above is the one that would catch a store that stopped wiring the pin
+	 * through at all; this one guards the plainer, output-level claim.
+	 */
+	it('leaves the repaired token set unchanged whether the key colour is pinned or not', () => {
+		const seed = seedWith(259.8);
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed })]));
+		const pinnedTokenSet = store.getState().tokenSet;
+
+		store.getState().togglePin('keyColors.0');
+
+		expect(store.getState().tokenSet).toEqual(pinnedTokenSet);
+	});
+});
+
+describe('a pinned field and a preset switch (#25)', () => {
+	/**
+	 * Structural today, not pin-dependent: `PRESET_PARAMS` maps every preset to `BALANCED`
+	 * (`workspace-store.ts`'s own docblock), and `selectPreset` never touches `draftSeed` for any
+	 * field, pinned or not. Run against both a pinned and an unpinned key colour so the guarantee
+	 * #25 asks for is checked directly rather than inferred from a mechanism that would hold either
+	 * way; #37 is where a preset first gets the power to move a seed value; this test starts failing
+	 * on the pinned case then, which is the point of pinning it at all.
+	 */
+	it.each([
+		['pinned', true],
+		['unpinned', false],
+	] as const)('leaves a %s key colour’s value unchanged across every preset', (_label, pinned) => {
+		const { store } = openWorkspace();
+
+		if (!pinned) store.getState().togglePin('keyColors.0');
+
+		const before = {
+			seed: store.getState().draftSeed,
+			hue: brandHue(store.getState().derived),
+		};
+
+		for (const preset of ['faithful', 'balanced', 'expressive'] as const) {
+			store.getState().selectPreset(preset);
+
+			expect(store.getState().draftSeed).toEqual(before.seed);
+			expect(brandHue(store.getState().derived)).toBe(before.hue);
+		}
+	});
+});
+
+describe('editing re-derives with no network call (#25)', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('edits the seed and toggles a pin with fetch stubbed to throw', () => {
+		vi.stubGlobal('fetch', () => {
+			throw new Error('the workspace store must not reach the network');
+		});
+
+		const { store } = openWorkspace(makeRecord([makeVersion({ seed: twoKeySeed() })]));
+		const hueBeforeEdit = brandHue(store.getState().derived);
+
+		store.getState().editSeed({ keyColors: seedWith(30).keyColors });
+
+		expect(brandHue(store.getState().derived)).not.toBeCloseTo(hueBeforeEdit, 1);
+
+		store.getState().togglePin('keyColors.1');
+
+		expect(store.getState().draftPins).toEqual(['keyColors.0']);
 	});
 });
