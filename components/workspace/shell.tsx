@@ -35,27 +35,25 @@ const EXPORT_LOADING = <p className="text-muted-foreground text-sm">Loading the 
 export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const record = useStore(store, (state) => state.record);
 	const activeOrdinal = useStore(store, (state) => state.activeOrdinal);
-	const draftSeed = useStore(store, (state) => state.draftSeed);
-	const preset = useStore(store, (state) => state.preset);
 	const derived = useStore(store, (state) => state.derived);
 	const tokenSet = useStore(store, (state) => state.tokenSet);
 	const overrides = useStore(store, (state) => state.overrides);
 	const overrideIssues = useStore(store, (state) => state.overrideIssues);
 	const setOverride = useStore(store, (state) => state.setOverride);
 	const clearOverride = useStore(store, (state) => state.clearOverride);
-	const selectPreset = useStore(store, (state) => state.selectPreset);
 
 	const active =
 		record && activeOrdinal !== null ? (record.versions[activeOrdinal - 1] ?? null) : null;
 
 	return (
 		<main className="grid min-h-dvh grid-cols-1 gap-6 p-4 md:h-dvh md:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)_auto] md:p-6">
-			{/* The issue keeps the rail to two sections, seed over tokens, so the rail's own height goes
-			    to the token scroller and nothing else. */}
+			{/* The issue keeps the rail to two sections, seed over tokens. The seed's field list scrolls
+			    inside half the rail at most, so a fully stated seed can't push the token list off the
+			    bottom of a short window. */}
 			<aside aria-label="Seed and tokens" className="flex min-h-0 flex-col gap-4">
 				<h1 className="text-2xl font-semibold tracking-tight">Cambium</h1>
-				<div className="shrink-0">
-					<SeedRail seed={draftSeed} preset={preset} onSelectPreset={selectPreset} />
+				<div className="flex min-h-0 flex-col md:max-h-[50%]">
+					<SeedRail store={store} />
 				</div>
 				<div className="flex min-h-0 flex-1 flex-col gap-2">
 					<h2 id="tokens-heading" className="text-lg font-semibold">

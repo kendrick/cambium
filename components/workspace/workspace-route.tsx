@@ -75,26 +75,29 @@ export function WorkspaceRoute() {
 				// over the first-load budget when they shipped with it.
 				const [
 					{ createIndexedDbRecordStore, closeIndexedDbRecordStore },
+					{ createPerOperationRecordStore },
 					{ createOklchScaleEngine },
 					{ createWorkspaceStore },
 					{ Shell },
 				] = await Promise.all([
 					import('../../app/storage/indexed-db-record-store'),
+					import('../../app/storage/per-operation-record-store'),
 					import('../../core/oklch-scale-engine'),
 					import('../../app/state/workspace-store'),
 					import('@/components/workspace/shell'),
 				]);
-				const recordStore = await createIndexedDbRecordStore();
+				// A connection per call, closed as each one settles. The seed rail saves minutes or hours
+				// after this read, and a connection held that long is what a later tab's upgrade would
+				// hang behind: the landing route explains the missing `blocked` handler.
+				const recordStore = createPerOperationRecordStore(
+					createIndexedDbRecordStore,
+					closeIndexedDbRecordStore,
+				);
 
 				try {
 					const record = await recordStore.get(recordId);
 
 					if (record) {
-						// The workspace gets a record store whose connection `finally` is about to close.
-						// Nothing in this shell commits, and a commit on a closed connection rejects rather
-						// than writing anywhere, so this is safe until #25 adds one. That ticket has to
-						// decide how long the connection lives; the landing route explains why holding
-						// one open for the tab's lifetime risks a `blocked` hang.
 						const store = createWorkspaceStore({ recordStore, engine: createOklchScaleEngine() });
 						store.getState().open(record);
 						result = { kind: 'found', store, Shell };
@@ -103,8 +106,6 @@ export function WorkspaceRoute() {
 					}
 				} catch (error) {
 					result = isSchemaRejection(error) ? { kind: 'unreadable' } : { kind: 'unavailable' };
-				} finally {
-					closeIndexedDbRecordStore(recordStore);
 				}
 			} catch {
 				result = { kind: 'unavailable' };
