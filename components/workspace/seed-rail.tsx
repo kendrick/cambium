@@ -72,7 +72,8 @@ function handEditedProvenance(active: BrandVersion): CommitProvenance {
 /**
  * What "Set" writes into a field the model left null. Where the engine falls back to a fixed value
  * for null, the default is that value, so setting the field changes nothing until the person moves
- * it: a 10px soft radius (`core/radius-scale.ts`) and a 1.2 ratio (`core/type-scale.ts`). The
+ * it: a 10px soft radius (`core/radius-scale.ts`), a 1.2 ratio (`core/type-scale.ts`), and a
+ * surface-tinted `normal` shadow, which `core/shadow-scale.ts` renders the same as null. The
  * neutral has no fixed fallback, since the engine tints it off the brand by a preset parameter, so
  * it starts as a grey at the first key colour's hue that a person can warm from there.
  */
@@ -83,7 +84,7 @@ function defaultFor(field: Field, seed: BrandSeed, record: BrandRecord): BrandSe
 		case 'radiusCharacter':
 			return { base: 10, progression: 'soft' };
 		case 'shadowCharacter':
-			return { spread: 'tight', tintFromSurface: false };
+			return { spread: 'normal', tintFromSurface: true };
 		case 'trackingFeel':
 			return 'normal';
 		case 'typeClassification':

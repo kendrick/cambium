@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
+import { type BrandSeed, BrandSeedSchema } from './brand-seed';
 import { compositeOver, isInSrgb, type Oklch } from './oklch';
 import { BALANCED } from './interpretation';
 import { CAMBIUM_NAMESPACE, type SeedField } from './provenance';
@@ -235,6 +236,33 @@ describe('shadowScale', () => {
 		expect(tight.blur.value).toBeLessThan(diffuse.blur.value);
 		expect(tight.offsetY.value).toBeCloseTo(diffuse.offsetY.value, 10);
 	});
+
+	// The rail's Set writes `{ spread: 'normal', tintFromSurface: true }` into a null field, and Set
+	// must not move a single shadow until the person does. The character goes through the seed
+	// schema first, so this test also fails if the schema can't hold `normal`. Both surfaces run,
+	// because blur gain and opacity climb on the dark one.
+	it.each([
+		['light', PAGE_LIGHT],
+		['dark', PAGE_DARK],
+	] as const)(
+		'renders a normal-spread, surface-tinted shadow exactly as a null one on the %s surface',
+		(_scheme, surface) => {
+			const normal = BrandSeedSchema.shape.shadowCharacter.parse({
+				spread: 'normal',
+				tintFromSurface: true,
+			});
+			const rendered = (character: BrandSeed['shadowCharacter']) =>
+				Object.fromEntries(
+					Object.entries(shadowScale(surface, character, BALANCED).values).map(
+						([step, { $extensions: _provenance, ...value }]) => [step, value],
+					),
+				);
+
+			expect(rendered(normal)).toEqual(rendered(null));
+			// The fixture can tell spreads apart: `tight` on the same surface renders differently.
+			expect(rendered({ spread: 'tight', tintFromSurface: true })).not.toEqual(rendered(null));
+		},
+	);
 
 	it('tints by default when the seed measured no shadow character', () => {
 		expect(shadowScale(PAGE_LIGHT, null, BALANCED).values.md!.color.c).toBeGreaterThan(0);

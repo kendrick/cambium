@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 
 import type { Locator, Page } from '@playwright/test';
 import { PNG } from 'pngjs';
@@ -580,5 +581,133 @@ test('a checkbox toggle, a moved expressive range, and a new expressive axis all
 	expect(savedSeed?.expressive).toEqual([
 		{ axis: 'Playful', score: 50 },
 		{ axis: 'Calm', score: 20 },
+	]);
+});
+
+/**
+ * Clicks one Export-tab download and hands back what landed on disk. The export is the consumer
+ * here: it's the DTCG and CSS a person actually takes away, so a shadow that moved shows up in
+ * these bytes whatever the token set in memory claims.
+ */
+async function downloadedText(page: Page, filename: string): Promise<string> {
+	const [download] = await Promise.all([
+		page.waitForEvent('download'),
+		page.getByRole('button', { name: `Download ${filename}`, exact: true }).click(),
+	]);
+	const path = await download.path();
+
+	if (path === null) throw new Error(`download of ${filename} produced no saved file`);
+
+	return readFile(path, 'utf-8');
+}
+
+type ShadowGroup = Record<string, { $value: unknown; $extensions?: unknown }>;
+
+async function exportedShadows(page: Page): Promise<{
+	light: ShadowGroup;
+	dark: ShadowGroup;
+	cssShadowLines: string[];
+}> {
+	const light = JSON.parse(await downloadedText(page, 'light.tokens.json')) as {
+		shadow: ShadowGroup;
+	};
+	const dark = JSON.parse(await downloadedText(page, 'dark.tokens.json')) as {
+		shadow: ShadowGroup;
+	};
+	const css = await downloadedText(page, 'tokens.css');
+
+	return {
+		light: light.shadow,
+		dark: dark.shadow,
+		cssShadowLines: css.split('\n').filter((line) => /^\s*--[\w-]*shadow[\w-]*:/.test(line)),
+	};
+}
+
+const valuesOf = (group: ShadowGroup) =>
+	Object.fromEntries(Object.entries(group).map(([step, token]) => [step, token.$value]));
+
+test('setting a missing shadow character leaves every exported shadow value where it was, and the set value survives save and reload', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed({ ...SEED, shadowCharacter: null });
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+	await page.getByRole('tab', { name: 'Export' }).click();
+
+	const before = await exportedShadows(page);
+	// Guards the premise: an empty group would compare equal to anything.
+	expect(Object.keys(before.light)).toEqual(['xs', 'sm', 'md', 'lg', 'xl']);
+	expect(before.cssShadowLines.length).toBeGreaterThan(0);
+
+	await page.getByRole('button', { name: 'Set shadow' }).click();
+	// Visible is enough to know Set landed. Which spread it chose is checked after the export, so a
+	// wrong default fails on the shadows it moved rather than on its name.
+	await expect(page.getByLabel('Shadow spread')).toBeVisible();
+
+	const after = await exportedShadows(page);
+
+	expect(valuesOf(after.light)).toEqual(valuesOf(before.light));
+	expect(valuesOf(after.dark)).toEqual(valuesOf(before.dark));
+	expect(after.cssShadowLines).toEqual(before.cssShadowLines);
+	await expect(page.getByLabel('Shadow spread')).toHaveValue('normal');
+
+	// Provenance is the one thing Set should move: the shadow now names the field a person stated
+	// rather than inheriting the page surface's, which this seed traces to `neutralTemperature`.
+	expect(before.light.md!.$extensions).toMatchObject({
+		'com.cambium': { seedField: 'neutralTemperature' },
+	});
+	expect(after.light.md!.$extensions).toMatchObject({
+		'com.cambium': { provenance: 'derived', seedField: 'shadowCharacter' },
+	});
+
+	const save = page.getByRole('button', { name: 'Save', exact: true });
+	await save.click();
+	await expect(save).toBeDisabled();
+
+	await page.reload();
+	await expect(page.getByLabel('Shadow spread')).toHaveValue('normal');
+
+	const stored = await readStoredRecord(page, record.id);
+	expect(stored?.versions.at(-1)?.seed?.shadowCharacter).toEqual({
+		spread: 'normal',
+		tintFromSurface: true,
+	});
+});
+
+test('an empty classification list still offers every reference image, and a classification added to one survives save and reload', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed({ ...SEED, imageClassifications: [] });
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const image1 = page.getByLabel('Image 1 classification');
+	const image2 = page.getByLabel('Image 2 classification');
+	await expect(image1).toHaveValue('');
+	await expect(image2).toHaveValue('');
+	// Nothing classified, so nothing can disagree with the person's tags yet.
+	await expect(page.locator('[data-tag-disagreement]')).toHaveCount(0);
+
+	await image2.selectOption('artwork');
+	await expect(image2).toHaveValue('artwork');
+	await expect(image1).toHaveValue('');
+	// img-2 is tagged "ui", so the new entry disagrees and the note has to follow it.
+	await expect(page.locator('[data-tag-disagreement="img-2"]')).toContainText(
+		'Image 2: you tagged this ui; the seed has it as artwork.',
+	);
+
+	const save = page.getByRole('button', { name: 'Save', exact: true });
+	await save.click();
+	await expect(save).toBeDisabled();
+
+	await page.reload();
+	await expect(page.getByLabel('Image 2 classification')).toHaveValue('artwork');
+	await expect(page.getByLabel('Image 1 classification')).toHaveValue('');
+
+	const stored = await readStoredRecord(page, record.id);
+	expect(stored?.versions.at(-1)?.seed?.imageClassifications).toEqual([
+		{ imageId: 'img-2', detected: 'artwork' },
 	]);
 });

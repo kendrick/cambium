@@ -1,6 +1,6 @@
 import type { ReferenceImage } from '../../../core/brand-record';
 import { type ImageClassification, ImageClassificationSchema } from '../../../core/brand-seed';
-import { EnumSelect } from './field-editors';
+import { EnumSelect, selectClass } from './field-editors';
 
 const DETECTED = ImageClassificationSchema.shape.detected.options;
 
@@ -25,6 +25,11 @@ export function tagDisagreements(
 /**
  * Images are named by position, since an id is a uuid nobody reads and the thumbnail beside it is
  * what a person actually recognises.
+ *
+ * One row per record image, not per entry. The model can return an empty or partial list, and a
+ * person has to be able to classify what it skipped, so an unclassified image gets an unset option
+ * and joins the list once chosen. Entries naming an image the record no longer holds keep their
+ * rows so the list saves back unchanged.
  */
 export function ImageClassificationsEditor({
 	images,
@@ -35,19 +40,25 @@ export function ImageClassificationsEditor({
 	value: ImageClassification[];
 	onChange: (next: ImageClassification[]) => void;
 }) {
-	if (value.length === 0) {
+	const known = new Set(images.map((image) => image.id));
+	const rows = [
+		...images.map((image, index) => ({ imageId: image.id, image, name: `Image ${index + 1}` })),
+		...value
+			.filter((entry) => !known.has(entry.imageId))
+			.map((entry) => ({ imageId: entry.imageId, image: undefined, name: 'Unknown image' })),
+	];
+
+	if (rows.length === 0) {
 		return <span className="text-muted-foreground text-xs">No images classified</span>;
 	}
 
 	return (
 		<ul className="flex flex-col gap-1">
-			{value.map((entry) => {
-				const index = images.findIndex((image) => image.id === entry.imageId);
-				const image = images[index];
-				const name = index === -1 ? 'Unknown image' : `Image ${index + 1}`;
+			{rows.map(({ imageId, image, name }) => {
+				const detected = value.find((entry) => entry.imageId === imageId)?.detected;
 
 				return (
-					<li key={entry.imageId} className="flex items-center justify-between gap-2 text-xs">
+					<li key={imageId} className="flex items-center justify-between gap-2 text-xs">
 						<span className="flex min-w-0 items-center gap-2">
 							{image ? (
 								// A data URL held in the record, so next/image's optimiser has nothing to fetch.
@@ -60,18 +71,41 @@ export function ImageClassificationsEditor({
 							) : null}
 							<span className="text-muted-foreground truncate">{name}</span>
 						</span>
-						<EnumSelect
-							label={`${name} classification`}
-							value={entry.detected}
-							options={DETECTED}
-							onChange={(detected) =>
-								onChange(
-									value.map((other) =>
-										other.imageId === entry.imageId ? { ...other, detected } : other,
-									),
-								)
-							}
-						/>
+						{detected === undefined ? (
+							<select
+								aria-label={`${name} classification`}
+								value=""
+								onChange={(event) =>
+									onChange([
+										...value,
+										{ imageId, detected: event.target.value as ImageClassification['detected'] },
+									])
+								}
+								className={selectClass}
+							>
+								<option value="" disabled>
+									unset
+								</option>
+								{DETECTED.map((option) => (
+									<option key={option} value={option}>
+										{option}
+									</option>
+								))}
+							</select>
+						) : (
+							<EnumSelect
+								label={`${name} classification`}
+								value={detected}
+								options={DETECTED}
+								onChange={(next) =>
+									onChange(
+										value.map((other) =>
+											other.imageId === imageId ? { ...other, detected: next } : other,
+										),
+									)
+								}
+							/>
+						)}
 					</li>
 				);
 			})}
