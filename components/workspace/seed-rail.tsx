@@ -2,10 +2,13 @@ import { type ReactNode, useState } from 'react';
 import { useStore } from 'zustand';
 import type { StoreApi } from 'zustand/vanilla';
 
-import type {
-	CommitProvenance,
-	Interpretation,
-	WorkspaceState,
+import {
+	canonicalPins,
+	type CommitProvenance,
+	type Interpretation,
+	sameJson,
+	samePins,
+	type WorkspaceState,
 } from '../../app/state/workspace-store';
 import type { BrandRecord, BrandVersion } from '../../core/brand-record';
 import type { BrandSeed, KeyColor } from '../../core/brand-seed';
@@ -106,27 +109,6 @@ function defaultFor(field: Field, seed: BrandSeed, record: BrandRecord): BrandSe
 }
 
 /**
- * Structural rather than by reference or by `JSON.stringify`: a field edited back to what it was is
- * unchanged, and key order carries no meaning in a seed, so it isn't compared.
- */
-function same(a: unknown, b: unknown): boolean {
-	if (a === b) return true;
-	if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
-	if (Array.isArray(a) !== Array.isArray(b)) return false;
-
-	const aKeys = Object.keys(a);
-	const bRecord = b as Record<string, unknown>;
-
-	return (
-		aKeys.length === Object.keys(b).length &&
-		aKeys.every(
-			(key) =>
-				Object.hasOwn(bRecord, key) && same((a as Record<string, unknown>)[key], bRecord[key]),
-		)
-	);
-}
-
-/**
  * Two key colours can share a role, and "Pin brand key colour" twice would give a screen reader two
  * identical buttons. Only a repeated role gets a number.
  */
@@ -160,17 +142,17 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 
 	const active =
 		record && activeOrdinal !== null ? (record.versions[activeOrdinal - 1] ?? null) : null;
-	const seedEdited = active !== null && !same(seed, active.seed);
-	// The store keeps its pins sorted and deduplicated, and a stored version's may not be, so the
-	// comparison goes through a set.
-	const pinsEdited =
-		active !== null &&
-		(new Set(active.pins).size !== pins.length || pins.some((pin) => !active.pins.includes(pin)));
+	const seedEdited = active !== null && !sameJson(seed, active.seed);
+	// `draftPins` is already canonical; `active.pins` need not be, so it goes through the same
+	// canonicalise-then-compare the store's own commit guard uses. Sharing the function rather than
+	// each side re-deriving its own answer is what keeps this decision and the store's `sameSeed`
+	// commit guard from ever disagreeing about whether a pin change is real.
+	const pinsEdited = active !== null && !samePins(canonicalPins(active.pins), pins);
 	const dirty =
 		seedEdited ||
 		pinsEdited ||
 		(active !== null &&
-			(preset !== active.interpretation || !same(Object.values(overrides), active.overrides)));
+			(preset !== active.interpretation || !sameJson(Object.values(overrides), active.overrides)));
 	const pinned = (path: SeedPinPath) => pins.includes(path);
 
 	async function save() {
@@ -282,6 +264,8 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 									<TagDisagreements
 										images={record.images}
 										classifications={seed.imageClassifications}
+										activeClassifications={active?.seed?.imageClassifications ?? null}
+										handEdited={active?.model === HAND_EDITED}
 									/>
 								) : null}
 							</FieldRow>
@@ -446,7 +430,7 @@ function KeyColorRows({
 				const label = labels[index]!;
 				const path = `keyColors.${index}` as const;
 				const original = activeKeyColors?.[index];
-				const edited = original !== undefined && !same(color, original);
+				const edited = original !== undefined && !sameJson(color, original);
 
 				return (
 					<FieldRow

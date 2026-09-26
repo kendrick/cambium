@@ -588,8 +588,8 @@ describe('withContrastRepairs', () => {
 			unrepaired,
 		});
 		// `brand.1` is the step the no-options case above moves for blue (see the "pins" describe
-		// block), so pinning it here and getting a different, still-AA-passing set proves the option
-		// actually reached `repairContrast` rather than reads as a no-op that happened to match.
+		// block), so pinning it here and getting a different set proves the option actually reached
+		// `repairContrast` rather than reads as a no-op that happened to match.
 		expect(withContrastRepairs(base)).not.toEqual(withContrastRepairs(base, { pinned }));
 	});
 });

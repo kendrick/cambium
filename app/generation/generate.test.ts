@@ -387,11 +387,11 @@ describe('generate', () => {
 
 		// The prior version's pins name indices into a seed this commit replaces, so carrying them
 		// forward the way `open` ordinarily would could point past the new seed's key colours, or
-		// miss ones it has. Distinct from the case above: this one starts from a version whose pins
-		// already differ from what the fresh generation would choose, to catch a store that reused
-		// `active.pins` instead of computing fresh ones.
+		// miss ones it has. This one starts from a version pinning `radiusCharacter`, a field the
+		// fresh generation's `defaultSeedPins` never pins, so a store that carried `active.pins`
+		// forward instead of computing fresh ones would show up as the wrong pin surviving.
 		it('does not carry the previous version’s pins into the newly generated one', async () => {
-			const setup = await storeWith(record([version({ pins: [] })]));
+			const setup = await storeWith(record([version({ pins: ['radiusCharacter'] })]));
 
 			const result = await run(setup, replay(SUCCESS_ON_GENERATION_MODEL));
 			const after = await setup.store.get(RECORD_ID);
@@ -399,7 +399,7 @@ describe('generate', () => {
 
 			expect(result.ok).toBe(true);
 			expect(after?.versions.at(-1)?.pins).toEqual(defaultSeedPins(generatedSeed!));
-			expect(after?.versions.at(-1)?.pins).not.toEqual([]);
+			expect(after?.versions.at(-1)?.pins).not.toEqual(['radiusCharacter']);
 		});
 
 		// Asserted on the request body, because the stored model is whatever the response names. Only

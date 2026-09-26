@@ -86,9 +86,15 @@ export function ImageClassificationsEditor({
 export function TagDisagreements({
 	images,
 	classifications,
+	activeClassifications,
+	handEdited,
 }: {
 	images: readonly ReferenceImage[];
 	classifications: readonly ImageClassification[] | null;
+	/** The saved version's own reading, so a still-unsaved draft edit doesn't borrow its credit. */
+	activeClassifications: readonly ImageClassification[] | null;
+	/** True once the active version's provenance is a hand edit, so it has no model reading at all. */
+	handEdited: boolean;
 }) {
 	const disagreements = tagDisagreements(images, classifications);
 
@@ -96,21 +102,33 @@ export function TagDisagreements({
 
 	return (
 		<ul data-tag-disagreements className="flex flex-col gap-1">
-			{disagreements.map(({ image, position, detected }) => (
-				<li
-					key={image.id}
-					data-tag-disagreement={image.id}
-					className="border-foreground/20 bg-muted flex items-start gap-2 rounded-md border px-2 py-1.5 text-xs"
-				>
-					<span aria-hidden className="font-semibold">
-						≠
-					</span>
-					<span>
-						Image {position}: you tagged this <strong>{image.tag}</strong>; the model read it as{' '}
-						<strong>{detected}</strong>.
-					</span>
-				</li>
-			))}
+			{disagreements.map(({ image, position, detected }) => {
+				// A hand edit to this field, saved or still in the draft, replaces the model's reading
+				// with the person's own; a saved hand-edited version keeps no model reading behind it at
+				// all. Attribute "the model" only when the draft's value still matches the saved version's
+				// and that version wasn't itself a hand edit, or the note would credit a model with a
+				// classification a person actually chose.
+				const isModelReading =
+					!handEdited &&
+					activeClassifications?.find((entry) => entry.imageId === image.id)?.detected === detected;
+
+				return (
+					<li
+						key={image.id}
+						data-tag-disagreement={image.id}
+						className="border-foreground/20 bg-muted flex items-start gap-2 rounded-md border px-2 py-1.5 text-xs"
+					>
+						<span aria-hidden className="font-semibold">
+							≠
+						</span>
+						<span>
+							Image {position}: you tagged this <strong>{image.tag}</strong>;{' '}
+							{isModelReading ? 'the model read it as' : 'the seed has it as'}{' '}
+							<strong>{detected}</strong>.
+						</span>
+					</li>
+				);
+			})}
 		</ul>
 	);
 }

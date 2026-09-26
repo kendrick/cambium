@@ -75,8 +75,9 @@ function seedWith(hue: number): BrandSeed {
 
 /**
  * Two key colours from two different roles, so `repairPinsFor` has both `brand` and `accent` to
- * place and a pin on either names a different ramp. Blue and green, the same two hues `check.ts`'s
- * `SWEEP` uses, chosen for no reason beyond being two hues nowhere near each other.
+ * place and a pin on either names a different ramp. Blue and green, the same two hues
+ * `check.test.ts`'s `SWEEP` uses, chosen for no reason beyond being two hues nowhere near each
+ * other.
  */
 function twoKeySeed(): BrandSeed {
 	return {
@@ -1806,14 +1807,16 @@ describe('a pinned key colour and contrast repair (#25)', () => {
 	/**
 	 * The literal wording of #25's acceptance criteria: "a pinned field is unchanged by an applied
 	 * contrast repair." True here, but for a reason worth stating rather than leaving implicit.
-	 * `repairPinsFor` only ever names a ramp's step 9, and the one pair `core/contrast/pairs.ts`
-	 * declares against it (`primary` on `primary-foreground`) always tries to move the foreground
-	 * first—the step `resolveScheme` already chose for its own best contrast—and that search clears
-	 * any target this repo declares even at the grayscale boundary. So the foreground wins before
-	 * the background's pin state is ever consulted, and step 9 never moves whether it's pinned or
-	 * not: unpinning it here proves no move was needed, which is the outcome #25's own plan text
-	 * allows for. The test above is the one that would catch a store that stopped wiring the pin
-	 * through at all; this one guards the plainer, output-level claim.
+	 * `repairPinsFor` only ever names a ramp's step 9, and both pairs `core/contrast/pairs.ts`
+	 * declares against it (`primary` on `primary-foreground`, and `sidebar-primary` on
+	 * `sidebar-primary-foreground`—`semantic-map.ts` aliases both surfaces to the same `brand.9`)
+	 * always try to move their foreground first—the step `resolveScheme` already chose for its own
+	 * best contrast—and that search clears any target this repo declares even at the grayscale
+	 * boundary. So the foreground wins before the background's pin state is ever consulted, and
+	 * step 9 never moves whether it's pinned or not, for either pair: unpinning it here proves no
+	 * move was needed, which is the outcome #25's own plan text allows for. The test above is the
+	 * one that would catch a store that stopped wiring the pin through at all; this one guards the
+	 * plainer, output-level claim.
 	 */
 	it('leaves the repaired token set unchanged whether the key colour is pinned or not', () => {
 		const seed = seedWith(259.8);

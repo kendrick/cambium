@@ -125,9 +125,9 @@ function buildRecordWithSeed(seed: BrandSeed = SEED): BrandRecord {
 				fontTable: { source: 'cambium-e2e-fixture', version: '1' },
 				interpretation: 'balanced',
 				overrides: [],
-				// Every key colour starts pinned, the same as a freshly generated version: `defaultSeedPins`
-				// is the store's own rule for what a version from generation carries, and this fixture
-				// stands in for one.
+				// Every key colour starts pinned, the same as a freshly generated version: `saveGeneratedVersion`
+				// (`app/generation/generate.ts`) applies `defaultSeedPins` to every version it writes, and
+				// this fixture stands in for one.
 				pins: defaultSeedPins(seed),
 			},
 		],
@@ -356,6 +356,35 @@ test('an image whose tag disagrees with the model shows both readings, and one t
 		'Image 1: you tagged this logo; the model read it as photo.',
 	);
 	await expect(page.locator('[data-tag-disagreement="img-2"]')).toHaveCount(0);
+});
+
+test("editing the disagreeing image's classification swaps the note to neutral wording, unsaved and saved alike", async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed();
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	await page.getByLabel('Image 1 classification').selectOption('artwork');
+
+	// The draft no longer matches what the model actually reported for this image, so crediting
+	// "the model" here would pin a person's own edit on it.
+	await expect(page.locator('[data-tag-disagreement="img-1"]')).toContainText(
+		'Image 1: you tagged this logo; the seed has it as artwork.',
+	);
+
+	const save = page.getByRole('button', { name: 'Save', exact: true });
+	await save.click();
+	await expect(save).toBeDisabled();
+	await page.reload();
+
+	// Saved as a hand edit, so the value now matches the active version too, but that version
+	// carries no model reading of its own to credit, and the note stays neutral rather than
+	// flipping back to "the model".
+	await expect(page.locator('[data-tag-disagreement="img-1"]')).toContainText(
+		'Image 1: you tagged this logo; the seed has it as artwork.',
+	);
 });
 
 test('discard restores every edited field and pin to the active version', async ({ page }) => {

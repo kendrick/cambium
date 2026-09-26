@@ -354,8 +354,12 @@ function derive(
  *
  * Plain string sort, since `SeedPinPath` is always a bare field name or `keyColors.<n>`: nothing
  * here needs numeric ordering to be stable, only to be the same ordering every time.
+ *
+ * Exported with `samePins` so the rail judges a pin toggle dirty by the same comparison the
+ * store's commit uses. Two copies that only agree by luck are the divergent mirror in
+ * `docs/agents/testing.md`'s #75 row.
  */
-function canonicalPins(pins: readonly SeedPinPath[]): SeedPinPath[] {
+export function canonicalPins(pins: readonly SeedPinPath[]): SeedPinPath[] {
 	// `toSorted` is ES2023 and tsconfig targets ES2022. The array is fresh, so `sort` mutates
 	// nothing a caller holds.
 	// oxlint-disable-next-line unicorn/no-array-sort
@@ -363,7 +367,7 @@ function canonicalPins(pins: readonly SeedPinPath[]): SeedPinPath[] {
 }
 
 /** True when two canonical pin lists name the same fields in the same order. */
-function samePins(a: readonly SeedPinPath[], b: readonly SeedPinPath[]): boolean {
+export function samePins(a: readonly SeedPinPath[], b: readonly SeedPinPath[]): boolean {
 	return a.length === b.length && a.every((pin, index) => pin === b[index]);
 }
 
@@ -552,8 +556,12 @@ function sameSeed(a: BrandSeed | null, b: BrandSeed | null): boolean {
  * `[1, 999, 3]` come back equal under `every`, and equal here means an edited seed keeps a model's
  * name. Nothing builds a sparse seed today, and that is the wrong thing to rest a false attribution
  * on.
+ *
+ * Exported because the rail's own "is this dirty" check needs the identical walk `sameSeed` runs
+ * before it decides whether a commit needs provenance: a rail that judged dirtiness by a slightly
+ * different equality could show Save enabled for an edit the store's own guard then refuses.
  */
-function sameJson(a: unknown, b: unknown): boolean {
+export function sameJson(a: unknown, b: unknown): boolean {
 	if (a === b) {
 		return true;
 	}
