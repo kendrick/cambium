@@ -20,6 +20,33 @@ import { createCodexReader } from './codex-reader.ts';
 import { createMagickCodec } from './magick-codec.ts';
 import { prepareReferenceImage } from '../lib/image-intake.ts';
 
+/**
+ * Turns one reference image into a demo `BrandRecord` fixture, live through `createCodexReader` or
+ * replayed from a recorded response (`--raw <file>`).
+ *
+ * Every run writes `<stem>.raw.json` beside the record — the envelope the rest of this file means
+ * by that word. It always holds `{ raw, provider, model, promptVersion, imageIds }`, plus
+ * `requestId` on a live run. `imageIds` is the id this run's image carried when it was sent to the
+ * model (an array, for a future multi-image run, in attachment order).
+ *
+ * `imageIds` is what makes a live answer replayable. `prepareReferenceImage` mints a fresh
+ * `crypto.randomUUID()` on every call, but a live model can name the id it was shown back inside
+ * the seed it returns — `keyColors[].sourceImageId`, `imageClassifications[].imageId` — because the
+ * prompt lists each image's id ahead of its attachment (see `buildPrompt` in `codex-reader.ts`).
+ * Replaying that seed against a freshly minted id would point those references at an image the
+ * replayed record never has, and `BrandRecordSchema` refuses exactly that. So `--raw` reads
+ * `imageIds` back out of the envelope and stamps it onto the prepared image before the record is
+ * built, overriding the mint. That is also why two `--raw` runs over the same image and response
+ * now differ only at the record `id` and `versions[0].createdAt`: the image `id` no longer moves.
+ *
+ * `--raw <file>` accepts either shape. A full envelope, detected by a top-level string `raw` field,
+ * supplies `provider`/`model`/`promptVersion`/`imageIds` unless a flag overrides one — the natural
+ * case, since it's the same file a live run already wrote. A bare seed-JSON string (no `raw` field
+ * of its own) has no envelope to read anything from, so it still needs `--provider`/`--model`/
+ * `--prompt-version` stated explicitly, and carries no image id to reuse — fine for a seed with no
+ * image-id references, and exactly this script's own `--raw` fixtures.
+ */
+
 const USAGE =
 	'usage: fixture:demo <image> --tag <auto|logo|ui|photo|artwork> ' +
 	'[--raw <file> --provider <p> --model <m> --prompt-version <v>] [--model <m>] [--out <dir>]';
@@ -72,13 +99,45 @@ function describeIntakeFailure(path, result) {
 }
 
 /**
- * `--raw` replays a recorded response with no model call, per #18's plan. The provenance a live
- * call would have reported travels with it only if a caller states it explicitly: defaulting a
- * missing `--provider` or `--model` to a guess would let a hand-authored or borrowed fixture read
- * as an answer some model actually gave.
+ * `--raw` replays a recorded response with no model call, per #18's plan. `flags.raw` is read as
+ * either shape the module docblock above describes; either way, the provenance that travels with
+ * the replay comes from an envelope field or an explicit flag, never a guess — defaulting a
+ * missing `--provider` or `--model` would let a hand-authored or borrowed fixture read as an answer
+ * some model actually gave.
  */
-async function readRawProvenance(flags) {
-	const missing = ['provider', 'model', 'prompt-version'].filter((name) => !flags[name]);
+async function readRawEnvelope(flags) {
+	let fileText;
+
+	try {
+		fileText = await readFile(flags.raw, 'utf8');
+	} catch (cause) {
+		throw new Error(`could not read raw response "${flags.raw}": ${cause.message}`, { cause });
+	}
+
+	// An envelope is told apart from a bare seed string by its own shape: `raw` is not a
+	// `BrandSeedSchema` field, so a parsed bare seed never has one, and anything that isn't even
+	// JSON obviously isn't an envelope either.
+	let envelope;
+
+	try {
+		const parsed = JSON.parse(fileText);
+		if (parsed && typeof parsed === 'object' && typeof parsed.raw === 'string') envelope = parsed;
+	} catch {
+		// Not JSON at all — falls through to the bare-seed-string branch below.
+	}
+
+	const raw = envelope ? envelope.raw : fileText;
+	const provider = flags.provider ?? envelope?.provider;
+	const model = flags.model ?? envelope?.model;
+	const promptVersion = flags['prompt-version'] ?? envelope?.promptVersion;
+
+	const missing = [
+		['provider', provider],
+		['model', model],
+		['prompt-version', promptVersion],
+	]
+		.filter(([, value]) => !value)
+		.map(([name]) => name);
 
 	if (missing.length > 0) {
 		throw new UsageError(
@@ -88,20 +147,7 @@ async function readRawProvenance(flags) {
 		);
 	}
 
-	let raw;
-
-	try {
-		raw = await readFile(flags.raw, 'utf8');
-	} catch (cause) {
-		throw new Error(`could not read raw response "${flags.raw}": ${cause.message}`, { cause });
-	}
-
-	return {
-		raw,
-		provider: flags.provider,
-		model: flags.model,
-		promptVersion: flags['prompt-version'],
-	};
+	return { raw, provider, model, promptVersion, imageIds: envelope?.imageIds };
 }
 
 async function main() {
@@ -124,11 +170,24 @@ async function main() {
 		throw new Error(describeIntakeFailure(imagePath, intake));
 	}
 
-	const image = { ...intake.prepared.image, tag: flags.tag };
+	let image = { ...intake.prepared.image, tag: flags.tag };
 
-	const response = flags.raw
-		? await readRawProvenance(flags)
-		: await createCodexReader({ model: flags.model }).read([image], { auth: null });
+	let response;
+	let imageIds;
+
+	if (flags.raw) {
+		({ imageIds, ...response } = await readRawEnvelope(flags));
+
+		// The recorded seed may name this image by the id an earlier run's model call actually saw —
+		// `prepareReferenceImage` just minted a new one above, and a replayed seed can only resolve
+		// against the id it was generated against. One image today, so the first recorded id is the
+		// only one that matters; `imageIds` stays an array for the day this script attaches more
+		// than one.
+		if (imageIds?.[0]) image = { ...image, id: imageIds[0] };
+	} else {
+		response = await createCodexReader({ model: flags.model }).read([image], { auth: null });
+		imageIds = [image.id];
+	}
 
 	const parsed = parseSeed(response);
 
@@ -187,7 +246,9 @@ async function main() {
 
 	await mkdir(outDir, { recursive: true });
 	await writeFile(recordPath, `${JSON.stringify(finalRecord, null, 2)}\n`);
-	await writeFile(rawPath, `${JSON.stringify(response, null, 2)}\n`);
+	// `imageIds` rides along on every run, live or replayed, so a later `--raw` pointed at this same
+	// file can resolve the same seed's image-id references the way this run did.
+	await writeFile(rawPath, `${JSON.stringify({ ...response, imageIds }, null, 2)}\n`);
 
 	console.log(recordPath);
 }

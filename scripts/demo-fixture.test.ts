@@ -59,20 +59,65 @@ const INVALID_SEED_RAW = JSON.stringify({
 });
 
 /**
- * Normalises exactly the three fields the twice-run criterion excepts, id, the image id, and
- * `versions[0].createdAt`, and nothing else, per the wave's constraint against normalising extra
- * fields out of that comparison. Module scope rather than inside the test: it captures nothing
- * from its caller, so oxlint's `consistent-function-scoping` asks for it up here.
+ * A placeholder rather than a real UUID: nothing here decodes it, `BrandRecordSchema` only checks
+ * that a seed's image-id references match some id in `record.images`, and a readable constant
+ * makes the assertions below easier to follow than a random hex string would.
  */
-function withoutVolatileFields(record: {
-	id: string;
-	images: { id: string }[];
-	versions: { createdAt: string }[];
-}) {
+const REPLAYED_IMAGE_ID = 'replayed-image-id';
+
+/**
+ * Unlike `VALID_SEED_RAW`, this seed's `keyColors` and `imageClassifications` name a specific
+ * image id. Pairing it with `ENVELOPE_WITH_IMAGE_REFS_RAW` below is what the twice-run test needs
+ * to prove defect 2's fix: a seed with no image-id references can't tell a working override from a
+ * missing one, because `BrandRecordSchema` never checks an id nothing points at.
+ */
+const SEED_WITH_IMAGE_REFS_RAW = JSON.stringify({
+	keyColors: [
+		{
+			oklch: [0.55, 0.12, 210],
+			proposedRole: 'brand',
+			sourceImageId: REPLAYED_IMAGE_ID,
+			sourceRegion: null,
+		},
+	],
+	neutralTemperature: null,
+	radiusCharacter: null,
+	shadowCharacter: null,
+	trackingFeel: null,
+	typeClassification: null,
+	suggestedPairing: null,
+	typeScaleRatio: null,
+	imageClassifications: [{ imageId: REPLAYED_IMAGE_ID, detected: 'photo' }],
+	expressive: null,
+});
+
+/**
+ * The envelope shape a live run now writes beside its record (see the docblock atop
+ * `demo-fixture.mjs`): `raw` plus provenance plus the image id(s) that seed's references resolve
+ * against. `--raw` reads `imageIds` back out of this and stamps it onto the freshly prepared image,
+ * which is the fix under test — replayed against `VALID_SEED_RAW`'s all-null shape, the same fix
+ * would have nothing to prove itself against.
+ */
+const ENVELOPE_WITH_IMAGE_REFS_RAW = JSON.stringify({
+	raw: SEED_WITH_IMAGE_REFS_RAW,
+	provider: 'codex',
+	model: 'gpt-5.6-terra',
+	promptVersion: 'seed-v4',
+	imageIds: [REPLAYED_IMAGE_ID],
+});
+
+/**
+ * Normalises exactly the two fields a `--raw` replay is still allowed to vary on: the record `id`
+ * and `versions[0].createdAt`. The image `id` was a third exception here before defect 2's fix,
+ * back when `prepareReferenceImage` minting a fresh one on every run made holding it stable
+ * impossible; now that a replay stamps the envelope's recorded `imageIds` back onto the image, the
+ * twice-run test asserts that id's equality directly instead of normalising it away, since
+ * normalising it away is exactly what would hide the bug coming back.
+ */
+function withoutVolatileFields(record: { id: string; versions: { createdAt: string }[] }) {
 	return {
 		...record,
 		id: null,
-		images: record.images.map((refImage) => ({ ...refImage, id: null })),
 		versions: record.versions.map((version) => ({ ...version, createdAt: null })),
 	};
 }
@@ -141,27 +186,15 @@ describe('fixture:demo CLI', () => {
 		expect(rawEnvelope).toMatchObject({ raw: VALID_SEED_RAW, provider: 'codex' });
 	});
 
-	it('running --raw twice over one image differs only at id, versions[0].createdAt, and the image id', async () => {
+	it('running --raw twice over one image differs only at id and versions[0].createdAt, holding the image id stable', async () => {
 		const dir = await makeTempDir();
 		const image = await writeTestImage(dir);
 		const rawPath = join(dir, 'raw.json');
-		await writeFile(rawPath, VALID_SEED_RAW);
+		await writeFile(rawPath, ENVELOPE_WITH_IMAGE_REFS_RAW);
 
-		const args = (outDir: string) => [
-			image,
-			'--tag',
-			'ui',
-			'--raw',
-			rawPath,
-			'--provider',
-			'codex',
-			'--model',
-			'gpt-5.6-terra',
-			'--prompt-version',
-			'seed-v4',
-			'--out',
-			outDir,
-		];
+		// No --provider/--model/--prompt-version: the envelope supplies all three, proving that path
+		// works too, alongside the explicit-flag path the other tests in this suite exercise.
+		const args = (outDir: string) => [image, '--tag', 'ui', '--raw', rawPath, '--out', outDir];
 
 		const outA = join(dir, 'a');
 		const outB = join(dir, 'b');
@@ -172,10 +205,16 @@ describe('fixture:demo CLI', () => {
 		const recordA = JSON.parse(await readFile(join(outA, 'source.json'), 'utf8'));
 		const recordB = JSON.parse(await readFile(join(outB, 'source.json'), 'utf8'));
 
-		// Prove the exclusion isn't vacuous: the three excepted fields really did change run to run.
+		// Prove the exclusion isn't vacuous: the two excepted fields really did change run to run.
 		expect(recordA.id).not.toBe(recordB.id);
-		expect(recordA.images[0].id).not.toBe(recordB.images[0].id);
 		expect(recordA.versions[0].createdAt).not.toBe(recordB.versions[0].createdAt);
+
+		// Defect 2's fix, asserted directly rather than normalised away: without it,
+		// `prepareReferenceImage`'s fresh mint would make these differ on every run, and the seed's
+		// `keyColors[0].sourceImageId` / `imageClassifications[0].imageId` would point at whichever
+		// run's id lost, which is exactly what made a real fixture's replay fail `BrandRecordSchema`.
+		expect(recordA.images[0].id).toBe(REPLAYED_IMAGE_ID);
+		expect(recordB.images[0].id).toBe(REPLAYED_IMAGE_ID);
 
 		expect(withoutVolatileFields(recordA)).toEqual(withoutVolatileFields(recordB));
 	});
