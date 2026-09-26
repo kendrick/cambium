@@ -1,0 +1,8 @@
+{
+	"raw": "{\"keyColors\":[{\"oklch\":[0.5,0.045,330],\"proposedRole\":\"brand\",\"sourceImageId\":\"3c80411a-cd2d-43eb-b26f-8c64a8dccfa8\",\"sourceRegion\":{\"x\":0.7,\"y\":0.12,\"width\":0.22,\"height\":0.22}}],\"neutralTemperature\":{\"hue\":325,\"chroma\":0.014},\"radiusCharacter\":{\"base\":20,\"progression\":\"soft\"},\"shadowCharacter\":{\"spread\":\"tight\",\"tintFromSurface\":true},\"trackingFeel\":null,\"typeClassification\":null,\"suggestedPairing\":null,\"typeScaleRatio\":null,\"imageClassifications\":[{\"imageId\":\"3c80411a-cd2d-43eb-b26f-8c64a8dccfa8\",\"detected\":\"photo\"}],\"expressive\":[{\"axis\":\"Calm\",\"score\":91},{\"axis\":\"Sophisticated\",\"score\":84},{\"axis\":\"Sincere\",\"score\":68}]}",
+	"provider": "codex",
+	"model": "gpt-5.6-terra",
+	"promptVersion": "seed-v4",
+	"requestId": "01a0decc-6fe3-75c1-849d-98fb3e26d205",
+	"imageIds": ["3c80411a-cd2d-43eb-b26f-8c64a8dccfa8"]
+}

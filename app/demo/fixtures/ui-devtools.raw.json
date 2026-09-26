@@ -1,0 +1,8 @@
+{
+	"raw": "{\"keyColors\":[{\"oklch\":[0.563,0.209,257],\"proposedRole\":\"brand\",\"sourceImageId\":\"1120e358-a62b-4bde-a0fc-1c041aed3a21\",\"sourceRegion\":{\"x\":0.083,\"y\":0.06,\"width\":0.083,\"height\":0.047}}],\"neutralTemperature\":{\"hue\":260,\"chroma\":0.01},\"radiusCharacter\":{\"base\":3,\"progression\":\"sharp\"},\"shadowCharacter\":null,\"trackingFeel\":\"normal\",\"typeClassification\":{\"category\":\"sans\",\"tone\":\"grotesque\",\"xHeight\":\"high\",\"displayDiffersFromBody\":false},\"suggestedPairing\":{\"display\":[{\"provenance\":\"invented\",\"family\":\"Roboto\",\"score\":null,\"rationale\":\"A compact UI sans with high readability and a practical technical tone.\"}],\"body\":[{\"provenance\":\"invented\",\"family\":\"Roboto\",\"score\":null,\"rationale\":\"Keeps dense interface text clear and consistent with the utilitarian sans character.\"}],\"mono\":[{\"provenance\":\"invented\",\"family\":\"Roboto Mono\",\"score\":null,\"rationale\":\"A legible monospace companion for code, values, and developer-facing controls.\"}]},\"typeScaleRatio\":null,\"imageClassifications\":[{\"imageId\":\"1120e358-a62b-4bde-a0fc-1c041aed3a21\",\"detected\":\"ui\"}],\"expressive\":[{\"axis\":\"Business\",\"score\":88},{\"axis\":\"Competent\",\"score\":84},{\"axis\":\"Stiff\",\"score\":74},{\"axis\":\"Innovative\",\"score\":62}]}",
+	"provider": "codex",
+	"model": "gpt-5.6-terra",
+	"promptVersion": "seed-v4",
+	"requestId": "01a0decb-1b65-7890-a297-d00ed319db30",
+	"imageIds": ["1120e358-a62b-4bde-a0fc-1c041aed3a21"]
+}

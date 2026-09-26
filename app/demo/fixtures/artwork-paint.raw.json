@@ -1,0 +1,8 @@
+{
+	"raw": "{\"keyColors\":[{\"oklch\":[0.72,0.17,210],\"proposedRole\":\"brand\",\"sourceImageId\":\"ef4a4700-21c9-45bb-8043-eb9ebf2f99fe\",\"sourceRegion\":{\"x\":0.2,\"y\":0.19,\"width\":0.66,\"height\":0.29}},{\"oklch\":[0.63,0.26,355],\"proposedRole\":\"accent\",\"sourceImageId\":\"ef4a4700-21c9-45bb-8043-eb9ebf2f99fe\",\"sourceRegion\":{\"x\":0.17,\"y\":0.36,\"width\":0.69,\"height\":0.29}},{\"oklch\":[0.72,0.18,48],\"proposedRole\":\"accent\",\"sourceImageId\":\"ef4a4700-21c9-45bb-8043-eb9ebf2f99fe\",\"sourceRegion\":{\"x\":0.15,\"y\":0.08,\"width\":0.54,\"height\":0.25}}],\"neutralTemperature\":null,\"radiusCharacter\":null,\"shadowCharacter\":null,\"trackingFeel\":null,\"typeClassification\":null,\"suggestedPairing\":null,\"typeScaleRatio\":null,\"imageClassifications\":[{\"imageId\":\"ef4a4700-21c9-45bb-8043-eb9ebf2f99fe\",\"detected\":\"artwork\"}],\"expressive\":[{\"axis\":\"Artistic\",\"score\":96},{\"axis\":\"Loud\",\"score\":91},{\"axis\":\"Playful\",\"score\":84},{\"axis\":\"Excited\",\"score\":80},{\"axis\":\"Happy\",\"score\":76}]}",
+	"provider": "codex",
+	"model": "gpt-5.6-terra",
+	"promptVersion": "seed-v4",
+	"requestId": "01a0decc-4f34-7e90-8c74-cb4dbe309105",
+	"imageIds": ["ef4a4700-21c9-45bb-8043-eb9ebf2f99fe"]
+}
