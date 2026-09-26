@@ -10,7 +10,7 @@ Every fixture is three files that share a name:
 
 - `<name>.jpg` is the reference image.
 - `<name>.json` is a `BrandRecord` with one image and one version. It parses with `BrandRecordSchema`.
-- `<name>.raw.json` is the model's raw response, plus the provider, model, prompt version, request id and the image id the model was shown.
+- `<name>.raw.json` is the model's raw response, plus the provider, model, prompt version, request id, and the id and hash of the image the model was shown.
 
 `pnpm fixture:demo` wrote every record and raw response. Nobody edited them by hand. The only change after generation was `pnpm format app/demo/fixtures`, which re-indents the JSON to the repo's style and leaves every value as it was.
 
@@ -30,7 +30,7 @@ A live call gives a different seed each time, so rerunning it changes the fixtur
 pnpm fixture:demo app/demo/fixtures/<name>.jpg --tag <tag> --raw app/demo/fixtures/<name>.raw.json --out <dir>
 ```
 
-Two `--raw` runs over the same image produce records that differ only in the record `id` and `versions[0].createdAt`.
+Two `--raw` runs over the same image produce records that differ only in the record `id` and `versions[0].createdAt`. `--raw` checks the envelope's recorded image hash against the image you pass it, and refuses to replay one against a different or replaced image. To regenerate a fixture from a new image, run the live call above rather than pointing an old `.raw.json` at it.
 
 Then run `pnpm format app/demo/fixtures`, since the script writes two-space JSON and `pnpm format:check` expects tabs.
 

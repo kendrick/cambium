@@ -137,6 +137,49 @@ const ENVELOPE_WITH_IMAGE_REFS_RAW = JSON.stringify({
 });
 
 /**
+ * `sha256:` plus the hex digest of `TEST_JPEG_BASE64`'s decoded bytes, computed once (`node -e`
+ * over the same base64 string) and pinned here rather than derived at test time — deriving it here
+ * would just be `prepareReferenceImage`'s own hash step re-run, which proves this suite agrees with
+ * itself and not that the image and the envelope actually match.
+ */
+const TEST_JPEG_ORIGINAL_HASH =
+	'sha256:bb97afa54be51ddde44d31dad47114303bc584334ca9255c5a811f2d8c4dece3';
+
+/** A hash that cannot equal any real image's: 64 zeros is not a digest `sha256Hex` ever produces. */
+const WRONG_ORIGINAL_HASH = `sha256:${'0'.repeat(64)}`;
+
+/**
+ * `ENVELOPE_WITH_IMAGE_REFS_RAW` plus the `originalHashes` a live run now records beside
+ * `imageIds` (#144 review; see the module docblock atop `demo-fixture.mjs`). Pointed at
+ * `writeTestImage`'s own file, whose hash is `TEST_JPEG_ORIGINAL_HASH`, this is the envelope a
+ * correctly-bound replay reads.
+ */
+const ENVELOPE_WITH_MATCHING_HASH_RAW = JSON.stringify({
+	raw: SEED_WITH_IMAGE_REFS_RAW,
+	provider: 'codex',
+	model: 'gpt-5.6-terra',
+	promptVersion: 'seed-v4',
+	requestId: 'thread-replay-hash',
+	imageIds: [REPLAYED_IMAGE_ID],
+	originalHashes: [TEST_JPEG_ORIGINAL_HASH],
+});
+
+/**
+ * Same envelope, but recorded against an image `writeTestImage`'s file is not — the case the fix
+ * under test refuses: pairing `--raw` with a different or since-replaced image binds that image's
+ * new bytes to a seed that still describes the old one.
+ */
+const ENVELOPE_WITH_MISMATCHED_HASH_RAW = JSON.stringify({
+	raw: SEED_WITH_IMAGE_REFS_RAW,
+	provider: 'codex',
+	model: 'gpt-5.6-terra',
+	promptVersion: 'seed-v4',
+	requestId: 'thread-replay-hash-mismatch',
+	imageIds: [REPLAYED_IMAGE_ID],
+	originalHashes: [WRONG_ORIGINAL_HASH],
+});
+
+/**
  * Normalises exactly the two fields a `--raw` replay is still allowed to vary on: the record `id`
  * and `versions[0].createdAt`. The image `id` was a third exception here before the `imageIds`
  * override existed, back when `prepareReferenceImage` minting a fresh one on every run made holding
@@ -270,6 +313,75 @@ describe('fixture:demo CLI', () => {
 			const rawEnvelope = JSON.parse(await readFile(join(outDir, 'source.raw.json'), 'utf8'));
 
 			expect(rawEnvelope.requestId).toBe('thread-replay-abc');
+		},
+	);
+
+	it.skipIf(!MAGICK_ON_PATH)(
+		'exits 1 naming both hashes and the raw path, and writes nothing, when --raw is bound to a different image',
+		async () => {
+			const dir = await makeTempDir();
+			const image = await writeTestImage(dir);
+			const rawPath = join(dir, 'raw.json');
+			await writeFile(rawPath, ENVELOPE_WITH_MISMATCHED_HASH_RAW);
+
+			const outDir = join(dir, 'out');
+
+			const error = await runCli([image, '--tag', 'ui', '--raw', rawPath, '--out', outDir]).catch(
+				(caught) => caught,
+			);
+
+			expect(error).toMatchObject({ code: 1 });
+			expect(error.stderr).toContain(rawPath);
+			expect(error.stderr).toContain(WRONG_ORIGINAL_HASH);
+			expect(error.stderr).toContain(TEST_JPEG_ORIGINAL_HASH);
+
+			await expect(readdir(outDir)).rejects.toMatchObject({ code: 'ENOENT' });
+		},
+	);
+
+	it.skipIf(!MAGICK_ON_PATH)(
+		'replays successfully and preserves the hashes when --raw is bound to the image it describes',
+		async () => {
+			const dir = await makeTempDir();
+			const image = await writeTestImage(dir);
+			const rawPath = join(dir, 'raw.json');
+			await writeFile(rawPath, ENVELOPE_WITH_MATCHING_HASH_RAW);
+
+			const outDir = join(dir, 'out');
+
+			await runCli([image, '--tag', 'ui', '--raw', rawPath, '--out', outDir]);
+
+			const record = JSON.parse(await readFile(join(outDir, 'source.json'), 'utf8'));
+			expect(() => BrandRecordSchema.parse(record)).not.toThrow();
+
+			const rawEnvelope = JSON.parse(await readFile(join(outDir, 'source.raw.json'), 'utf8'));
+			expect(rawEnvelope.originalHashes).toEqual([TEST_JPEG_ORIGINAL_HASH]);
+			expect(rawEnvelope.imageIds).toEqual([REPLAYED_IMAGE_ID]);
+		},
+	);
+
+	it.skipIf(!MAGICK_ON_PATH)(
+		'warns and replays successfully when an older --raw envelope carries imageIds but no originalHashes',
+		async () => {
+			const dir = await makeTempDir();
+			const image = await writeTestImage(dir);
+			const rawPath = join(dir, 'raw.json');
+			await writeFile(rawPath, ENVELOPE_WITH_IMAGE_REFS_RAW);
+
+			const outDir = join(dir, 'out');
+
+			const { stderr } = await runCli([image, '--tag', 'ui', '--raw', rawPath, '--out', outDir]);
+
+			expect(stderr).toContain('no recorded originalHash');
+
+			const record = JSON.parse(await readFile(join(outDir, 'source.json'), 'utf8'));
+			expect(() => BrandRecordSchema.parse(record)).not.toThrow();
+
+			// The backfill this unblocks (#144's plan step 4) is exactly this: replaying an old
+			// envelope into itself. That only backfills a hash for a later replay to check against if
+			// this run's own rewritten envelope carries one, computed off the image actually at hand.
+			const rawEnvelope = JSON.parse(await readFile(join(outDir, 'source.raw.json'), 'utf8'));
+			expect(rawEnvelope.originalHashes).toEqual([TEST_JPEG_ORIGINAL_HASH]);
 		},
 	);
 

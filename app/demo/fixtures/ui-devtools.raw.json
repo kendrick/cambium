@@ -4,5 +4,6 @@
 	"model": "gpt-5.6-terra",
 	"promptVersion": "seed-v4",
 	"requestId": "01a0decb-1b65-7890-a297-d00ed319db30",
-	"imageIds": ["1120e358-a62b-4bde-a0fc-1c041aed3a21"]
+	"imageIds": ["1120e358-a62b-4bde-a0fc-1c041aed3a21"],
+	"originalHashes": ["sha256:8a9da5acfb6cc88883adbc96ce8430c841921dcdb9ac3bdbc0a3afa99f2d1032"]
 }

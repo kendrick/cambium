@@ -27,12 +27,13 @@ import { prepareReferenceImage } from '../lib/image-intake.ts';
  * replayed from a recorded response (`--raw <file>`).
  *
  * Every run writes `<stem>.raw.json` beside the record — the envelope the rest of this file means
- * by that word. It always holds `{ raw, provider, model, promptVersion }`. `imageIds` and
- * `requestId` ride along whenever this run has one to record: both on a live run, whatever a
- * replayed envelope itself held on a `--raw` run over a full envelope, and neither on a `--raw` run
- * over a bare seed string, which has no envelope to carry them from. `imageIds` is the id this run's
- * image carried when it was sent to the model (an array, for a future multi-image run, in
- * attachment order).
+ * by that word. It always holds `{ raw, provider, model, promptVersion }`. `imageIds`,
+ * `originalHashes` and `requestId` ride along whenever this run has one to record: all three on a
+ * live run, whatever a replayed envelope itself held on a `--raw` run over a full envelope, and
+ * none of them on a `--raw` run over a bare seed string, which has no envelope to carry them from.
+ * `imageIds` is the id this run's image carried when it was sent to the model, and `originalHashes`
+ * is that image's own `originalHash` (both arrays, for a future multi-image run, in attachment
+ * order, aligned index for index).
  *
  * `imageIds` is what makes a live answer replayable. `prepareReferenceImage` mints a fresh
  * `crypto.randomUUID()` on every call, but a live model can name the id it was shown back inside
@@ -44,13 +45,26 @@ import { prepareReferenceImage } from '../lib/image-intake.ts';
  * built, overriding the mint. That is also why two `--raw` runs over the same image and response
  * now differ only at the record `id` and `versions[0].createdAt`: the image `id` no longer moves.
  *
+ * `originalHashes` guards the stamp above against binding to the wrong image. Stamping the
+ * recorded id onto whatever `prepareReferenceImage` just decoded says nothing about whether that
+ * image is the one the seed actually describes — pass `--raw` alongside a different or
+ * since-replaced file and the id lines up while the seed's colours, classifications and derived
+ * tokens keep describing the old picture, a mismatch `BrandRecordSchema` has no way to catch (#144
+ * review). So a `--raw` replay checks the freshly-prepared image's own `originalHash` against
+ * `originalHashes[0]` before anything is written, and refuses a mismatch instead of laundering it
+ * into a record. An envelope written before this field existed has no hash to check, so that case
+ * only warns and proceeds. Its rewritten envelope still gets `originalHashes` stamped from the image
+ * actually at hand, though, so replaying an old envelope into itself backfills it: the file this run
+ * writes has a hash the next replay can check. See `readRawEnvelope` and the mismatch check in
+ * `main` below.
+ *
  * `--raw <file>` accepts either shape. A full envelope, detected by a top-level string `raw` field,
- * supplies `provider`/`model`/`promptVersion`/`imageIds`/`requestId` unless a flag overrides one of
- * the first three—the natural case, since it's the same file a live run already wrote. `imageIds`
- * and `requestId` have no matching flag, so a full envelope's values for those two always pass
+ * supplies `provider`/`model`/`promptVersion`/`imageIds`/`originalHashes`/`requestId` unless a flag
+ * overrides one of the first three—the natural case, since it's the same file a live run already
+ * wrote. The other four have no matching flag, so a full envelope's values for them always pass
  * through untouched. A bare seed-JSON string (no `raw` field of its own) has no envelope to read
  * anything from, so it still needs `--provider`/`--model`/`--prompt-version` stated explicitly, and
- * carries no image id or request id to reuse—fine for a seed with no image-id references, and
+ * carries no image id, hash or request id to reuse—fine for a seed with no image-id references, and
  * exactly this script's own `--raw` fixtures.
  */
 
@@ -160,6 +174,7 @@ async function readRawEnvelope(flags) {
 		model,
 		promptVersion,
 		imageIds: envelope?.imageIds,
+		originalHashes: envelope?.originalHashes,
 		requestId: envelope?.requestId,
 	};
 }
@@ -186,21 +201,59 @@ async function main() {
 
 	let image = { ...intake.prepared.image, tag: flags.tag };
 
+	// Read before the id gets stamped over below: this is the hash of the file this run was actually
+	// pointed at, and it's what a recorded `originalHashes[0]` is checked against. Stamping the
+	// replayed id on first would make that check compare an image against itself under a borrowed
+	// name.
+	const freshOriginalHash = image.originalHash;
+
 	let response;
 	let imageIds;
+	let originalHashes;
 
 	if (flags.raw) {
-		({ imageIds, ...response } = await readRawEnvelope(flags));
+		({ imageIds, originalHashes, ...response } = await readRawEnvelope(flags));
 
 		// The recorded seed may name this image by the id an earlier run's model call actually saw —
 		// `prepareReferenceImage` just minted a new one above, and a replayed seed can only resolve
 		// against the id it was generated against. One image today, so the first recorded id is the
 		// only one that matters; `imageIds` stays an array for the day this script attaches more
 		// than one.
-		if (imageIds?.[0]) image = { ...image, id: imageIds[0] };
+		if (imageIds?.[0]) {
+			// The id stamp above only binds a name; this binds it to the right picture. A `--raw`
+			// pointed at an envelope recorded for a different image would otherwise carry that image's
+			// id onto whatever this run just decoded, and `BrandRecordSchema` has no way to notice: the
+			// seed's colours and classifications would keep describing the old image while
+			// `downscaled`/`originalHash` describe the new one (#144 review). Refusing here, before
+			// anything is written, is what closes that gap.
+			if (originalHashes?.[0]) {
+				if (originalHashes[0] !== freshOriginalHash) {
+					throw new Error(
+						`--raw envelope "${flags.raw}" was recorded against a different image than ` +
+							`"${imagePath}": recorded ${originalHashes[0]}, this image hashes to ` +
+							`${freshOriginalHash}`,
+					);
+				}
+			} else {
+				// An envelope written before this check existed carries `imageIds` but no
+				// `originalHashes` to compare against. Refusing to replay it would break every fixture
+				// already committed, so this warns instead of throwing. Stamping `freshOriginalHash` in
+				// below is what turns "replay this old envelope into itself" into the backfill: the
+				// rewritten envelope this run writes carries the hash, so the next replay of the same
+				// file has one to check against.
+				console.warn(
+					`--raw envelope "${flags.raw}" has no recorded originalHash (predates this check); ` +
+						'replaying without confirming it matches this image.',
+				);
+				originalHashes = [freshOriginalHash];
+			}
+
+			image = { ...image, id: imageIds[0] };
+		}
 	} else {
 		response = await createCodexReader({ model: flags.model }).read([image], { auth: null });
 		imageIds = [image.id];
+		originalHashes = [freshOriginalHash];
 	}
 
 	const parsed = parseSeed(response);
@@ -260,10 +313,13 @@ async function main() {
 
 	await mkdir(outDir, { recursive: true });
 	await writeFile(recordPath, `${JSON.stringify(finalRecord, null, 2)}\n`);
-	// `imageIds`, and `requestId` through `response`, ride along whenever this run had one to record
-	// (see the module docblock for when that is), so a later `--raw` pointed at this same file
-	// inherits whatever provenance this run itself had.
-	await writeFile(rawPath, `${JSON.stringify({ ...response, imageIds }, null, 2)}\n`);
+	// `imageIds`, `originalHashes`, and `requestId` through `response`, ride along whenever this run
+	// had one to record (see the module docblock for when that is), so a later `--raw` pointed at
+	// this same file inherits whatever provenance this run itself had.
+	await writeFile(
+		rawPath,
+		`${JSON.stringify({ ...response, imageIds, originalHashes }, null, 2)}\n`,
+	);
 
 	console.log(recordPath);
 }
