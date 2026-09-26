@@ -39,6 +39,7 @@ Listed in `package.json` order.
 | `swatches` | is ignored | `scripts/swatches.mjs` reads no `argv`. |
 | `generate` | is the seed file | `process.argv[2]`, through `runCli` in `scripts/lib/cli.mjs`. Called bare, it prints `usage: generate <seed-file.json>` and exits 1. |
 | `evaluate` | is the seed file | The same `runCli`. Writes `swatches/seed.html`, which is gitignored. |
+| `fixture:demo` | is the image file | `process.argv`, parsed by `scripts/demo-fixture.mjs`'s own `parseArgs`. Called bare it prints `usage: fixture:demo <image> ...` and exits 1. Writes `<stem>.json` and `<stem>.raw.json` to `--out` (`app/demo/fixtures` by default). |
 | `verify` | reaches only `test:bundle` | pnpm appends the argument to the end of an `&&` chain, so the first five links run unscoped and the last one runs filtered. |
 
 ## The browser `test:e2e` needs first
@@ -57,7 +58,7 @@ pnpm exec playwright install chromium
 
 ## The scripts that write
 
-`format` and `lint:fix` write across the whole tree when called bare, and both take a path, so give them one. `dtcg:build` and `dtcg:refresh` overwrite committed files, `dtcg:refresh` from the network, and neither belongs inside a task that did not ask for it. `evaluate` writes `swatches/seed.html`, which git ignores.
+`format` and `lint:fix` write across the whole tree when called bare, and both take a path, so give them one. `dtcg:build` and `dtcg:refresh` overwrite committed files, `dtcg:refresh` from the network, and neither belongs inside a task that did not ask for it. `evaluate` writes `swatches/seed.html`, which git ignores. `fixture:demo` writes `<stem>.json` and `<stem>.raw.json` to `app/demo/fixtures` by default—tracked fixture files, not a throwaway artifact, so give it an explicit `--out` when trying something experimentally.
 
 `test:e2e` writes `test-results/` at the repo root. That is Playwright's `outputDir`, and the `list` reporter does not switch it off: `.last-run.json` lands on every run, and an `error-context.md` lands under a per-scenario directory for every scenario that fails. A fully green run writes both, because `e2e/console-gate.spec.ts` is marked `test.fail()` and a scenario that fails on purpose still leaves its error context behind.
 
