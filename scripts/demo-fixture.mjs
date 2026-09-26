@@ -27,10 +27,11 @@ import { prepareReferenceImage } from '../lib/image-intake.ts';
  * replayed from a recorded response (`--raw <file>`).
  *
  * Every run writes `<stem>.raw.json` beside the record — the envelope the rest of this file means
- * by that word. It always holds `{ raw, provider, model, promptVersion }`. `imageIds`,
- * `originalHashes` and `requestId` ride along whenever this run has one to record: all three on a
- * live run, whatever a replayed envelope itself held on a `--raw` run over a full envelope, and
- * none of them on a `--raw` run over a bare seed string, which has no envelope to carry them from.
+ * by that word. It always holds `{ raw, provider, model, promptVersion, imageIds, originalHashes }`,
+ * plus `requestId` whenever this run has one to record. A live run records all of them. A `--raw`
+ * run over a full envelope carries through what that envelope held. A `--raw` run over a bare seed
+ * string has none to carry, so it stamps the ids and hashes of the image at hand and has no
+ * `requestId`.
  * `imageIds` is the id this run's image carried when it was sent to the model, and `originalHashes`
  * is that image's own `originalHash` (both arrays, for a future multi-image run, in attachment
  * order, aligned index for index).
@@ -249,6 +250,12 @@ async function main() {
 			}
 
 			image = { ...image, id: imageIds[0] };
+		} else {
+			// A bare seed carries no ids or hashes, so nothing binds it to an image yet. Stamping this
+			// image's own id and hash into the envelope written below means the next `--raw` of that
+			// file gets the mismatch check above rather than skipping it (#144 review).
+			imageIds = [image.id];
+			originalHashes = [freshOriginalHash];
 		}
 	} else {
 		response = await createCodexReader({ model: flags.model }).read([image], { auth: null });

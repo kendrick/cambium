@@ -317,6 +317,60 @@ describe('fixture:demo CLI', () => {
 	);
 
 	it.skipIf(!MAGICK_ON_PATH)(
+		'binds an envelope written from a bare seed to its image, so replaying it against another image exits 1',
+		async () => {
+			const dir = await makeTempDir();
+			const image = await writeTestImage(dir);
+			const rawPath = join(dir, 'raw.json');
+			await writeFile(rawPath, VALID_SEED_RAW);
+
+			const firstOut = join(dir, 'first');
+			await runCli([
+				image,
+				'--tag',
+				'photo',
+				'--raw',
+				rawPath,
+				'--provider',
+				'codex',
+				'--model',
+				'gpt-5.6-terra',
+				'--prompt-version',
+				'seed-v4',
+				'--out',
+				firstOut,
+			]);
+
+			const record = JSON.parse(await readFile(join(firstOut, 'source.json'), 'utf8'));
+			const envelope = JSON.parse(await readFile(join(firstOut, 'source.raw.json'), 'utf8'));
+
+			expect(envelope.imageIds).toEqual([record.images[0].id]);
+			expect(envelope.originalHashes).toEqual([record.images[0].originalHash]);
+
+			// A different picture, made by the same binary the CLI uses, so its hash can't match.
+			const other = join(dir, 'other.jpg');
+			await execFileAsync('magick', ['-size', '3x2', 'xc:blue', other]);
+			const secondOut = join(dir, 'second');
+
+			const error = await runCli([
+				other,
+				'--tag',
+				'photo',
+				'--raw',
+				join(firstOut, 'source.raw.json'),
+				'--out',
+				secondOut,
+			]).catch((caught: { code?: number; stderr?: string }) => caught);
+
+			expect(error).toMatchObject({ code: 1 });
+			expect((error as { stderr: string }).stderr).toContain(
+				'was recorded against a different image',
+			);
+			await expect(readdir(secondOut)).rejects.toMatchObject({ code: 'ENOENT' });
+		},
+	);
+
+	it.skipIf(!MAGICK_ON_PATH)(
 		'exits 1 naming both hashes and the raw path, and writes nothing, when --raw is bound to a different image',
 		async () => {
 			const dir = await makeTempDir();
