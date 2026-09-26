@@ -1,0 +1,279 @@
+import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+
+import type { Download, Page } from '@playwright/test';
+
+import { DATABASE_NAME, RECORD_STORE_NAME } from '../app/storage/indexed-db-record-store';
+import {
+	type BrandRecord,
+	BrandRecordSchema,
+	FIRST_REVISION,
+	SCHEMA_VERSION,
+} from '../core/brand-record';
+import type { BrandSeed } from '../core/brand-seed';
+import { withContrastRepairs } from '../core/contrast/repair';
+import { exportArtifacts, type ExportArtifact } from '../core/export/artifacts';
+import { BALANCED } from '../core/interpretation';
+import { createOklchScaleEngine } from '../core/oklch-scale-engine';
+import { buildTokenSet } from '../core/semantic-layer';
+import { applyOverrides, type TokenOverride } from '../core/token-overrides';
+
+import { expect, test } from './fixtures';
+
+/**
+ * Spelled out rather than imported from `components/stored-record.tsx`: `workspace.spec.ts` and
+ * `token-list.spec.ts` each keep their own copy of this constant for the same reason, so a rename
+ * of the query param fails whichever spec forgot to move with it.
+ */
+const RECORD_PARAM = 'record';
+
+/** `workspace.spec.ts`'s `FIXTURE_SEED`, copied because importing a spec file registers its tests. */
+const SEED: BrandSeed = {
+	keyColors: [
+		{
+			oklch: [0.6231, 0.188, 259.8],
+			proposedRole: 'brand',
+			sourceImageId: 'img-1',
+			sourceRegion: null,
+		},
+	],
+	neutralTemperature: null,
+	radiusCharacter: null,
+	shadowCharacter: null,
+	trackingFeel: null,
+	typeClassification: null,
+	suggestedPairing: null,
+	typeScaleRatio: null,
+	imageClassifications: null,
+	expressive: null,
+};
+
+const DERIVED = createOklchScaleEngine().generate(SEED, BALANCED);
+
+if (!DERIVED.ok) {
+	throw new Error(`fixture seed failed to derive: ${DERIVED.error.kind}`);
+}
+
+/**
+ * The set the workspace store actually paints (`repairedBase` in `app/state/workspace-store.ts`):
+ * derive, then repair contrast. `exportArtifacts` below runs on this token set and never on the
+ * page's own copy, so a broken download can't grade itself against its own wrong answer.
+ */
+const TOKEN_SET = withContrastRepairs(buildTokenSet(DERIVED.schemes, SEED, BALANCED)).tokenSet;
+
+/**
+ * One record per scenario, so a scenario that mutates its own overrides through the token list
+ * can't leak state into another. `brandUrl` and `overrides` are the two things export.spec.ts
+ * varies; everything else is the fixture seed's usual shape.
+ */
+function buildRecord(brandUrl: string | null, overrides: TokenOverride[] = []): BrandRecord {
+	return BrandRecordSchema.parse({
+		id: randomUUID(),
+		schemaVersion: SCHEMA_VERSION,
+		revision: FIRST_REVISION,
+		brandUrl,
+		images: [
+			{
+				id: 'img-1',
+				downscaled: 'data:image/png;base64,AAAA',
+				originalHash: 'sha256-fixture',
+				tag: 'auto',
+			},
+		],
+		versions: [
+			{
+				createdAt: new Date().toISOString(),
+				ordinal: 1,
+				seed: SEED,
+				tokenSet: null,
+				provider: 'cambium-e2e-fixture',
+				model: 'cambium-e2e-fixture',
+				promptVersion: 'cambium-e2e-fixture',
+				rawResponse: 'raw model output held by the e2e fixture',
+				scaleEngine: 'cambium-oklch-1',
+				fontTable: { source: 'cambium-e2e-fixture', version: '1' },
+				interpretation: 'balanced',
+				overrides,
+			},
+		],
+	} satisfies BrandRecord);
+}
+
+/**
+ * `workspace.spec.ts`'s `seedWorkspaceRecord`: one row written straight into the records store,
+ * opened at the app's database version so the app's own open finds nothing to upgrade.
+ */
+async function seedWorkspaceRecord(page: Page, record: BrandRecord): Promise<void> {
+	await page.evaluate(
+		async ([databaseName, storeName, storedValue]) => {
+			const db = await new Promise<IDBDatabase>((resolve, reject) => {
+				const request = indexedDB.open(databaseName, 1);
+
+				request.addEventListener('upgradeneeded', () => {
+					request.result.createObjectStore(storeName, { keyPath: 'id' });
+				});
+				request.addEventListener('success', () => resolve(request.result));
+				request.addEventListener('error', () => reject(request.error));
+			});
+
+			try {
+				await new Promise<void>((resolve, reject) => {
+					const tx = db.transaction(storeName, 'readwrite');
+					tx.objectStore(storeName).put(storedValue);
+					tx.addEventListener('complete', () => resolve());
+					tx.addEventListener('error', () => reject(tx.error));
+				});
+			} finally {
+				db.close();
+			}
+		},
+		[DATABASE_NAME, RECORD_STORE_NAME, record] as const,
+	);
+}
+
+async function openExportTab(page: Page, record: BrandRecord): Promise<void> {
+	await seedWorkspaceRecord(page, record);
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+	await page.getByRole('tab', { name: 'Export' }).click();
+}
+
+/**
+ * A download's `Blob` never crosses back into Node, so the only way to read its media type is to
+ * catch it on the way out. Patched in right before the click rather than at page load, because the
+ * app calls `URL.createObjectURL` on demand and nothing before then, so there's no window in which
+ * a real call could slip past an unpatched original.
+ */
+async function spyOnBlobTypes(page: Page): Promise<void> {
+	await page.evaluate(() => {
+		const seen: string[] = [];
+		const original = URL.createObjectURL.bind(URL);
+
+		(window as Window & { cambiumBlobTypes?: string[] }).cambiumBlobTypes = seen;
+
+		URL.createObjectURL = (object: Blob | MediaSource): string => {
+			if (object instanceof Blob) seen.push(object.type);
+			return original(object);
+		};
+	});
+}
+
+/** The most recent `Blob` type the spy caught, i.e. the one the click just before it produced. */
+async function lastBlobType(page: Page): Promise<string> {
+	const types = await page.evaluate(
+		() => (window as Window & { cambiumBlobTypes?: string[] }).cambiumBlobTypes ?? [],
+	);
+	const type = types.at(-1);
+
+	if (type === undefined) throw new Error('no Blob was created for the last download');
+
+	return type;
+}
+
+/**
+ * Clicks the button named for `filename` and waits out the resulting `download` event, so every
+ * scenario reads the same three things off it a real user's save dialog would show: the suggested
+ * name, the media type the spy caught, and the bytes actually written to disk.
+ */
+async function downloadArtifact(
+	page: Page,
+	filename: string,
+): Promise<{ download: Download; bytes: Buffer; blobType: string }> {
+	const button = page.getByRole('button', { name: `Download ${filename}`, exact: true });
+	const [download] = await Promise.all([page.waitForEvent('download'), button.click()]);
+	const blobType = await lastBlobType(page);
+	const path = await download.path();
+
+	if (path === null) throw new Error(`download of ${filename} produced no saved file`);
+
+	return { download, bytes: await readFile(path), blobType };
+}
+
+/** Every artifact's bytes and type checked in one round trip, against `expected` computed in Node. */
+async function expectArtifactsMatch(
+	page: Page,
+	expected: readonly ExportArtifact[],
+): Promise<void> {
+	await spyOnBlobTypes(page);
+
+	for (const artifact of expected) {
+		// One click and one `download` event at a time: firing every click together would race their
+		// `waitForEvent` calls against events that may land in a different order than the clicks did.
+		// oxlint-disable-next-line no-await-in-loop
+		const { download, bytes, blobType } = await downloadArtifact(page, artifact.filename);
+
+		expect(download.suggestedFilename(), artifact.filename).toBe(artifact.filename);
+		expect(blobType, artifact.filename).toBe(artifact.mediaType);
+		// Exact bytes, not a trimmed or decoded comparison: a trailing-newline slip or a stray BOM
+		// would still "look equal" under a string comparison that normalized either side first.
+		expect(bytes.equals(Buffer.from(artifact.contents, 'utf-8')), artifact.filename).toBe(true);
+	}
+}
+
+test('downloads the light and dark DTCG documents and the stylesheet, each byte-identical to exportArtifacts and prefixed with the record brand URL', async ({
+	page,
+}) => {
+	const brandUrl = 'https://acme.example/about';
+	const record = buildRecord(brandUrl);
+	const expected = exportArtifacts(TOKEN_SET, { brandUrl });
+
+	// Pins the scenario's own premise: without a prefix these three names would collide with the
+	// no-prefix scenario's, so a harness bug reusing one page across scenarios would go unnoticed.
+	expect(expected.map((artifact) => artifact.filename)).toEqual([
+		'acme.example-light.tokens.json',
+		'acme.example-dark.tokens.json',
+		'acme.example-tokens.css',
+	]);
+
+	await openExportTab(page, record);
+	await expectArtifactsMatch(page, expected);
+});
+
+test('downloads the same three artifacts unprefixed when the record carries no brand URL', async ({
+	page,
+}) => {
+	const record = buildRecord(null);
+	const expected = exportArtifacts(TOKEN_SET, { brandUrl: null });
+
+	expect(expected.map((artifact) => artifact.filename)).toEqual([
+		'light.tokens.json',
+		'dark.tokens.json',
+		'tokens.css',
+	]);
+
+	await openExportTab(page, record);
+	await expectArtifactsMatch(page, expected);
+});
+
+test('a re-alias applied through the token list shows up in the downloaded light document', async ({
+	page,
+}) => {
+	const record = buildRecord(null);
+	await openExportTab(page, record);
+
+	// `token-list.spec.ts`'s re-alias flow: `primary` starts on `brand.9`, so re-pointing it at
+	// `brand.1` is a change the export can't produce by accident from the unmodified token set.
+	const override: TokenOverride = {
+		kind: 'alias',
+		scheme: 'light',
+		token: 'primary',
+		alias: 'brand.1',
+	};
+	const applied = applyOverrides(TOKEN_SET, [override]);
+	if (!applied.ok) throw new Error(`fixture override refused: ${JSON.stringify(applied.issues)}`);
+
+	const [expectedLight] = exportArtifacts(applied.tokenSet, { brandUrl: null });
+
+	await page.getByLabel('primary alias', { exact: true }).selectOption('brand.1');
+
+	await spyOnBlobTypes(page);
+	const { download, bytes, blobType } = await downloadArtifact(page, 'light.tokens.json');
+
+	expect(download.suggestedFilename()).toBe('light.tokens.json');
+	expect(blobType).toBe(expectedLight!.mediaType);
+
+	const text = bytes.toString('utf-8');
+	// Checked ahead of the full-document comparison below, so a document that still carries the
+	// original alias fails right here instead of disappearing into one all-or-nothing byte diff.
+	expect(text).toContain('"{color.primitive.brand.1}"');
+	expect(bytes.equals(Buffer.from(expectedLight!.contents, 'utf-8'))).toBe(true);
+});
