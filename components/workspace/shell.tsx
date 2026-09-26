@@ -16,7 +16,15 @@ const Preview = lazy(() =>
 	import('@/components/workspace/preview/preview').then((module) => ({ default: module.Preview })),
 );
 
+// Also its own chunk: `exportArtifacts` pulls in `serializeDtcg` and `toStylesheet`, neither of
+// which the workspace route needed before #29, and nobody pays for that weight before opening
+// this tab.
+const ExportPanel = lazy(() =>
+	import('@/components/workspace/export-panel').then((module) => ({ default: module.ExportPanel })),
+);
+
 const PREVIEW_LOADING = <p className="text-muted-foreground text-sm">Loading the preview…</p>;
+const EXPORT_LOADING = <p className="text-muted-foreground text-sm">Loading the export panel…</p>;
 
 /**
  * Loaded by `WorkspaceRoute` through a dynamic import, never statically. base-ui's tabs and
@@ -93,12 +101,21 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 							</p>
 						)}
 					</TabsPanel>
-					{/* Empty until #27 and #29 fill them. */}
+					{/* Empty until #27 fills it. */}
 					<TabsPanel value="accessibility" className="text-muted-foreground p-2 text-sm">
 						The accessibility report is not built yet.
 					</TabsPanel>
-					<TabsPanel value="export" className="text-muted-foreground p-2 text-sm">
-						Export is not built yet.
+					<TabsPanel value="export" className="flex min-h-0 flex-col p-2">
+						{tokenSet ? (
+							<Suspense fallback={EXPORT_LOADING}>
+								<ExportPanel store={store} />
+							</Suspense>
+						) : (
+							<p className="text-muted-foreground text-sm">
+								There are no tokens to export yet. They show up here once the seed produces a token
+								set.
+							</p>
+						)}
 					</TabsPanel>
 				</Tabs>
 			</section>
