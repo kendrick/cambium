@@ -12,9 +12,13 @@ export function downloadFile({ filename, mediaType, contents }: ExportArtifact):
 
 	anchor.href = url;
 	anchor.download = filename;
-	anchor.click();
 
-	// Revoking on this tick can race the browser's own read of the blob and cancel the download in
-	// some engines, so the revoke waits for the next one instead.
-	setTimeout(() => URL.revokeObjectURL(url), 0);
+	try {
+		anchor.click();
+	} finally {
+		// Revoking on this tick can race the browser's own read of the blob and cancel the download
+		// in some engines, so the revoke waits for the next one. It sits in `finally` because
+		// something hooking `click` can throw, and an unrevoked URL pins its Blob for the page's life.
+		setTimeout(() => URL.revokeObjectURL(url), 0);
+	}
 }

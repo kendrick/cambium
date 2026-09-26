@@ -316,3 +316,50 @@ test('a re-alias applied through the token list shows up in the downloaded light
 	expect(text).toContain('"{color.primitive.brand.1}"');
 	expect(bytes.equals(Buffer.from(expectedLight!.contents, 'utf-8'))).toBe(true);
 });
+
+test('a download whose click throws still revokes its object URL, and the panel reports the failure', async ({
+	page,
+}) => {
+	await openExportTab(page, buildRecord(null));
+
+	// Something outside the app hooking `click` (an extension, a security product) is the one way
+	// `anchor.click()` throws in practice. Every object URL must still be revoked, or each failed
+	// attempt pins its Blob in memory for the life of the page.
+	await page.evaluate(() => {
+		const state = { created: [] as string[], revoked: [] as string[] };
+		const create = URL.createObjectURL.bind(URL);
+		const revoke = URL.revokeObjectURL.bind(URL);
+
+		(window as Window & { cambiumUrls?: typeof state }).cambiumUrls = state;
+		URL.createObjectURL = (object: Blob | MediaSource): string => {
+			const url = create(object);
+			state.created.push(url);
+			return url;
+		};
+		URL.revokeObjectURL = (url: string): void => {
+			state.revoked.push(url);
+			revoke(url);
+		};
+		HTMLAnchorElement.prototype.click = () => {
+			throw new Error('click blocked');
+		};
+	});
+
+	await page.getByRole('button', { name: 'Download light.tokens.json', exact: true }).click();
+
+	await expect(page.getByRole('alert').filter({ hasText: 'The export failed' })).toContainText(
+		'click blocked',
+	);
+	await expect
+		.poll(() =>
+			page.evaluate(() => {
+				const state = (
+					window as Window & { cambiumUrls?: { created: string[]; revoked: string[] } }
+				).cambiumUrls!;
+				return (
+					state.created.length > 0 && state.created.every((url) => state.revoked.includes(url))
+				);
+			}),
+		)
+		.toBe(true);
+});
