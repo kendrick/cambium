@@ -12,6 +12,7 @@ import { summarizeViolations } from './dtcg/report';
 import { serializeDtcg } from './dtcg/serialize';
 import { validateDtcg } from './dtcg/validate';
 import { deriveNonColor } from './derive-non-color';
+import { exportArtifacts } from './export/artifacts';
 import { createOklchScaleEngine } from './oklch-scale-engine';
 import { radiusScale } from './radius-scale';
 import { resolveCandidatePool } from './font-table';
@@ -335,6 +336,13 @@ describe('core purity', () => {
 		[
 			'scalarDeclarations',
 			() => Object.keys(scalarDeclarations(cssTokenSet, cssNaming())).length > 0,
+		],
+		[
+			'exportArtifacts',
+			() =>
+				exportArtifacts(cssTokenSet, { brandUrl: null }).every(
+					(artifact) => artifact.filename.length > 0 && artifact.contents.length > 0,
+				),
 		],
 	])('%s parses a valid value without reaching the network', (_name, parses) => {
 		vi.stubGlobal('fetch', () => {
