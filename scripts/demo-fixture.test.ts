@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,19 +7,46 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { BrandRecordSchema } from '../core/brand-record';
+import { createMagickCodec } from './magick-codec';
+import { MAX_EDGE_PX, prepareReferenceImage } from '../lib/image-intake';
 
 const execFileAsync = promisify(execFile);
 
 const CLI = fileURLToPath(new URL('./demo-fixture.mjs', import.meta.url));
 const REGISTER = fileURLToPath(new URL('./lib/register-ts.mjs', import.meta.url));
 
-// This suite runs the real `magick` binary rather than a stubbed codec (it is on PATH on this dev
-// machine, per #18's plan). The test image is small enough to take `prepareReferenceImage`'s
-// pass-through branch, so this suite exercises the CLI's own argument handling, provenance
-// wiring, and error paths; `scripts/magick-codec.test.ts` already covers the resize and quality
-// math under a stubbed `child_process`, so this suite doesn't re-prove that.
+/**
+ * A probe, not an assumption: this suite runs the real `magick` binary rather than a stubbed
+ * codec, so every test that needs it is guarded by this rather than by whatever happened to be
+ * installed on whoever's machine last ran it. `pnpm test`/`verify` must stay green on a fresh
+ * checkout that has never installed ImageMagick, so a missing binary skips these tests rather than
+ * failing them—the same reason `docs/agents/testing.md` keeps `test:e2e` and its browser binary
+ * out of `verify`.
+ */
+const MAGICK_ON_PATH = (() => {
+	try {
+		execFileSync('magick', ['-version'], { stdio: 'ignore' });
+		return true;
+	} catch {
+		return false;
+	}
+})();
+
+if (!MAGICK_ON_PATH) {
+	// `it.skipIf`/`describe.skipIf` report a skip with no message of their own, so this is what
+	// makes the reason visible in the run's own output rather than just a silent gap in the count.
+	console.warn(
+		'scripts/demo-fixture.test.ts: skipping magick-dependent tests—`magick` is not on PATH',
+	);
+}
+
+// The test image is small enough to take `prepareReferenceImage`'s pass-through branch, so the
+// tests below exercise the CLI's own argument handling, provenance wiring, and error paths;
+// `scripts/magick-codec.test.ts` already covers the resize and quality math under a stubbed
+// `child_process`, so this suite doesn't re-prove that.
 //
-// A 2x3 red JPEG, the smallest valid file `sniffImageType` in `lib/image-intake.ts` accepts.
+// A 2x3 red JPEG. Small, not minimal: `sniffImageType` only reads a 12-byte signature, so it would
+// accept a file this size or smaller regardless of whether the rest decodes to anything.
 const TEST_JPEG_BASE64 =
 	'/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJ' +
 	'DRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ' +
@@ -68,8 +95,9 @@ const REPLAYED_IMAGE_ID = 'replayed-image-id';
 /**
  * Unlike `VALID_SEED_RAW`, this seed's `keyColors` and `imageClassifications` name a specific
  * image id. Pairing it with `ENVELOPE_WITH_IMAGE_REFS_RAW` below is what the twice-run test needs
- * to prove defect 2's fix: a seed with no image-id references can't tell a working override from a
- * missing one, because `BrandRecordSchema` never checks an id nothing points at.
+ * to prove the `imageIds` override actually works: a seed with no image-id references can't tell a
+ * working override from a missing one, because `BrandRecordSchema` never checks an id nothing
+ * points at.
  */
 const SEED_WITH_IMAGE_REFS_RAW = JSON.stringify({
 	keyColors: [
@@ -93,26 +121,28 @@ const SEED_WITH_IMAGE_REFS_RAW = JSON.stringify({
 
 /**
  * The envelope shape a live run now writes beside its record (see the docblock atop
- * `demo-fixture.mjs`): `raw` plus provenance plus the image id(s) that seed's references resolve
- * against. `--raw` reads `imageIds` back out of this and stamps it onto the freshly prepared image,
- * which is the fix under test — replayed against `VALID_SEED_RAW`'s all-null shape, the same fix
- * would have nothing to prove itself against.
+ * `demo-fixture.mjs`): `raw` plus provenance, a `requestId`, and the image id(s) that seed's
+ * references resolve against. `--raw` reads `imageIds` back out of this and stamps it onto the
+ * freshly prepared image, which is the fix under test—replayed against `VALID_SEED_RAW`'s
+ * all-null shape, the same fix would have nothing to prove itself against. `requestId` rides along
+ * here so the "carries requestId through" test below has a real value to check for.
  */
 const ENVELOPE_WITH_IMAGE_REFS_RAW = JSON.stringify({
 	raw: SEED_WITH_IMAGE_REFS_RAW,
 	provider: 'codex',
 	model: 'gpt-5.6-terra',
 	promptVersion: 'seed-v4',
+	requestId: 'thread-replay-abc',
 	imageIds: [REPLAYED_IMAGE_ID],
 });
 
 /**
  * Normalises exactly the two fields a `--raw` replay is still allowed to vary on: the record `id`
- * and `versions[0].createdAt`. The image `id` was a third exception here before defect 2's fix,
- * back when `prepareReferenceImage` minting a fresh one on every run made holding it stable
- * impossible; now that a replay stamps the envelope's recorded `imageIds` back onto the image, the
- * twice-run test asserts that id's equality directly instead of normalising it away, since
- * normalising it away is exactly what would hide the bug coming back.
+ * and `versions[0].createdAt`. The image `id` was a third exception here before the `imageIds`
+ * override existed, back when `prepareReferenceImage` minting a fresh one on every run made holding
+ * it stable impossible; now that a replay stamps the envelope's recorded `imageIds` back onto the
+ * image, the twice-run test asserts that id's equality directly instead of normalising it away,
+ * since normalising it away is exactly what would hide the bug coming back.
  */
 function withoutVolatileFields(record: { id: string; versions: { createdAt: string }[] }) {
 	return {
@@ -145,93 +175,20 @@ afterEach(async () => {
 });
 
 describe('fixture:demo CLI', () => {
-	it('writes a BrandRecordSchema-valid one-image record from a recorded --raw response', async () => {
-		const dir = await makeTempDir();
-		const image = await writeTestImage(dir);
-		const rawPath = join(dir, 'raw.json');
-		await writeFile(rawPath, VALID_SEED_RAW);
+	it.skipIf(!MAGICK_ON_PATH)(
+		'writes a BrandRecordSchema-valid one-image record from a recorded --raw response',
+		async () => {
+			const dir = await makeTempDir();
+			const image = await writeTestImage(dir);
+			const rawPath = join(dir, 'raw.json');
+			await writeFile(rawPath, VALID_SEED_RAW);
 
-		const outDir = join(dir, 'out');
+			const outDir = join(dir, 'out');
 
-		await runCli([
-			image,
-			'--tag',
-			'photo',
-			'--raw',
-			rawPath,
-			'--provider',
-			'codex',
-			'--model',
-			'gpt-5.6-terra',
-			'--prompt-version',
-			'seed-v4',
-			'--out',
-			outDir,
-		]);
-
-		const record = JSON.parse(await readFile(join(outDir, 'source.json'), 'utf8'));
-
-		expect(() => BrandRecordSchema.parse(record)).not.toThrow();
-		expect(record.images).toHaveLength(1);
-		expect(record.images[0].tag).toBe('photo');
-		expect(record.versions).toHaveLength(1);
-		expect(record.versions[0]).toMatchObject({
-			provider: 'codex',
-			model: 'gpt-5.6-terra',
-			promptVersion: 'seed-v4',
-			rawResponse: VALID_SEED_RAW,
-		});
-
-		const rawEnvelope = JSON.parse(await readFile(join(outDir, 'source.raw.json'), 'utf8'));
-		expect(rawEnvelope).toMatchObject({ raw: VALID_SEED_RAW, provider: 'codex' });
-	});
-
-	it('running --raw twice over one image differs only at id and versions[0].createdAt, holding the image id stable', async () => {
-		const dir = await makeTempDir();
-		const image = await writeTestImage(dir);
-		const rawPath = join(dir, 'raw.json');
-		await writeFile(rawPath, ENVELOPE_WITH_IMAGE_REFS_RAW);
-
-		// No --provider/--model/--prompt-version: the envelope supplies all three, proving that path
-		// works too, alongside the explicit-flag path the other tests in this suite exercise.
-		const args = (outDir: string) => [image, '--tag', 'ui', '--raw', rawPath, '--out', outDir];
-
-		const outA = join(dir, 'a');
-		const outB = join(dir, 'b');
-
-		await runCli(args(outA));
-		await runCli(args(outB));
-
-		const recordA = JSON.parse(await readFile(join(outA, 'source.json'), 'utf8'));
-		const recordB = JSON.parse(await readFile(join(outB, 'source.json'), 'utf8'));
-
-		// Prove the exclusion isn't vacuous: the two excepted fields really did change run to run.
-		expect(recordA.id).not.toBe(recordB.id);
-		expect(recordA.versions[0].createdAt).not.toBe(recordB.versions[0].createdAt);
-
-		// Defect 2's fix, asserted directly rather than normalised away: without it,
-		// `prepareReferenceImage`'s fresh mint would make these differ on every run, and the seed's
-		// `keyColors[0].sourceImageId` / `imageClassifications[0].imageId` would point at whichever
-		// run's id lost, which is exactly what made a real fixture's replay fail `BrandRecordSchema`.
-		expect(recordA.images[0].id).toBe(REPLAYED_IMAGE_ID);
-		expect(recordB.images[0].id).toBe(REPLAYED_IMAGE_ID);
-
-		expect(withoutVolatileFields(recordA)).toEqual(withoutVolatileFields(recordB));
-	});
-
-	it('exits 1, names the failing path, and writes nothing when the --raw response fails schema validation', async () => {
-		const dir = await makeTempDir();
-		const image = await writeTestImage(dir);
-		const rawPath = join(dir, 'raw-invalid.json');
-		await writeFile(rawPath, INVALID_SEED_RAW);
-
-		const outDir = join(dir, 'out');
-
-		await expect(
-			runCli([
+			await runCli([
 				image,
 				'--tag',
-				'ui',
+				'photo',
 				'--raw',
 				rawPath,
 				'--provider',
@@ -242,14 +199,114 @@ describe('fixture:demo CLI', () => {
 				'seed-v4',
 				'--out',
 				outDir,
-			]),
-		).rejects.toMatchObject({
-			code: 1,
-			stderr: expect.stringContaining(rawPath),
-		});
+			]);
 
-		await expect(readdir(outDir)).rejects.toMatchObject({ code: 'ENOENT' });
-	});
+			const record = JSON.parse(await readFile(join(outDir, 'source.json'), 'utf8'));
+
+			expect(() => BrandRecordSchema.parse(record)).not.toThrow();
+			expect(record.images).toHaveLength(1);
+			expect(record.images[0].tag).toBe('photo');
+			expect(record.versions).toHaveLength(1);
+			expect(record.versions[0]).toMatchObject({
+				provider: 'codex',
+				model: 'gpt-5.6-terra',
+				promptVersion: 'seed-v4',
+				rawResponse: VALID_SEED_RAW,
+			});
+
+			const rawEnvelope = JSON.parse(await readFile(join(outDir, 'source.raw.json'), 'utf8'));
+			expect(rawEnvelope).toMatchObject({ raw: VALID_SEED_RAW, provider: 'codex' });
+		},
+	);
+
+	it.skipIf(!MAGICK_ON_PATH)(
+		'running --raw twice over one image differs only at id and versions[0].createdAt, holding the image id stable',
+		async () => {
+			const dir = await makeTempDir();
+			const image = await writeTestImage(dir);
+			const rawPath = join(dir, 'raw.json');
+			await writeFile(rawPath, ENVELOPE_WITH_IMAGE_REFS_RAW);
+
+			// No --provider/--model/--prompt-version: the envelope supplies all three, proving that path
+			// works too, alongside the explicit-flag path the other tests in this suite exercise.
+			const args = (outDir: string) => [image, '--tag', 'ui', '--raw', rawPath, '--out', outDir];
+
+			const outA = join(dir, 'a');
+			const outB = join(dir, 'b');
+
+			await runCli(args(outA));
+			await runCli(args(outB));
+
+			const recordA = JSON.parse(await readFile(join(outA, 'source.json'), 'utf8'));
+			const recordB = JSON.parse(await readFile(join(outB, 'source.json'), 'utf8'));
+
+			// Prove the exclusion isn't vacuous: the two excepted fields really did change run to run.
+			expect(recordA.id).not.toBe(recordB.id);
+			expect(recordA.versions[0].createdAt).not.toBe(recordB.versions[0].createdAt);
+
+			// The `imageIds` override, asserted directly rather than normalised away: without it,
+			// `prepareReferenceImage`'s fresh mint would make these differ on every run, and the seed's
+			// `keyColors[0].sourceImageId` / `imageClassifications[0].imageId` would point at whichever
+			// run's id lost, which is exactly what made a real fixture's replay fail `BrandRecordSchema`.
+			expect(recordA.images[0].id).toBe(REPLAYED_IMAGE_ID);
+			expect(recordB.images[0].id).toBe(REPLAYED_IMAGE_ID);
+
+			expect(withoutVolatileFields(recordA)).toEqual(withoutVolatileFields(recordB));
+		},
+	);
+
+	it.skipIf(!MAGICK_ON_PATH)(
+		'carries requestId through a --raw replay into the rewritten .raw.json',
+		async () => {
+			const dir = await makeTempDir();
+			const image = await writeTestImage(dir);
+			const rawPath = join(dir, 'raw.json');
+			await writeFile(rawPath, ENVELOPE_WITH_IMAGE_REFS_RAW);
+
+			const outDir = join(dir, 'out');
+
+			await runCli([image, '--tag', 'ui', '--raw', rawPath, '--out', outDir]);
+
+			const rawEnvelope = JSON.parse(await readFile(join(outDir, 'source.raw.json'), 'utf8'));
+
+			expect(rawEnvelope.requestId).toBe('thread-replay-abc');
+		},
+	);
+
+	it.skipIf(!MAGICK_ON_PATH)(
+		'exits 1, names the failing path, and writes nothing when the --raw response fails schema validation',
+		async () => {
+			const dir = await makeTempDir();
+			const image = await writeTestImage(dir);
+			const rawPath = join(dir, 'raw-invalid.json');
+			await writeFile(rawPath, INVALID_SEED_RAW);
+
+			const outDir = join(dir, 'out');
+
+			await expect(
+				runCli([
+					image,
+					'--tag',
+					'ui',
+					'--raw',
+					rawPath,
+					'--provider',
+					'codex',
+					'--model',
+					'gpt-5.6-terra',
+					'--prompt-version',
+					'seed-v4',
+					'--out',
+					outDir,
+				]),
+			).rejects.toMatchObject({
+				code: 1,
+				stderr: expect.stringContaining(rawPath),
+			});
+
+			await expect(readdir(outDir)).rejects.toMatchObject({ code: 'ENOENT' });
+		},
+	);
 
 	it('exits 1 naming magick when it is not on PATH, and writes nothing', async () => {
 		const dir = await makeTempDir();
@@ -277,9 +334,11 @@ describe('fixture:demo CLI', () => {
 					'--out',
 					outDir,
 				],
-				// PATH pointed at an empty directory rather than cleared outright: `execFileAsync` still
-				// has to resolve `node --import ...` itself on some platforms, and `process.execPath` is
-				// already absolute so only the child's own `magick` lookup is affected.
+				// PATH pointed at an empty directory rather than cleared outright: `process.execPath` is
+				// already absolute, so `execFileAsync` never consults PATH to find node itself. Only the
+				// CLI's own `spawn('magick', ...)`—a bare command name—resolves against this PATH,
+				// which is the lookup this test means to break. Independent of whether the host running
+				// this suite has magick installed: it runs and passes either way.
 				{ ...process.env, PATH: emptyPathDir },
 			),
 		).rejects.toMatchObject({
@@ -307,17 +366,84 @@ describe('fixture:demo CLI', () => {
 		});
 	});
 
-	it('exits 1 naming which provenance flag is missing when --raw omits one', async () => {
-		const dir = await makeTempDir();
-		const image = await writeTestImage(dir);
-		const rawPath = join(dir, 'raw.json');
-		await writeFile(rawPath, VALID_SEED_RAW);
+	it.skipIf(!MAGICK_ON_PATH)(
+		'exits 1 naming which provenance flag is missing when --raw omits one',
+		async () => {
+			const dir = await makeTempDir();
+			const image = await writeTestImage(dir);
+			const rawPath = join(dir, 'raw.json');
+			await writeFile(rawPath, VALID_SEED_RAW);
 
-		await expect(
-			runCli([image, '--tag', 'ui', '--raw', rawPath, '--provider', 'codex']),
-		).rejects.toMatchObject({
-			code: 1,
-			stderr: expect.stringContaining('--model'),
-		});
-	});
+			await expect(
+				runCli([image, '--tag', 'ui', '--raw', rawPath, '--provider', 'codex']),
+			).rejects.toMatchObject({
+				code: 1,
+				stderr: expect.stringContaining('--model'),
+			});
+		},
+	);
+});
+
+/**
+ * One real-magick round trip through `prepareReferenceImage`, checked in the consumer's units:
+ * `magick identify` on the decoded bytes, not the sizes this codec asked magick for. Everything
+ * else in this file drives the CLI as a subprocess; this drives `createMagickCodec` and
+ * `prepareReferenceImage` directly, because the assertions below need the intermediate decoded
+ * data URL, which the CLI never exposes.
+ */
+describe('createMagickCodec via prepareReferenceImage (real magick)', () => {
+	it.skipIf(!MAGICK_ON_PATH)(
+		'downscales an oversized image to a WebP that magick identify confirms fits MAX_EDGE_PX, aspect preserved',
+		async () => {
+			const dir = await makeTempDir();
+			const sourcePath = join(dir, 'oversized.png');
+			const sourceWidth = 3000;
+			const sourceHeight = 2000;
+
+			// Built with magick itself rather than checked into the repo: it only has to be larger than
+			// MAX_EDGE_PX on its long edge, and generating it here keeps a multi-megabyte binary out of
+			// the repo for the sake of one size check.
+			await execFileAsync('magick', [
+				'-size',
+				`${sourceWidth}x${sourceHeight}`,
+				'xc:red',
+				sourcePath,
+			]);
+
+			const blob = new Blob([await readFile(sourcePath)], { type: 'image/png' });
+			const result = await prepareReferenceImage(blob, createMagickCodec());
+
+			if (result.kind !== 'prepared') {
+				throw new Error(`expected prepareReferenceImage to prepare the image, got ${result.kind}`);
+			}
+
+			const match = /^data:image\/webp;base64,(.+)$/.exec(result.prepared.image.downscaled);
+
+			if (!match) throw new Error('downscaled image was not stored as a WebP data URL');
+
+			const decodedBytes = Buffer.from(match[1]!, 'base64');
+
+			// The consumer here is whatever decodes this data URL next, and a WebP consumer reads the
+			// RIFF container header before anything codec-specific—the same header this checks,
+			// rather than trusting the data URL's own declared media type.
+			expect(decodedBytes.subarray(0, 4).toString('ascii')).toBe('RIFF');
+			expect(decodedBytes.subarray(8, 12).toString('ascii')).toBe('WEBP');
+
+			const decodedPath = join(dir, 'decoded.webp');
+			await writeFile(decodedPath, decodedBytes);
+
+			const { stdout } = await execFileAsync('magick', [
+				'identify',
+				'-format',
+				'%w %h',
+				decodedPath,
+			]);
+			const [width, height] = stdout.trim().split(/\s+/).map(Number);
+
+			expect(Math.max(width!, height!)).toBe(MAX_EDGE_PX);
+
+			const expectedShortEdge = Math.round((sourceHeight / sourceWidth) * MAX_EDGE_PX);
+			expect(Math.abs(height! - expectedShortEdge)).toBeLessThanOrEqual(1);
+		},
+	);
 });

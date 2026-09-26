@@ -25,6 +25,6 @@ Modified: cropped to `1884x1058+126+89` with ImageMagick, keeping the window con
 
 ## `ui-wikipedia.jpg`
 
-A screenshot of the Wikipedia article ["Octopus"](https://en.wikipedia.org/wiki/Octopus) (source file `Wikipedia.jpg`). The article text is by Wikipedia contributors and licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), so this modified screenshot is shared under CC BY-SA 4.0 as well. The octopus photograph in the article's infobox is a separate Wikimedia Commons file under its own licence, which this repository has not recorded.
+A screenshot of the Wikipedia article ["Octopus"](https://en.wikipedia.org/wiki/Octopus) (source file `Wikipedia.jpg`). The article text is by Wikipedia contributors and licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), so this modified screenshot is shared under CC BY-SA 4.0 as well. The octopus photograph in the article's infobox is a separate Wikimedia Commons file, [File:Octopus2.jpg](https://commons.wikimedia.org/wiki/File:Octopus2.jpg), by Albert Kok ("Own work"), licensed under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0).
 
 Modified: cropped to `1260x940+190+60` with ImageMagick. The crop removes the Wikipedia wordmark and puzzle-globe logo, which are Wikimedia trademarks, along with the decorative brace on the left and the blue bar on the right.

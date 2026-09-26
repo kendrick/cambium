@@ -49,13 +49,11 @@ export type CodexReaderConfig = {
  * nothing about why.
  */
 class CodexExecError extends Error {
-	readonly stdout: string;
 	readonly stderr: string;
-	readonly exitCode: string | number | null;
+	readonly exitCode: number | null;
 
-	constructor(message: string, stdout: string, stderr: string, exitCode: string | number | null) {
+	constructor(message: string, stderr: string, exitCode: number | null) {
 		super(message);
-		this.stdout = stdout;
 		this.stderr = stderr;
 		this.exitCode = exitCode;
 	}
@@ -133,12 +131,12 @@ function runCodexExec(args: string[]): Promise<{ stdout: string; stderr: string 
 		});
 
 		child.on('error', (error) => {
-			reject(new CodexExecError(error.message, stdout, stderr, null));
+			reject(new CodexExecError(error.message, stderr, null));
 		});
 
 		child.on('close', (code) => {
 			if (code !== 0) {
-				reject(new CodexExecError(`codex exec exited with code ${code}`, stdout, stderr, code));
+				reject(new CodexExecError(`codex exec exited with code ${code}`, stderr, code));
 				return;
 			}
 
@@ -165,10 +163,10 @@ function extractThreadId(stdout: string): string | undefined {
 				return event.thread_id;
 			}
 		} catch {
-			// codex has printed a bare status line to stdout before ("Reading additional input from
-			// stdin..." showed up on stderr on this machine, but the boundary between the two streams
-			// isn't a documented contract); a line that isn't JSON just isn't the event being looked
-			// for, not this reader's problem to diagnose.
+			// codex has been seen printing a bare, non-JSON status line ("Reading additional input from
+			// stdin...") ahead of its `--json` events, on both stdout and stderr depending on the run—
+			// which stream it lands on isn't a documented contract. A line that isn't JSON just isn't the
+			// event being looked for, not this reader's problem to diagnose.
 		}
 	}
 
@@ -183,7 +181,7 @@ function extractThreadId(stdout: string): string | undefined {
  *
  * Lives in `scripts/`, not `app/readers/`: it shells out through `node:child_process`, which must
  * never reach the browser bundle, so nothing under `app/`, `components/` or `core/` may import
- * this file (checked below).
+ * this file (checked in `codex-reader.test.ts`'s import-graph scan).
  */
 export function createCodexReader(config: CodexReaderConfig = {}) {
 	const reader = {
@@ -196,9 +194,8 @@ export function createCodexReader(config: CodexReaderConfig = {}) {
 
 				await writeFile(schemaPath, JSON.stringify(SEED_JSON_SCHEMA));
 
-				// Every image writes independently, so Promise.all rather than a sequential loop: the
-				// index in each temp filename is stable per image regardless of write order, and
-				// there's nothing here for one image's write to depend on another's.
+				// Each temp filename's index comes from `images`' own order, not from write order, so
+				// nothing here makes one image's write depend on another's finishing first.
 				const imagePaths = await Promise.all(
 					images.map(async (image, index) => {
 						const { mediaType, data } = parseDataUrl(image);
@@ -245,8 +242,13 @@ export function createCodexReader(config: CodexReaderConfig = {}) {
 				const raw = await readFile(outputPath, 'utf8').catch(() => '');
 
 				if (raw.trim().length === 0) {
-					throw new Error(
+					// A turn can complete with no `agent_message` item, which exits 0—this isn't the
+					// non-zero-exit case above, but it's exactly as unusable to this reader, so it gets
+					// the same error type and the same stderr-in-the-message treatment.
+					throw new CodexExecError(
 						`codex exec produced no final message${stderr.trim() ? `: ${stderr.trim()}` : ''}`,
+						stderr,
+						0,
 					);
 				}
 

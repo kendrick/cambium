@@ -19,8 +19,8 @@ import { CODEX_MODEL_UNSPECIFIED, createCodexReader } from './codex-reader';
 // letting a stray call reach an actual `codex` binary. Vitest hoists this call above the imports
 // above, so `createCodexReader` sees the mocked `spawn` the moment its own module loads.
 // `importOriginal` keeps every other export real: the import-graph check at the bottom of this
-// file needs a real `execFileSync` to run `git ls-files`, and mocking the whole module the way this
-// used to would have taken that away along with `spawn`.
+// file needs a real `execFileSync` to run `git ls-files`, and replacing the whole module—which
+// would lose every real export, not just `spawn`—would take that away too.
 vi.mock('node:child_process', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('node:child_process')>();
 
@@ -274,8 +274,8 @@ describe('createCodexReader', () => {
 });
 
 // A static import-graph scan, not a check against a fixed list of files: it walks every source
-// file under the three directories the plan forbids, on every run, so a new file importing
-// scripts/codex-reader.ts fails this the same way an existing one would. Narrowing this to a
+// file under the three directories the plan forbids, on every run, so a new file importing any of
+// `CHILD_PROCESS_SCRIPTS` below fails this the same way an existing one would. Narrowing this to a
 // smaller directory set or a file allowlist would defeat the point of the check.
 //
 // Enumerated through `git ls-files`, not a live `readdirSync` walk. `package-scripts.test.ts` runs
@@ -291,7 +291,16 @@ describe('createCodexReader', () => {
 // that test deletes the file before it unstages it, so a listed path can still be gone by the time
 // this scan reads it. That case is skipped below, not treated as a failure.
 const IMPORT_GRAPH_REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const IMPORT_GRAPH_TARGET = resolve(IMPORT_GRAPH_REPO_ROOT, 'scripts', 'codex-reader');
+
+/**
+ * Every script under `scripts/` that reaches `node:child_process`, in the one place both the guard
+ * below and its own "catches a real offender" tests read it from, so a script added to one list
+ * can't silently miss the other.
+ */
+const CHILD_PROCESS_SCRIPTS = ['codex-reader', 'magick-codec', 'demo-fixture'];
+const IMPORT_GRAPH_TARGETS = new Set(
+	CHILD_PROCESS_SCRIPTS.map((name) => resolve(IMPORT_GRAPH_REPO_ROOT, 'scripts', name)),
+);
 const IMPORT_GRAPH_SCAN_DIRS = ['app', 'components', 'core'];
 const IMPORT_GRAPH_SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.mjs', '.js']);
 const IMPORT_GRAPH_RESOLVABLE_EXTENSIONS = ['.ts', '.tsx', '.js', '.mjs', '.cjs'];
@@ -343,7 +352,7 @@ function resolvesToImportGraphTarget(specifier: string, fromFile: string): boole
 		}
 	}
 
-	return resolved === IMPORT_GRAPH_TARGET;
+	return IMPORT_GRAPH_TARGETS.has(resolved);
 }
 
 /**
@@ -351,9 +360,9 @@ function resolvesToImportGraphTarget(specifier: string, fromFile: string): boole
  * what lets the "catches a real offender" test below drive the actual detection logic against a
  * synthetic import with no filesystem or git involved, while the production test drives the same
  * function against `collectSourceFiles` and a real `readFileSync`. A file that vanishes between
- * being listed and being read — the shape of the canary race the module docblock above describes —
- * is skipped rather than failing the run: nothing this check promises to catch ever exists only as
- * a file that disappeared before anyone read it.
+ * being listed and being read—the shape of the canary race the comment atop this import-graph
+ * scan describes—is skipped rather than failing the run: nothing this check promises to catch
+ * ever exists only as a file that disappeared before anyone read it.
  */
 function scanForOffenders(files: string[], readSource: (file: string) => string): string[] {
 	const offenders: string[] = [];
@@ -396,17 +405,18 @@ describe('import graph', () => {
 		expect(offenders).toEqual([]);
 	});
 
-	// The unit-level seam this wave's gate asked for, proving the scan can actually fail: a clone
-	// test can't stand in for it, because `git ls-files` never lists an untracked provocation file
-	// and giving it one tracked means a `git add` or `git commit` inside the clone — a git write
-	// this repair leaves to the orchestrator. Injecting the file list and its source instead
-	// exercises exactly the resolution logic `collectSourceFiles` and a real `readFileSync` would
-	// have run against a genuine offender, with no repo state required.
-	it('is flagged for a file that imports scripts/codex-reader', () => {
+	// Proves the scan can actually fail, not just pass: a clone test can't stand in for this, because
+	// `git ls-files` never lists an untracked provocation file, and making one tracked would mean
+	// staging or committing a fake offender just to test a check against it. Injecting the file list
+	// and its source instead exercises exactly the resolution logic `collectSourceFiles` and a real
+	// `readFileSync` would run against a genuine offender, with no repo state required. Runs once per
+	// `CHILD_PROCESS_SCRIPTS` entry, so adding a fourth guarded script to that list without a matching
+	// specifier here fails loudly instead of shipping an unproven guard.
+	it.each(CHILD_PROCESS_SCRIPTS)('is flagged for a file that imports scripts/%s', (name) => {
 		const offendingFile = resolve(IMPORT_GRAPH_REPO_ROOT, 'app', 'not-a-real-file.ts');
 		const offenders = scanForOffenders(
 			[offendingFile],
-			() => `import { createCodexReader } from '../scripts/codex-reader';\n`,
+			() => `import { anything } from '../scripts/${name}';\n`,
 		);
 
 		expect(offenders).toEqual([offendingFile]);

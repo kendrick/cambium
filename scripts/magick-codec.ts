@@ -10,8 +10,9 @@ const MAGICK_BIN = 'magick';
 /**
  * ImageMagick's `-quality` is an integer 0-100; `WEBP_QUALITY` in `lib/image-intake.ts` is the 0-1
  * ratio the browser encoder already takes. Scaling it here, rather than declaring a second
- * constant, is what keeps this codec writing the same picture the browser one would for the same
- * seed image.
+ * constant, is what keeps this codec asking for the same declared quality the browser one would for
+ * the same seed image—not the same pixels, since different WebP encoders at an identical quality
+ * setting don't produce identical bytes.
  */
 const MAGICK_QUALITY = Math.round(WEBP_QUALITY * 100);
 

@@ -1,14 +1,15 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createMagickCodec, MagickExecError } from './magick-codec';
 
-// `magick-codec.ts` shells out for real, so every test here replaces the module the same way
-// `scripts/codex-reader.test.ts` does for `codex exec`: a stray call reaching an actual `magick`
-// binary would make these tests depend on what happens to be installed, rather than on what this
-// codec sends it.
+// `magick-codec.ts` shells out for real, so every test here replaces the module entirely: a stray
+// call reaching an actual `magick` binary would make these tests depend on what happens to be
+// installed, rather than on what this codec sends it. Unlike `scripts/codex-reader.test.ts`, which
+// mocks `node:child_process` via `importOriginal` to keep `execFileSync` real for its own
+// import-graph check, nothing here needs a real export back, so the whole module is replaced.
 vi.mock('node:child_process', () => ({
 	spawn: vi.fn<(file: string, args: string[], options?: unknown) => EventEmitter>(),
 }));
@@ -34,6 +35,8 @@ describe('createMagickCodec', () => {
 			let capturedArgs: string[] = [];
 			let capturedFile = '';
 
+			const sourceBytes = Buffer.from([0xff, 0xd8, 0xff]);
+
 			spawnMock.mockImplementation((file: string, args: string[]) => {
 				capturedFile = file;
 				capturedArgs = args;
@@ -41,6 +44,7 @@ describe('createMagickCodec', () => {
 				// The input file exists, with the blob's own bytes, before magick "runs" — proof this
 				// codec wrote real bytes rather than just naming a path in argv.
 				expect(existsSync(args[0]!)).toBe(true);
+				expect(readFileSync(args[0]!)).toEqual(sourceBytes);
 
 				const proc = fakeChild();
 
@@ -53,7 +57,7 @@ describe('createMagickCodec', () => {
 			});
 
 			const codec = createMagickCodec();
-			const blob = new Blob([Buffer.from([0xff, 0xd8, 0xff])], { type: 'image/jpeg' });
+			const blob = new Blob([sourceBytes], { type: 'image/jpeg' });
 			const decoded = await codec.decode(blob);
 
 			expect(capturedFile).toBe('magick');

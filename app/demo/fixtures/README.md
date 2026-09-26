@@ -81,7 +81,7 @@ The target was at least four differing fields for every pair. Two pairs miss it,
 - `photo-ceramics` and `artwork-blocks` differ only in `keyColors`, `neutralTemperature` and `expressive`.
 - `artwork-blocks` and `artwork-paint` differ only in `keyColors`, `imageClassifications` and `expressive`.
 
-Both misses have the same cause. For most photos and artworks the model leaves the type, radius and shadow fields null, and two nulls match. `artwork-blocks` has the sparsest seed in the set. It fills only `keyColors`, `imageClassifications` and `expressive`, so it can differ from another sparse seed in at most those three fields plus `neutralTemperature`. Neither image was regenerated or swapped to force the count, because that would hide the gap. A replacement for `artwork-blocks` that shows a surface with a clear radius or shadow would lift both pairs.
+Both misses have the same cause. For most photos and artworks the model leaves the type, radius and shadow fields null, and two nulls match. `artwork-blocks` and `artwork-paint` tie for the sparsest seed in the set: each fills only `keyColors`, `imageClassifications` and `expressive`, so either can differ from another equally sparse seed in at most those three fields plus `neutralTemperature`. Neither image was regenerated or swapped to force the count, because that would hide the gap. A replacement for `artwork-blocks` or `artwork-paint` that shows a surface with a clear radius or shadow would lift both pairs.
 
 `typeScaleRatio` is null in all eight seeds, so no fixture shows it.
 

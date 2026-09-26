@@ -12,8 +12,10 @@ import { saveGeneratedVersion } from '../app/generation/generate.ts';
 // retries a failed specifier with `.ts` appended, never with `/index.ts`, so it never resolves
 // under this dev-tooling loader (confirmed by running this script: "Cannot find module
 // '.../fallback-table.ts'"). Importing the same constant `FALLBACK_FONT_TABLE_REF` straight from
-// its module is the offline, deterministic ref every fallback path already stamps on a version;
-// see the plan concern in this wave's report for the fix this papers over.
+// its module is the offline, deterministic ref every fallback path already stamps on a version, so
+// every fixture this script writes carries the fallback table rather than the one a live app
+// session would resolve over the network—a known gap until `ts-resolve.mjs` can follow a
+// directory import.
 import { FALLBACK_FONT_TABLE_REF } from '../app/fonts/fallback-table/index.ts';
 import { createInMemoryRecordStore } from '../app/storage/in-memory-record-store.ts';
 import { createCodexReader } from './codex-reader.ts';
@@ -25,9 +27,12 @@ import { prepareReferenceImage } from '../lib/image-intake.ts';
  * replayed from a recorded response (`--raw <file>`).
  *
  * Every run writes `<stem>.raw.json` beside the record — the envelope the rest of this file means
- * by that word. It always holds `{ raw, provider, model, promptVersion, imageIds }`, plus
- * `requestId` on a live run. `imageIds` is the id this run's image carried when it was sent to the
- * model (an array, for a future multi-image run, in attachment order).
+ * by that word. It always holds `{ raw, provider, model, promptVersion }`. `imageIds` and
+ * `requestId` ride along whenever this run has one to record: both on a live run, whatever a
+ * replayed envelope itself held on a `--raw` run over a full envelope, and neither on a `--raw` run
+ * over a bare seed string, which has no envelope to carry them from. `imageIds` is the id this run's
+ * image carried when it was sent to the model (an array, for a future multi-image run, in
+ * attachment order).
  *
  * `imageIds` is what makes a live answer replayable. `prepareReferenceImage` mints a fresh
  * `crypto.randomUUID()` on every call, but a live model can name the id it was shown back inside
@@ -40,11 +45,13 @@ import { prepareReferenceImage } from '../lib/image-intake.ts';
  * now differ only at the record `id` and `versions[0].createdAt`: the image `id` no longer moves.
  *
  * `--raw <file>` accepts either shape. A full envelope, detected by a top-level string `raw` field,
- * supplies `provider`/`model`/`promptVersion`/`imageIds` unless a flag overrides one — the natural
- * case, since it's the same file a live run already wrote. A bare seed-JSON string (no `raw` field
- * of its own) has no envelope to read anything from, so it still needs `--provider`/`--model`/
- * `--prompt-version` stated explicitly, and carries no image id to reuse — fine for a seed with no
- * image-id references, and exactly this script's own `--raw` fixtures.
+ * supplies `provider`/`model`/`promptVersion`/`imageIds`/`requestId` unless a flag overrides one of
+ * the first three—the natural case, since it's the same file a live run already wrote. `imageIds`
+ * and `requestId` have no matching flag, so a full envelope's values for those two always pass
+ * through untouched. A bare seed-JSON string (no `raw` field of its own) has no envelope to read
+ * anything from, so it still needs `--provider`/`--model`/`--prompt-version` stated explicitly, and
+ * carries no image id or request id to reuse—fine for a seed with no image-id references, and
+ * exactly this script's own `--raw` fixtures.
  */
 
 const USAGE =
@@ -147,7 +154,14 @@ async function readRawEnvelope(flags) {
 		);
 	}
 
-	return { raw, provider, model, promptVersion, imageIds: envelope?.imageIds };
+	return {
+		raw,
+		provider,
+		model,
+		promptVersion,
+		imageIds: envelope?.imageIds,
+		requestId: envelope?.requestId,
+	};
 }
 
 async function main() {
@@ -246,8 +260,9 @@ async function main() {
 
 	await mkdir(outDir, { recursive: true });
 	await writeFile(recordPath, `${JSON.stringify(finalRecord, null, 2)}\n`);
-	// `imageIds` rides along on every run, live or replayed, so a later `--raw` pointed at this same
-	// file can resolve the same seed's image-id references the way this run did.
+	// `imageIds`, and `requestId` through `response`, ride along whenever this run had one to record
+	// (see the module docblock for when that is), so a later `--raw` pointed at this same file
+	// inherits whatever provenance this run itself had.
 	await writeFile(rawPath, `${JSON.stringify({ ...response, imageIds }, null, 2)}\n`);
 
 	console.log(recordPath);

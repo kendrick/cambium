@@ -93,7 +93,7 @@ const MESSY: Record<string, string> = {
 // Extensions this repo tracks that oxfmt leaves alone, so they need no canary and their absence from
 // `MESSY` is a decision rather than an oversight. Markdown is here because `.oxfmtrc.json` ignores
 // it; the rest are not code. Anything tracked and outside both lists fails the coverage test below.
-const UNFORMATTED = ['.md', '.png'];
+const UNFORMATTED = ['.md', '.png', '.jpg'];
 
 const EXTENSIONS = Object.keys(MESSY);
 
