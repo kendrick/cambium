@@ -353,12 +353,20 @@ export type ContrastRepairedTokenSet = { tokenSet: TokenSet; unrepaired: Unrepai
  * store and both e2e fixtures go through here for that reason: a fixture that composed the two
  * calls on its own could drift from what the store actually paints.
  *
+ * `options` only ever forwards to `repairContrast`, so a caller with nothing to say about pins
+ * stays on `defaultPins`, as the CLI does by passing no argument. The workspace store is the one
+ * caller that passes `{ pinned }`, built from the seed's own pins rather than provenance, because a
+ * person can pin a field the model didn't mark `observed`.
+ *
  * `repairContrast` only ever proposes overrides it has already applied to its own working copy of
  * `tokenSet` (see the loop above), so a rejection here would mean the two disagree about what the
  * base can take.
  */
-export function withContrastRepairs(tokenSet: TokenSet): ContrastRepairedTokenSet {
-	const { overrides, unrepaired } = repairContrast(tokenSet);
+export function withContrastRepairs(
+	tokenSet: TokenSet,
+	options: RepairOptions = {},
+): ContrastRepairedTokenSet {
+	const { overrides, unrepaired } = repairContrast(tokenSet, options);
 	const applied = applyOverrides(tokenSet, overrides);
 
 	if (!applied.ok) {

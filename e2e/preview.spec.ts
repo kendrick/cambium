@@ -16,6 +16,7 @@ import { cssNaming } from '../core/css/globals-css';
 import { scalarDeclarations, schemeDeclarations } from '../core/css/scheme-declarations';
 import { BALANCED } from '../core/interpretation';
 import { createOklchScaleEngine } from '../core/oklch-scale-engine';
+import { defaultSeedPins } from '../core/seed-pins';
 import { buildTokenSet } from '../core/semantic-layer';
 import type { SchemeName } from '../core/token-overrides';
 
@@ -331,6 +332,7 @@ function buildRecord(): BrandRecord {
 				fontTable: { source: 'cambium-e2e-fixture', version: '1' },
 				interpretation: 'balanced',
 				overrides: [],
+				pins: defaultSeedPins(SEED),
 			},
 		],
 	});

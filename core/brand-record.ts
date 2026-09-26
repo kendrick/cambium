@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { BrandSeedSchema } from './brand-seed';
 import { BRAND_URL_MAX_LENGTH } from './brand-url';
 import { IMAGE_TAGS } from './image-tag';
+import { keyColorIndex, SeedPinPathSchema } from './seed-pins';
 import { overrideKey, TokenOverrideSchema } from './token-overrides';
 import { TokenSetSchema } from './token-set';
 
@@ -62,8 +63,19 @@ import { TokenSetSchema } from './token-set';
  * seed on a key the strict seed schema no longer declares, which reads like corruption; with it the
  * first issue names `schemaVersion`. No migration here either, for the same deployment reason as 7
  * and 8.
+ *
+ * 10 is #25's `pins` on `BrandVersionSchema`, required. A pinned seed field is one a preset switch
+ * and a contrast repair must leave alone, and pins save and revert with the rest of the draft, so
+ * like `overrides` they belong to the version rather than to the workspace. Without this bump a
+ * version-9 archive fails once per version on the missing key, which reads like corruption; with it
+ * the first issue names `schemaVersion`.
+ *
+ * No migration, for the same deployment reason as 7 through 9. It still held when this shipped:
+ * `.github/` holds Dependabot's config and no deploy workflow. A shim would be one line,
+ * `defaultSeedPins` on each version's seed, since that pins exactly the observed steps repair
+ * protected on a version-9 record, but a shim for records nobody holds is code nobody runs.
  */
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * What storage stamps on a record's first commit. It lives here rather than in `app/storage/`
@@ -120,21 +132,45 @@ export const FontTableRefSchema = z.strictObject({
  * is input the same way `seed` is: a reader re-derives the tokens and applies these on top. It is
  * required, and empty on a version nobody edited, so a writer that forgets it fails the parse
  * instead of quietly dropping the user's work.
+ *
+ * `pins` names the seed fields a preset switch and a contrast repair must leave alone. Required for
+ * the same reason as `overrides`: an empty list is a real answer, everything unpinned, so a missing
+ * key can only be a writer that forgot.
  */
-export const BrandVersionSchema = z.strictObject({
-	createdAt: z.iso.datetime(),
-	ordinal: z.number().int().positive(),
-	seed: BrandSeedSchema.nullable(),
-	tokenSet: TokenSetSchema.nullable(),
-	provider: z.string().min(1),
-	model: z.string().min(1),
-	promptVersion: z.string().min(1),
-	rawResponse: z.string().nullable(),
-	scaleEngine: z.string().min(1),
-	fontTable: FontTableRefSchema,
-	interpretation: z.enum(['faithful', 'balanced', 'expressive']),
-	overrides: z.array(TokenOverrideSchema),
-});
+export const BrandVersionSchema = z
+	.strictObject({
+		createdAt: z.iso.datetime(),
+		ordinal: z.number().int().positive(),
+		seed: BrandSeedSchema.nullable(),
+		tokenSet: TokenSetSchema.nullable(),
+		provider: z.string().min(1),
+		model: z.string().min(1),
+		promptVersion: z.string().min(1),
+		rawResponse: z.string().nullable(),
+		scaleEngine: z.string().min(1),
+		fontTable: FontTableRefSchema,
+		interpretation: z.enum(['faithful', 'balanced', 'expressive']),
+		overrides: z.array(TokenOverrideSchema),
+		pins: z.array(SeedPinPathSchema),
+	})
+	.superRefine((version, ctx) => {
+		// Checked here because this is where the seed and its pins meet. A pin past the end names no
+		// colour today, and it names whichever colour lands in that slot if the list ever grows, so
+		// reading it back would pin something the person never chose.
+		const available = version.seed?.keyColors?.length ?? 0;
+
+		version.pins.forEach((pin, index) => {
+			const keyIndex = keyColorIndex(pin);
+
+			if (keyIndex !== null && keyIndex >= available) {
+				ctx.addIssue({
+					code: 'custom',
+					path: ['pins', index],
+					message: `no key colour at index ${keyIndex}; the seed holds ${available}`,
+				});
+			}
+		});
+	});
 
 /**
  * Versions are append-only and ordered oldest first, so a record is a history rather than a

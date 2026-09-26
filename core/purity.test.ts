@@ -23,6 +23,7 @@ import { typeScale } from './type-scale';
 import { parseSeed } from './parse-seed';
 import { CAMBIUM_NAMESPACE, derived, invented, observed } from './provenance';
 import { rankFonts } from './rank-fonts';
+import { defaultSeedPins, repairPinsFor } from './seed-pins';
 import { BALANCED } from './interpretation';
 import { buildTokenSet } from './semantic-layer';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
@@ -142,6 +143,7 @@ const record = {
 			fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 			interpretation: 'balanced',
 			overrides: [],
+			pins: ['keyColors.0'],
 		},
 	],
 };
@@ -199,6 +201,10 @@ describe('core purity', () => {
 		],
 		['rankFonts', () => rankFonts(fontTable, rankableSeed).ok],
 		['the OKLCH scale engine', () => createOklchScaleEngine().generate(rampableSeed, BALANCED).ok],
+		[
+			'the seed pins',
+			() => repairPinsFor(rampableSeed, defaultSeedPins(rampableSeed)).has('dark:brand.9'),
+		],
 		[
 			'the semantic layer',
 			() => {

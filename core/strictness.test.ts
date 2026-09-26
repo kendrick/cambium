@@ -77,6 +77,7 @@ const record = {
 			fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 			interpretation: 'balanced',
 			overrides: [{ kind: 'value', category: 'radius', path: ['lg', 'value'], value: 1 }],
+			pins: ['keyColors.0'],
 		},
 	],
 };

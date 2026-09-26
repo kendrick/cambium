@@ -5,6 +5,7 @@ import { type BrandSeed, BrandSeedSchema } from './brand-seed';
 import { createOklchScaleEngine } from './oklch-scale-engine';
 import { CAMBIUM_NAMESPACE, derived, invented, observed } from './provenance';
 import { BALANCED } from './interpretation';
+import { defaultSeedPins } from './seed-pins';
 import { buildTokenSet } from './semantic-layer';
 import { type TokenExtensions, type TokenSet, TokenSetSchema } from './token-set';
 
@@ -110,6 +111,7 @@ function recordHolding(tokenSet: unknown) {
 				fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 				interpretation: 'balanced',
 				overrides: [],
+				pins: defaultSeedPins(STATED_SEED),
 			},
 		],
 	};

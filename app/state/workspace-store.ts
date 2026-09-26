@@ -6,6 +6,7 @@ import { checkContrast, type ContrastEntry } from '../../core/contrast/check';
 import { type UnrepairedEntry, withContrastRepairs } from '../../core/contrast/repair';
 import { type ScaleEngine, type ScaleEngineResult } from '../../core/scale-engine';
 import { BALANCED, type InterpretationParams } from '../../core/interpretation';
+import { repairPinsFor, type SeedPinPath } from '../../core/seed-pins';
 import { buildTokenSet } from '../../core/semantic-layer';
 import {
 	applyOverrides,
@@ -172,6 +173,7 @@ type CommitRequest = {
 	draftSeed: BrandSeed | null;
 	preset: Interpretation;
 	overrides: Record<string, TokenOverride>;
+	draftPins: SeedPinPath[];
 };
 
 /**
@@ -209,6 +211,12 @@ export type WorkspaceState = {
 	activeOrdinal: number | null;
 	/** The seed being edited, uncommitted. Diverges from `versions[active].seed` until committed. */
 	draftSeed: BrandSeed | null;
+	/**
+	 * The pins being edited, uncommitted like `draftSeed`. Always canonical (`canonicalPins`), so two
+	 * paths that arrive at the same pinned set commit the same array, whatever order a person
+	 * clicked in.
+	 */
+	draftPins: SeedPinPath[];
 	preset: Interpretation;
 	/**
 	 * Recomputed from the draft seed and the preset on every change, and never persisted. Derivation
@@ -249,6 +257,14 @@ export type WorkspaceState = {
 	/** Drops uncommitted edits, the same as `discardEdits`. Confirming that is the caller's job. */
 	selectVersion(ordinal: number): void;
 	editSeed(patch: Partial<BrandSeed>): void;
+	/** Adds the pin if it's absent, removes it if it's present. Leaves `draftSeed` untouched. */
+	togglePin(path: SeedPinPath): void;
+	/**
+	 * Replaces `draftPins` outright, for the one caller that isn't toggling one field at a time:
+	 * generation pins every key colour in one move, because every key colour it writes came from an
+	 * image (`app/generation/generate.ts`). Nothing in the rail calls this.
+	 */
+	setDraftPins(pins: SeedPinPath[]): void;
 	selectPreset(preset: Interpretation): void;
 	discardEdits(): void;
 	commit(provenance?: CommitProvenance): Promise<BrandRecord>;
@@ -328,6 +344,31 @@ function derive(
 	return seed ? engine.generate(seed, PRESET_PARAMS[preset]) : null;
 }
 
+/**
+ * Deduplicated and sorted, so a pin toggled on and back off leaves `draftPins` identical to having
+ * never touched it, rather than reordered by whichever field the person happened to click. Without
+ * this, two sessions that end up protecting the same fields could commit two different arrays, and
+ * `repairedBase`'s cache below would treat them as two different requests worth recomputing.
+ *
+ * Plain string sort, since `SeedPinPath` is always a bare field name or `keyColors.<n>`: nothing
+ * here needs numeric ordering to be stable, only to be the same ordering every time.
+ *
+ * Exported with `samePins` so the rail judges a pin toggle dirty by the same comparison the
+ * store's repair cache keys on. Two copies that only agree by luck are the divergent mirror in
+ * `docs/agents/testing.md`'s #75 row.
+ */
+export function canonicalPins(pins: readonly SeedPinPath[]): SeedPinPath[] {
+	// `toSorted` is ES2023 and tsconfig targets ES2022. The array is fresh, so `sort` mutates
+	// nothing a caller holds.
+	// oxlint-disable-next-line unicorn/no-array-sort
+	return [...new Set(pins)].sort();
+}
+
+/** True when two canonical pin lists name the same fields in the same order. */
+export function samePins(a: readonly SeedPinPath[], b: readonly SeedPinPath[]): boolean {
+	return a.length === b.length && a.every((pin, index) => pin === b[index]);
+}
+
 type Derivation = Pick<WorkspaceState, 'derived' | 'tokenSet' | 'overrideIssues' | 'contrast'>;
 
 /**
@@ -367,29 +408,46 @@ function withOverrides(
  * `ScaleEngine.generate`'s contract never promises a fresh object per call, and `buildTokenSet`
  * also reads `seed` directly for the non-colour categories. An engine that memoizes, or a test fake
  * that hands back the same `derived` for two different seeds, would otherwise serve a stale
- * repaired set for the second one. So each cache entry also carries the seed and preset that
- * produced it, and a lookup that doesn't match both recomputes instead of trusting `derived`'s
+ * repaired set for the second one. So each cache entry also carries the seed, preset and pins that
+ * produced it, and a lookup that doesn't match all three recomputes instead of trusting `derived`'s
  * identity alone.
+ *
+ * Pins are in the key too. A toggled pin changes what `repairPinsFor` protects without touching
+ * `seed`, `preset`, or `derived`'s identity, so leaving pins out would serve a repair computed for
+ * the wrong pinned set the moment someone toggled one.
  */
 const repairCache = new WeakMap<
 	Extract<ScaleEngineResult, { ok: true }>,
-	{ seed: BrandSeed; preset: Interpretation; repaired: TokenSet; unrepaired: UnrepairedEntry[] }
+	{
+		seed: BrandSeed;
+		preset: Interpretation;
+		pins: SeedPinPath[];
+		repaired: TokenSet;
+		unrepaired: UnrepairedEntry[];
+	}
 >();
 
 function repairedBase(
 	derived: Extract<ScaleEngineResult, { ok: true }>,
 	seed: BrandSeed,
 	preset: Interpretation,
+	pins: SeedPinPath[],
 ): { repaired: TokenSet; unrepaired: UnrepairedEntry[] } {
 	const cached = repairCache.get(derived);
 
-	if (cached && cached.preset === preset && sameSeed(cached.seed, seed)) {
+	if (
+		cached &&
+		cached.preset === preset &&
+		sameSeed(cached.seed, seed) &&
+		samePins(cached.pins, pins)
+	) {
 		return cached;
 	}
 
 	const base = buildTokenSet(derived.schemes, seed, PRESET_PARAMS[preset]);
-	const { tokenSet, unrepaired } = withContrastRepairs(base);
-	const result = { seed, preset, repaired: tokenSet, unrepaired };
+	const pinned = repairPinsFor(seed, pins);
+	const { tokenSet, unrepaired } = withContrastRepairs(base, { pinned });
+	const result = { seed, preset, pins, repaired: tokenSet, unrepaired };
 
 	repairCache.set(derived, result);
 
@@ -410,12 +468,13 @@ function tokensFor(
 	seed: BrandSeed | null,
 	preset: Interpretation,
 	overrides: Record<string, TokenOverride>,
+	pins: SeedPinPath[],
 ): Pick<WorkspaceState, 'tokenSet' | 'overrideIssues' | 'contrast'> {
 	if (!seed || !derived?.ok) {
 		return { tokenSet: null, overrideIssues: {}, contrast: null };
 	}
 
-	const { repaired, unrepaired } = repairedBase(derived, seed, preset);
+	const { repaired, unrepaired } = repairedBase(derived, seed, preset, pins);
 	const { tokenSet, overrideIssues } =
 		Object.keys(overrides).length === 0
 			? { tokenSet: repaired, overrideIssues: {} }
@@ -430,14 +489,15 @@ function derivation(
 	seed: BrandSeed | null,
 	preset: Interpretation,
 	overrides: Record<string, TokenOverride>,
+	pins: SeedPinPath[],
 ): Derivation {
 	const derived = derive(engine, seed, preset);
 
-	return { derived, ...tokensFor(derived, seed, preset, overrides) };
+	return { derived, ...tokensFor(derived, seed, preset, overrides, pins) };
 }
 
 /**
- * The three fields a version dictates, in one piece. Opening a record, switching versions,
+ * The four fields a version dictates, in one piece. Opening a record, switching versions,
  * discarding edits, and closing all land on the same answer, and splitting it across four call
  * sites is how one of them ends up forgetting to re-derive.
  *
@@ -446,7 +506,7 @@ function derivation(
 function workspaceFor(
 	engine: ScaleEngine,
 	version: BrandVersion | null,
-): Pick<WorkspaceState, 'draftSeed' | 'preset' | 'overrides'> & Derivation {
+): Pick<WorkspaceState, 'draftSeed' | 'preset' | 'overrides' | 'draftPins'> & Derivation {
 	const draftSeed = version?.seed ?? null;
 	const preset = version?.interpretation ?? 'balanced';
 	// Landing on a version takes its stored overrides and drops the draft's, the same as the seed.
@@ -456,8 +516,18 @@ function workspaceFor(
 	const overrides = Object.fromEntries(
 		(version?.overrides ?? []).map((override) => [overrideKey(override), override]),
 	);
+	// Canonicalised on the way in, not just on the way out of `togglePin`: nothing here guarantees a
+	// stored version's own `pins` arrived deduplicated and sorted, and the repair cache above trusts
+	// `samePins` to compare two canonical lists rather than doing a set comparison itself.
+	const pins = canonicalPins(version?.pins ?? []);
 
-	return { draftSeed, preset, overrides, ...derivation(engine, draftSeed, preset, overrides) };
+	return {
+		draftSeed,
+		preset,
+		overrides,
+		draftPins: pins,
+		...derivation(engine, draftSeed, preset, overrides, pins),
+	};
 }
 
 function versionAt(record: BrandRecord, ordinal: number | null): BrandVersion | null {
@@ -484,8 +554,12 @@ function sameSeed(a: BrandSeed | null, b: BrandSeed | null): boolean {
  * `[1, 999, 3]` come back equal under `every`, and equal here means an edited seed keeps a model's
  * name. Nothing builds a sparse seed today, and that is the wrong thing to rest a false attribution
  * on.
+ *
+ * Exported because the rail's own "is this dirty" check needs the identical walk `sameSeed` runs
+ * before it decides whether a commit needs provenance: a rail that judged dirtiness by a slightly
+ * different equality could show Save enabled for an edit the store's own guard then refuses.
  */
-function sameJson(a: unknown, b: unknown): boolean {
+export function sameJson(a: unknown, b: unknown): boolean {
 	if (a === b) {
 		return true;
 	}
@@ -559,7 +633,7 @@ export function createWorkspaceStore({
 }: WorkspaceStoreOptions): StoreApi<WorkspaceState> {
 	return createStore<WorkspaceState>()((set, get) => {
 		async function appendVersion(request: CommitRequest): Promise<BrandRecord> {
-			const { provenance, activeOrdinal, draftSeed, preset, overrides } = request;
+			const { provenance, activeOrdinal, draftSeed, preset, overrides, draftPins } = request;
 
 			// A queued commit belongs to the workspace that asked for it. `commit` captures the request
 			// synchronously and this body runs a turn later at the earliest, so by now the workspace can
@@ -639,6 +713,11 @@ export function createWorkspaceStore({
 				// stored instead, because they are the user's input the way the seed is the model's.
 				tokenSet: null,
 				overrides: Object.values(overrides),
+				// The draft's own pins, not the active version's: a pin toggle is an uncommitted edit like
+				// `draftSeed` or an override, so it has to ride the same commit that captured it rather than
+				// the one the workspace happened to have open. Canonical already, from every path that sets
+				// `draftPins`, so this is the array the schema's own out-of-range check runs against.
+				pins: draftPins,
 				scaleEngine: engine.id,
 				interpretation: preset,
 			};
@@ -706,7 +785,7 @@ export function createWorkspaceStore({
 						...(adopted
 							? {
 									draftSeed: adopted,
-									...derivation(engine, adopted, get().preset, get().overrides),
+									...derivation(engine, adopted, get().preset, get().overrides, get().draftPins),
 								}
 							: {}),
 					});
@@ -775,6 +854,7 @@ export function createWorkspaceStore({
 			record: null,
 			activeOrdinal: null,
 			draftSeed: null,
+			draftPins: [],
 			preset: 'balanced',
 			derived: null,
 			overrides: {},
@@ -809,21 +889,43 @@ export function createWorkspaceStore({
 			},
 
 			editSeed(patch) {
-				const { draftSeed, preset, overrides } = get();
+				const { draftSeed, preset, overrides, draftPins } = get();
 				const next = { ...(draftSeed ?? EMPTY_SEED), ...patch };
 
-				// No storage write. An edit is uncommitted by definition, and derivation is cheap enough
-				// to run on every keystroke, which is the whole reason tokens are not stored.
-				set({ draftSeed: next, ...derivation(engine, next, preset, overrides) });
+				// Pins ride along unchanged. A pin names a field, not a value, so editing the value under
+				// a pinned field—recolouring a key colour, say—leaves the pin exactly where it was. A key
+				// colour pin names an index rather than a role, and `repairPinsFor` re-reads which ramp
+				// that index sits on from the current seed every time derivation runs below, so a
+				// `proposedRole` edit that moves a pinned colour onto a different ramp keeps that ramp's
+				// step 9 protected instead of the old one.
+				// No storage write either way. An edit is uncommitted by definition, and derivation is
+				// cheap enough to run on every keystroke, which is the whole reason tokens are not stored.
+				set({ draftSeed: next, ...derivation(engine, next, preset, overrides, draftPins) });
+			},
+
+			togglePin(path) {
+				const { draftSeed, preset, overrides, draftPins } = get();
+				const next = draftPins.includes(path)
+					? draftPins.filter((pin) => pin !== path)
+					: canonicalPins([...draftPins, path]);
+
+				set({ draftPins: next, ...derivation(engine, draftSeed, preset, overrides, next) });
+			},
+
+			setDraftPins(pins) {
+				const { draftSeed, preset, overrides } = get();
+				const next = canonicalPins(pins);
+
+				set({ draftPins: next, ...derivation(engine, draftSeed, preset, overrides, next) });
 			},
 
 			selectPreset(preset) {
-				const { draftSeed, overrides } = get();
-				set({ preset, ...derivation(engine, draftSeed, preset, overrides) });
+				const { draftSeed, overrides, draftPins } = get();
+				set({ preset, ...derivation(engine, draftSeed, preset, overrides, draftPins) });
 			},
 
 			setOverride(override) {
-				const { draftSeed, preset, derived, overrides } = get();
+				const { draftSeed, preset, derived, overrides, draftPins } = get();
 
 				if (!draftSeed || !derived?.ok) {
 					throw new Error('nothing is derived to override');
@@ -833,7 +935,7 @@ export function createWorkspaceStore({
 				const next = { ...overrides, [key]: override };
 				// The ramps don't depend on overrides, so the derivation already held is reused rather than
 				// running the engine again for an edit that cannot change it.
-				const result = tokensFor(derived, draftSeed, preset, next);
+				const result = tokensFor(derived, draftSeed, preset, next, draftPins);
 				const issues = result.overrideIssues[key];
 
 				// Only the new override's own failure refuses the call. One already held and already
@@ -847,7 +949,7 @@ export function createWorkspaceStore({
 			},
 
 			clearOverride(key) {
-				const { draftSeed, preset, derived, overrides } = get();
+				const { draftSeed, preset, derived, overrides, draftPins } = get();
 
 				if (!Object.hasOwn(overrides, key)) {
 					return;
@@ -856,7 +958,7 @@ export function createWorkspaceStore({
 				const next = { ...overrides };
 				delete next[key];
 
-				set({ overrides: next, ...tokensFor(derived, draftSeed, preset, next) });
+				set({ overrides: next, ...tokensFor(derived, draftSeed, preset, next, draftPins) });
 			},
 
 			discardEdits() {
@@ -876,7 +978,7 @@ export function createWorkspaceStore({
 				// version or keep typing while this waits behind an earlier write, and a commit that read
 				// the workspace then would persist that instead, under provenance describing a seed it
 				// never saw.
-				const { activeOrdinal, draftSeed, preset, overrides } = get();
+				const { activeOrdinal, draftSeed, preset, overrides, draftPins } = get();
 				const request: CommitRequest = {
 					provenance,
 					session,
@@ -885,6 +987,7 @@ export function createWorkspaceStore({
 					draftSeed,
 					preset,
 					overrides,
+					draftPins,
 				};
 
 				// Both arms run the commit: a rejected one must not wedge every commit behind it.

@@ -171,12 +171,23 @@ export function shadowScale(
 	return { source: 'derived', values };
 }
 
-/** Null is a seed that measured no shadow character, and 1 is the honest multiplier for that. */
-function diffusionFor(spread: 'tight' | 'diffuse' | undefined): number {
-	if (spread === 'tight') return 0.7;
-	if (spread === 'diffuse') return 1.5;
-
-	return 1;
+/**
+ * Null is a seed that measured no shadow character, and 1 is the honest multiplier for that.
+ * `normal` shares it on purpose: it's what the rail's Set writes into a null field, and Set must
+ * leave every shadow where it was.
+ */
+function diffusionFor(
+	spread: NonNullable<BrandSeed['shadowCharacter']>['spread'] | undefined,
+): number {
+	switch (spread) {
+		case 'tight':
+			return 0.7;
+		case 'diffuse':
+			return 1.5;
+		case 'normal':
+		case undefined:
+			return 1;
+	}
 }
 
 function px(value: number): { value: number; unit: 'px' } {

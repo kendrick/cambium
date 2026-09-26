@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/brand-record';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
+import { defaultSeedPins } from '../../core/seed-pins';
 import type { TokenOverride } from '../../core/token-overrides';
 import error400 from '../readers/fixtures/error-400-invalid-request.json';
 import error401 from '../readers/fixtures/error-401-credentials.json';
@@ -136,6 +137,7 @@ function version(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 		interpretation: 'balanced',
 		overrides: [],
+		pins: [],
 		...overrides,
 	};
 }
@@ -362,6 +364,40 @@ describe('generate', () => {
 			expect(result.ok).toBe(true);
 			expect(after?.versions.at(-1)?.overrides).toEqual([]);
 			expect(after?.versions[0]?.overrides).toEqual([held]);
+		});
+
+		// Every key colour the model reports came from an image, so every one starts pinned. The
+		// expected value is `defaultSeedPins` on the seed the response parsed to, not a literal list
+		// of indices, so a change to the success fixture's key colours needs no hand-counted update.
+		it.each(STARTING_RECORDS)(
+			'pins every key colour on the generated version, regardless of what $label pinned',
+			async ({ build }) => {
+				const setup = await storeWith(build());
+
+				const result = await run(setup, replay(SUCCESS_ON_GENERATION_MODEL));
+				const after = await setup.store.get(RECORD_ID);
+				const generatedSeed = after?.versions.at(-1)?.seed;
+
+				expect(result.ok).toBe(true);
+				expect(generatedSeed?.keyColors?.length).toBeGreaterThan(0);
+				expect(after?.versions.at(-1)?.pins).toEqual(defaultSeedPins(generatedSeed!));
+			},
+		);
+
+		// The prior version's pins name indices into a seed this commit replaces, so carrying them
+		// forward the way `open` ordinarily would could point past the new seed's key colours, or
+		// miss ones it has. Starting from a pin on `radiusCharacter`, which `defaultSeedPins` never
+		// pins, makes a store that carried `active.pins` forward show up as the wrong pin surviving.
+		it('does not carry the previous version’s pins into the newly generated one', async () => {
+			const setup = await storeWith(record([version({ pins: ['radiusCharacter'] })]));
+
+			const result = await run(setup, replay(SUCCESS_ON_GENERATION_MODEL));
+			const after = await setup.store.get(RECORD_ID);
+			const generatedSeed = after?.versions.at(-1)?.seed;
+
+			expect(result.ok).toBe(true);
+			expect(after?.versions.at(-1)?.pins).toEqual(defaultSeedPins(generatedSeed!));
+			expect(after?.versions.at(-1)?.pins).not.toEqual(['radiusCharacter']);
 		});
 
 		// Asserted on the request body, because the stored model is whatever the response names. Only
@@ -914,6 +950,12 @@ describe('generate', () => {
 			expect((await setup.store.get(RECORD_ID))?.versions).toMatchObject([
 				{ ordinal: 1, model: 'claude-opus-5-5', rawResponse: SUCCESS_TEXT },
 			]);
+			// A save-again never asks the model again, so the kept seed is the only seed
+			// `saveGeneratedVersion` sees. It's still a generated seed, so it pins every key colour,
+			// as the first attempt would have before storage rejected it.
+			expect((await setup.store.get(RECORD_ID))?.versions[0]?.pins).toEqual(
+				defaultSeedPins(result.failure.seed),
+			);
 		});
 	});
 });

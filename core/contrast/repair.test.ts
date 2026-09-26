@@ -571,4 +571,24 @@ describe('withContrastRepairs', () => {
 			expect(checkContrast(repaired).filter((entry) => !entry.passes)).toEqual([]);
 		}
 	});
+
+	/**
+	 * An options bag reaches `repairContrast` unchanged. Checked against a hand-composed call with
+	 * the same options, as the no-argument case above is checked against one with none, so this
+	 * can't pass by dropping the pin on the way through.
+	 */
+	it('forwards a pinned set to repairContrast, never falling back to defaultPins', () => {
+		const base = sweptSet('blue');
+		const pinned = new Set([...observedSteps(base), pinKey('light', 'brand', 1)]);
+		const { overrides, unrepaired } = repairContrast(base, { pinned });
+
+		expect(withContrastRepairs(base, { pinned })).toEqual({
+			tokenSet: applied(base, overrides),
+			unrepaired,
+		});
+		// `brand.1` is the step the no-options case above moves for blue (see the "pins" describe
+		// block), so pinning it here and getting a different set proves the option reached
+		// `repairContrast` and isn't a no-op that happened to match.
+		expect(withContrastRepairs(base)).not.toEqual(withContrastRepairs(base, { pinned }));
+	});
 });

@@ -17,6 +17,7 @@ import { serializeDtcg } from '../core/dtcg/serialize';
 import { exportArtifacts, type ExportArtifact } from '../core/export/artifacts';
 import { BALANCED } from '../core/interpretation';
 import { createOklchScaleEngine } from '../core/oklch-scale-engine';
+import { defaultSeedPins } from '../core/seed-pins';
 import { buildTokenSet } from '../core/semantic-layer';
 import { applyOverrides, type TokenOverride } from '../core/token-overrides';
 
@@ -117,6 +118,7 @@ function buildRecord(brandUrl: string | null, overrides: TokenOverride[] = []): 
 				fontTable: { source: 'cambium-e2e-fixture', version: '1' },
 				interpretation: 'balanced',
 				overrides,
+				pins: defaultSeedPins(SEED),
 			},
 		],
 	} satisfies BrandRecord);

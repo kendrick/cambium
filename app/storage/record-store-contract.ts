@@ -25,6 +25,7 @@ function makeVersion(overrides: Partial<BrandVersion> = {}): BrandVersion {
 		fontTable: { source: 'in-repo', version: 'cambium-curated-1' },
 		interpretation: 'balanced',
 		overrides: [],
+		pins: [],
 		...overrides,
 	};
 }
@@ -1208,6 +1209,18 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			expect((await read(store, record.id)).versions[0]?.overrides).toEqual(
 				record.versions[0]?.overrides,
 			);
+		});
+
+		// Pins save and revert with the draft the way overrides do, so they round-trip the same way:
+		// a key colour pin and a field pin, in the order they were set.
+		it('round-trips a version carrying pins unchanged', async () => {
+			const pins: BrandVersion['pins'] = ['keyColors.0', 'radiusCharacter'];
+			const record = makeRecordWithHue(200);
+			record.versions[0] = { ...record.versions[0]!, pins };
+
+			const stored = await store.put(record);
+			expect(stored.versions[0]?.pins).toEqual(pins);
+			expect((await read(store, record.id)).versions[0]?.pins).toEqual(pins);
 		});
 
 		// Matched against `Error` to stay implementation-blind, like the smuggled-field case. Putting
