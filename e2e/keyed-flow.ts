@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 
+import { VALID_FAMILIES_CSV } from '../app/fonts/fixtures/families.csv';
 import { ANTHROPIC_MESSAGES_URL } from '../app/readers/anthropic-reader';
 // `with { type: 'json' }` is required here: Playwright runs this file as native Node ESM
 // (`package.json`'s `"type": "module"`), and Node's own loader refuses a JSON import without the
@@ -11,6 +12,26 @@ import { expect } from './fixtures';
 import { makePng } from './fixtures/png';
 
 const PNG_NAME = 'brand.png';
+
+/**
+ * Everything the font lookup fetches from jsDelivr ends in this file (`UPSTREAM_URL` in
+ * `app/fonts/font-table-provider.ts`). The workspace fires this fetch on mount whenever a version's
+ * seed carries a font pairing, so both `generate.spec.ts` (stalls it on purpose) and
+ * `keyed-path.spec.ts` (serves it from `serveFontTable` below) need the same glob to catch the one
+ * request between them.
+ */
+export const FONT_TABLE_CSV_GLOB = '**/families.csv';
+
+/**
+ * Answers the font-table lookup from the committed `families.csv` fixture, so a workspace whose
+ * seed carries a font pairing never reaches jsDelivr for it. Scenarios that stall or fail that
+ * lookup on purpose route `FONT_TABLE_CSV_GLOB` themselves instead of calling this.
+ */
+export async function serveFontTable(page: Page): Promise<void> {
+	await page.route(FONT_TABLE_CSV_GLOB, (route) =>
+		route.fulfill({ status: 200, contentType: 'text/csv', body: VALID_FAMILIES_CSV }),
+	);
+}
 
 /**
  * Chromium preflights the actual POST because `x-api-key` and `anthropic-version` aren't simple
@@ -34,7 +55,8 @@ type MockResponse = { status: number; body: unknown; headers?: Record<string, st
 /**
  * Installs the one route every scenario needs: answer the CORS preflight, then hand each real
  * POST to `respond`. `respond` sees the parsed body and how many real requests have landed so far
- * (1-based), which is what the repair and no-auto-retry scenarios need to tell requests apart.
+ * (1-based), which is what generate.spec.ts's repair and no-auto-retry scenarios need to tell
+ * requests apart.
  *
  * The returned array is the live list of requests sent so far—it grows as the page makes
  * requests, so a scenario can `expect(sent.length)` after waiting on whatever the UI does next.
@@ -92,6 +114,20 @@ export function imageIdFromRequest(body: SentBody): string {
 }
 
 /**
+ * The one text block the success fixture carries, unparsed. `successResponseBody`'s id rewrite and
+ * `fixtureBrandKeyColor`'s read of the fixture's seed both start here, so a fixture that ever grew
+ * a second text block fails in one place instead of two copies of the same lookup drifting apart.
+ */
+function successFixtureTextBlock(): string {
+	const body = structuredSuccessFixture.body as { content: { type: string; text?: string }[] };
+	const textBlock = body.content.find((block) => block.type === 'text' && block.text);
+
+	if (!textBlock?.text) throw new Error('the success fixture carries no text block to read');
+
+	return textBlock.text;
+}
+
+/**
  * The success fixture, aimed at whichever image the record actually holds. `BrandRecordSchema`'s
  * `superRefine` (`core/brand-record.ts`) checks two fields against the record's own image ids,
  * `keyColors[].sourceImageId` and `imageClassifications[].imageId`, so both move or the seed still
@@ -101,22 +137,31 @@ export function imageIdFromRequest(body: SentBody): string {
  * and generation runs on `GENERATION_MODEL`, which is `claude-opus-5-5`.
  */
 export function successResponseBody(imageId: string): unknown {
-	const fixtureBody = structuredSuccessFixture.body as {
-		content: { type: string; text?: string }[];
-	} & Record<string, unknown>;
-	const textBlock = fixtureBody.content.find((block) => block.type === 'text' && block.text);
-
-	if (!textBlock?.text) throw new Error('the success fixture carries no text block to rewrite');
-
-	const rewrittenSeed = textBlock.text
+	const rewrittenSeed = successFixtureTextBlock()
 		.replace(/"sourceImageId":"[^"]*"/g, `"sourceImageId":"${imageId}"`)
 		.replace(/"imageId":"[^"]*"/g, `"imageId":"${imageId}"`);
 
 	return {
-		...fixtureBody,
+		...(structuredSuccessFixture.body as Record<string, unknown>),
 		model: 'claude-opus-5-5',
 		content: [{ type: 'text', text: rewrittenSeed }],
 	};
+}
+
+/**
+ * The fixture's own brand key colour, read out of the recorded response rather than copied as a
+ * literal: `successResponseBody` rewrites only the id fields, so this is exactly the colour the
+ * seed rail renders after a real generation.
+ */
+export function fixtureBrandKeyColor(): { oklch: readonly [number, number, number] } {
+	const seed = JSON.parse(successFixtureTextBlock()) as {
+		keyColors: { oklch: [number, number, number]; proposedRole: string }[];
+	};
+	const brand = seed.keyColors.find((color) => color.proposedRole === 'brand');
+
+	if (!brand) throw new Error('the success fixture carries no brand-role key colour');
+
+	return brand;
 }
 
 export function pngFile(name: string, width = 2, height = 2) {
@@ -125,8 +170,8 @@ export function pngFile(name: string, width = 2, height = 2) {
 
 /**
  * Stages one reference image and saves it, the same path `e2e/indexeddb.spec.ts` drives. Returns
- * the id the "Saved." outcome put in the URL, which is the one every scenario below needs to reach
- * `GeneratePanel` and to read the record back afterward.
+ * the id the "Saved." outcome put in the URL, which is what every scenario in generate.spec.ts and
+ * keyed-path.spec.ts needs to reach `GeneratePanel` and to read the record back afterward.
  */
 export async function saveOneRecord(page: Page, file = pngFile(PNG_NAME)): Promise<string> {
 	await page.goto('/');
@@ -156,7 +201,8 @@ export function keyDialog(page: Page) {
 
 /**
  * By role and name rather than `type="submit"`: the dialog deliberately has no form to submit,
- * because Chrome's password manager watches form submissions (see the password-manager scenario).
+ * because Chrome's password manager watches form submissions (see generate.spec.ts's
+ * password-manager scenario).
  */
 export function useKeyButton(page: Page) {
 	return keyDialog(page).getByRole('button', { name: 'Use this key' });

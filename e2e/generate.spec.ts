@@ -19,6 +19,7 @@ import { defaultSeedPins } from '../core/seed-pins';
 
 import { expect, test } from './fixtures';
 import {
+	FONT_TABLE_CSV_GLOB,
 	generateButton,
 	generateWithFreshKey,
 	imageIdFromRequest,
@@ -812,12 +813,6 @@ test('a stalled request can be cancelled, which offers a retry and saves no vers
 	expect(consoleMessages.join('\n')).not.toContain(TEST_KEY);
 	expect(sent).toHaveLength(1);
 });
-
-/**
- * Everything the font lookup fetches from jsDelivr ends in this file (`UPSTREAM_URL` in
- * `app/fonts/font-table-provider.ts`). No other scenario routes it, so it only stalls here.
- */
-const FONT_TABLE_CSV_GLOB = '**/families.csv';
 
 test('a font lookup stalled before any request can be cancelled, which sends nothing and offers a retry', async ({
 	page,
