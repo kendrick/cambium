@@ -1,0 +1,9 @@
+{
+	"raw": "{\"keyColors\":[{\"oklch\":[0.532,0.168,262],\"proposedRole\":\"brand\",\"sourceImageId\":\"a0db2bb2-38bc-4637-9412-4467a4fa1a86\",\"sourceRegion\":{\"x\":0.118,\"y\":0.162,\"width\":0.047,\"height\":0.014}}],\"neutralTemperature\":{\"hue\":250,\"chroma\":0.008},\"radiusCharacter\":{\"base\":0,\"progression\":\"sharp\"},\"shadowCharacter\":null,\"trackingFeel\":\"normal\",\"typeClassification\":{\"category\":\"sans\",\"tone\":\"grotesque\",\"xHeight\":\"high\",\"displayDiffersFromBody\":true},\"suggestedPairing\":{\"display\":[{\"provenance\":\"derived\",\"family\":\"Noto Serif\",\"score\":91,\"rationale\":\"A practical serif with the traditional editorial character visible in headings.\"},{\"provenance\":\"derived\",\"family\":\"Source Serif 4\",\"score\":84,\"rationale\":\"Matches the restrained, highly legible reference-style heading tone.\"}],\"body\":[{\"provenance\":\"derived\",\"family\":\"Noto Sans\",\"score\":94,\"rationale\":\"High-x-height, neutral sans built for dense multilingual reading.\"},{\"provenance\":\"derived\",\"family\":\"Roboto\",\"score\":81,\"rationale\":\"A compact, utilitarian grotesque suited to information-dense body copy.\"}],\"mono\":[]},\"typeScaleRatio\":null,\"imageClassifications\":[{\"imageId\":\"a0db2bb2-38bc-4637-9412-4467a4fa1a86\",\"detected\":\"ui\"}],\"expressive\":[{\"axis\":\"Competent\",\"score\":92},{\"axis\":\"Business\",\"score\":82},{\"axis\":\"Stiff\",\"score\":72},{\"axis\":\"Calm\",\"score\":67}] }",
+	"provider": "codex",
+	"model": "gpt-5.6-terra",
+	"promptVersion": "seed-v4",
+	"requestId": "01a0deca-d1b4-7280-86ab-648583dcfb9b",
+	"imageIds": ["a0db2bb2-38bc-4637-9412-4467a4fa1a86"],
+	"originalHashes": ["sha256:cc0325ccd84ddde759c46ae39b2649d56bf2f994c4f74c4c42f5f1cc1a6430ca"]
+}

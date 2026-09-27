@@ -1,0 +1,9 @@
+{
+	"raw": "{\"keyColors\":[{\"oklch\":[0.58,0.035,225],\"proposedRole\":\"brand\",\"sourceImageId\":\"df9fc4c6-adfa-45da-8f7a-d15da03de0cf\",\"sourceRegion\":null}],\"neutralTemperature\":{\"hue\":225,\"chroma\":0.012},\"radiusCharacter\":null,\"shadowCharacter\":{\"spread\":\"diffuse\",\"tintFromSurface\":true},\"trackingFeel\":null,\"typeClassification\":null,\"suggestedPairing\":null,\"typeScaleRatio\":null,\"imageClassifications\":[{\"imageId\":\"df9fc4c6-adfa-45da-8f7a-d15da03de0cf\",\"detected\":\"photo\"}],\"expressive\":[{\"axis\":\"Calm\",\"score\":91},{\"axis\":\"Artistic\",\"score\":83},{\"axis\":\"Sophisticated\",\"score\":72},{\"axis\":\"Sincere\",\"score\":63}]}",
+	"provider": "codex",
+	"model": "gpt-5.6-terra",
+	"promptVersion": "seed-v4",
+	"requestId": "01a0decb-9d53-76a0-8f2b-791d28dc93ce",
+	"imageIds": ["df9fc4c6-adfa-45da-8f7a-d15da03de0cf"],
+	"originalHashes": ["sha256:8c4122b93a420bdc1bb939f5aab3a8fa368e276eab7f97c630c03e446ca28faf"]
+}

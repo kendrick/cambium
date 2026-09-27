@@ -1,0 +1,9 @@
+{
+	"raw": "{\"keyColors\":[{\"oklch\":[0.48,0.08,210],\"proposedRole\":\"brand\",\"sourceImageId\":\"0004ae09-2c7c-4ba6-8360-c071c731f98e\",\"sourceRegion\":{\"x\":0.37,\"y\":0.62,\"width\":0.2,\"height\":0.12}},{\"oklch\":[0.64,0.13,72],\"proposedRole\":\"accent\",\"sourceImageId\":\"0004ae09-2c7c-4ba6-8360-c071c731f98e\",\"sourceRegion\":{\"x\":0.02,\"y\":0.08,\"width\":0.68,\"height\":0.1}}],\"neutralTemperature\":{\"hue\":65,\"chroma\":0.025},\"radiusCharacter\":null,\"shadowCharacter\":null,\"trackingFeel\":null,\"typeClassification\":null,\"suggestedPairing\":null,\"typeScaleRatio\":null,\"imageClassifications\":[{\"imageId\":\"0004ae09-2c7c-4ba6-8360-c071c731f98e\",\"detected\":\"photo\"}],\"expressive\":[{\"axis\":\"Artistic\",\"score\":90},{\"axis\":\"Rugged\",\"score\":82},{\"axis\":\"Sophisticated\",\"score\":70},{\"axis\":\"Calm\",\"score\":68}]}",
+	"provider": "codex",
+	"model": "gpt-5.6-terra",
+	"promptVersion": "seed-v4",
+	"requestId": "01a0decb-6b3b-7863-8f47-39710193f1af",
+	"imageIds": ["0004ae09-2c7c-4ba6-8360-c071c731f98e"],
+	"originalHashes": ["sha256:d29e952229ec7e7995cca16d10e5a44d57f5eccf9a021cf2cd0a6035b40bd0d4"]
+}
