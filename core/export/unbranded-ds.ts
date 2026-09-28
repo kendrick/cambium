@@ -1,6 +1,6 @@
 import { boxShadow, length } from '../css/globals-css';
 import { formatCssNumber, toOklchCss } from '../css/oklch-css';
-import { contrastFromOklch, type Oklch, readOklch } from '../oklch';
+import { contrastFromOklch, fitToSrgbGamut, type Oklch, readOklch } from '../oklch';
 import { resolveScheme } from '../resolve-scheme';
 import {
 	type CubicBezierValue,
@@ -23,7 +23,36 @@ export type UnbrandedDsReport = {
 	defaulted: string[];
 	/** Cambium tokens the target declares no key for, so they reach neither output. */
 	unmapped: string[];
+	/** Foregrounds moved so a vendored contrast pair clears the target's own measurement. */
+	adjusted: UnbrandedDsAdjustment[];
 };
+
+/** One foreground lightness move, with the pair's ratio before and after it. */
+export type UnbrandedDsAdjustment = {
+	/** `<foreground> / <background>`, spelled the way the target's validator reports a pair. */
+	pair: string;
+	from: string;
+	to: string;
+	fromRatio: number;
+	toRatio: number;
+};
+
+/**
+ * `{ foreground, background, threshold }` rows off the target's `contrastPairs`, the pairs its
+ * `validateTheme` and `registerTheme` refuse a theme over.
+ */
+const CONTRAST_PAIRS: ReadonlyArray<{ foreground: string; background: string; threshold: number }> =
+	vendored.contrastPairs.pairs;
+
+/**
+ * How far past a threshold an adjusted pair lands. The adapter measures through culori, the target
+ * through its own OKLab matrices, and the two differ by under 1e-7 on these colours; the margin
+ * also absorbs the six-decimal rounding `toOklchCss` prints.
+ */
+const CONTRAST_MARGIN = 1e-3;
+
+/** Enough passes for a foreground shared by several pairs to settle; more means a cycle. */
+const MAX_ADJUSTMENT_PASSES = 8;
 
 /**
  * One DTCG leaf the way the target's own source files write it: a string `$value` even for a
@@ -142,7 +171,18 @@ export function unbrandedDsReport(tokens: TokenSet): Record<UnbrandedDsScheme, U
 
 /**
  * The runtime theme unbranded-ds's `registerTheme` takes, for one colour scheme. The target keeps
- * scheme on its own axis, so a document carries one scheme's values and a caller registers two.
+ * scheme on its own axis, so a document carries one scheme's values.
+ *
+ * `registerTheme(doc)` emits one `<style id="ds-theme-<name>">` block under `[data-theme="<name>"]`
+ * and removes any earlier block with that id. Registering the light and dark documents under one
+ * name keeps only the second, whatever the page's colour scheme. Either register only the active
+ * scheme's document and re-register it when the scheme changes, or give each scheme's document its
+ * own `name` and switch `data-theme` between them.
+ *
+ * Every foreground in the target's contrast pairs clears its threshold in the target's own
+ * arithmetic, which is unrounded WCAG 2. Cambium's repair gates on 8-bit-rounded contrast and can
+ * leave a pair at 4.49 there, so a failing foreground's lightness moves the minimum distance away
+ * from its background. `report.adjusted` lists each move.
  *
  * Every key the target requires is present, so the document doesn't depend on the target merging it
  * onto its defaults, and `report.defaulted` names each value Cambium didn't supply. The same report
@@ -196,8 +236,14 @@ export function toUnbrandedDsSource(
 	tokens: TokenSet,
 	identity: string,
 ): Record<string, UnbrandedDsSourceDocument> {
-	if (identity === '' || /[/\\]/.test(identity) || identity.includes('..')) {
-		throw new Error(`"${identity}" can't name a theme directory under themes/theme/`);
+	// The identity names a directory the target's build walks and lands in a `[data-theme="…"]`
+	// selector. "." writes a loose themes/theme/light.json the build never reads, and a quote or
+	// bracket breaks the selector. The target's own identities (brand, lcars, vaporwave) are
+	// lowercase kebab, so that's the whole allowed shape.
+	if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(identity)) {
+		throw new Error(
+			`"${identity}" isn't a usable unbranded-ds theme identity; use lowercase letters, digits and single hyphens, like "acme-brand"`,
+		);
 	}
 
 	const parsed = TokenSetSchema.parse(tokens);
@@ -273,8 +319,100 @@ function mapScheme(
 	}
 
 	const unmapped = [...cambium.keys()].filter((path) => !consumed.has(path));
+	const adjusted = clearContrastPairs(values);
 
-	return { values, report: { defaulted, unmapped } };
+	return { values, report: { defaulted, unmapped, adjusted } };
+}
+
+/**
+ * Moves each failing pair's foreground until every vendored pair clears, and returns the moves.
+ * Repeats because one foreground can sit in several pairs, and the target checks all of them.
+ */
+function clearContrastPairs(values: Map<string, string>): UnbrandedDsAdjustment[] {
+	const adjusted: UnbrandedDsAdjustment[] = [];
+
+	for (let pass = 0; pass < MAX_ADJUSTMENT_PASSES; pass += 1) {
+		let moved = false;
+
+		for (const pair of CONTRAST_PAIRS) {
+			const foreground = values.get(pair.foreground)!;
+			const background = values.get(pair.background)!;
+			const floor = pair.threshold + CONTRAST_MARGIN;
+			const fromRatio = cssContrast(foreground, background);
+
+			if (fromRatio >= floor) continue;
+
+			const to = clearingForeground(foreground, background, floor, pair);
+
+			values.set(pair.foreground, to);
+			adjusted.push({
+				pair: `${pair.foreground} / ${pair.background}`,
+				from: foreground,
+				to,
+				fromRatio,
+				toRatio: cssContrast(to, background),
+			});
+			moved = true;
+		}
+
+		if (!moved) return adjusted;
+	}
+
+	throw new Error(
+		'unbranded-ds contrast adjustment did not settle; two pairs pull one colour apart',
+	);
+}
+
+/**
+ * The nearest lightness, away from `background`, at which `foreground` clears `floor`. Chroma and
+ * hue hold unless the new lightness is out of sRGB gamut, where chroma drops to fit. Measured on
+ * the printed string, since that's what the target parses.
+ *
+ * When nothing on the far side clears, as with a dark foreground on a dark surface, the search
+ * crosses to the background's other side and takes the lightness there nearest the background.
+ */
+function clearingForeground(
+	foreground: string,
+	background: string,
+	floor: number,
+	pair: { foreground: string; background: string },
+): string {
+	const from = readOklch(foreground);
+	const surface = readOklch(background).l;
+	const at = (l: number) => toOklchCss(fitToSrgbGamut({ ...from, l }));
+	const clears = (l: number) => cssContrast(at(l), background) >= floor;
+	const away = from.l < surface ? 0 : 1;
+	const across = 1 - away;
+
+	if (clears(away)) return at(bisect(from.l, away, clears));
+	if (clears(across)) return at(bisect(surface, across, clears));
+
+	throw new Error(
+		`no lightness clears ${pair.foreground} against ${pair.background}; the background leaves no room`,
+	);
+}
+
+/**
+ * The lightness nearest `near` that passes, given that `far` passes and contrast only grows from
+ * `near` toward `far`. Forty halvings get below the six decimals `toOklchCss` prints.
+ */
+function bisect(near: number, far: number, passes: (l: number) => boolean): number {
+	let failing = near;
+	let passing = far;
+
+	for (let i = 0; i < 40; i += 1) {
+		const mid = (failing + passing) / 2;
+
+		if (passes(mid)) passing = mid;
+		else failing = mid;
+	}
+
+	return passing;
+}
+
+/** WCAG 2 contrast between two printed `oklch()` strings, unrounded, as the target measures it. */
+function cssContrast(foreground: string, background: string): number {
+	return contrastFromOklch(readOklch(foreground), readOklch(background));
 }
 
 /** One row's value for this scheme and the Cambium paths it read, or undefined if a source is absent. */
