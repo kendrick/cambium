@@ -193,6 +193,14 @@ describe('toUnbrandedDsTheme', () => {
 		expect(notVendored).toEqual([]);
 	});
 
+	it('vendors a dark default for every colour key the target declares', () => {
+		// The adapter falls back to the light default when a dark entry is missing, so a refresh that
+		// adds a colour key without its dark value would ship a light colour on a dark page silently.
+		expect(sorted(Object.keys(vendored.darkColorDefaults.color))).toEqual(
+			sorted(Object.keys(vendoredTokens.color!)),
+		);
+	});
+
 	it('takes dark colour defaults from the target dark scheme, not the light defaults', () => {
 		const defaults = vendored.darkColorDefaults.color;
 
