@@ -1,3 +1,8 @@
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -324,6 +329,62 @@ describe('deserializeRecord', () => {
 		});
 	});
 
+	it('skips an empty directory entry, the kind a re-zipping tool adds', () => {
+		const bytes = rezip(serializeRecord(record), (entries) => {
+			entries['images/'] = new Uint8Array(0);
+		});
+
+		expect(Object.keys(unzipSync(bytes))).toContain('images/');
+
+		const result = deserializeRecord(bytes);
+
+		if (!result.ok) throw new Error(result.error.message);
+
+		expect(result.record).toEqual(record);
+	});
+
+	/**
+	 * The real workflow: someone unpacks an export and zips the folder back up with Info-ZIP. That
+	 * tool, not fflate, decides what the entries look like, so this runs it for real. Skipped where
+	 * `zip` isn't installed; the fflate-built case above covers the directory entry either way.
+	 */
+	it.skipIf(spawnSync('zip', ['-v']).status !== 0)(
+		'reads an archive unpacked and re-zipped with Info-ZIP zip -X -r',
+		() => {
+			const dir = mkdtempSync(join(tmpdir(), 'cambium-archive-'));
+
+			try {
+				for (const [name, contents] of Object.entries(unzipSync(serializeRecord(record)))) {
+					mkdirSync(join(dir, dirname(name)), { recursive: true });
+					writeFileSync(join(dir, name), contents);
+				}
+
+				const zipped = spawnSync(
+					'zip',
+					['-q', '-X', '-r', 'infozip.zip', 'record.json', 'images'],
+					{
+						cwd: dir,
+					},
+				);
+
+				expect(zipped.status).toBe(0);
+
+				const bytes = new Uint8Array(readFileSync(join(dir, 'infozip.zip')));
+
+				// Pins that Info-ZIP really wrote the directory entry this test exists for.
+				expect(Object.keys(unzipSync(bytes))).toContain('images/');
+
+				const result = deserializeRecord(bytes);
+
+				if (!result.ok) throw new Error(result.error.message);
+
+				expect(result.record).toEqual(record);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+	);
+
 	it('restores an image id that would not be a safe path on its own', () => {
 		const awkward = {
 			...record,
@@ -409,19 +470,29 @@ describe('deserializeRecord', () => {
 			expect(refusal(bytes).kind).toBe('missing-record');
 		});
 
-		it.each(['../x', '/etc/x', 'images\\x.webp', 'images/../../x.webp', 'C:x', 'images//x', './x'])(
-			'an entry named %s as unsafe-path',
-			(name) => {
-				const bytes = rezip(serializeRecord(record), (entries) => {
-					entries[name] = strToU8('x');
-				});
-				const error = refusal(bytes);
+		it.each([
+			['../x', 'x'],
+			['/etc/x', 'x'],
+			['images\\x.webp', 'x'],
+			['images/../../x.webp', 'x'],
+			['C:x', 'x'],
+			['images//x', 'x'],
+			['./x', 'x'],
+			// Directory-shaped names that don't qualify as a harmless directory entry: one that holds
+			// data, and empty ones whose path is unsafe before the trailing slash.
+			['images/', 'x'],
+			['../', ''],
+			['images//', ''],
+		])('an entry named %s holding %j as unsafe-path', (name, contents) => {
+			const bytes = rezip(serializeRecord(record), (entries) => {
+				entries[name] = strToU8(contents);
+			});
+			const error = refusal(bytes);
 
-				expect(error.kind).toBe('unsafe-path');
+			expect(error.kind).toBe('unsafe-path');
 
-				expect(error.message).toContain(name);
-			},
-		);
+			expect(error.message).toContain(name);
+		});
 
 		// The path check has to come before record.json is parsed, or a hostile entry would only
 		// be noticed in archives that were otherwise well formed.

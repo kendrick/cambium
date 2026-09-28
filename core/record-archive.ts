@@ -126,11 +126,18 @@ export function deserializeRecord(bytes: Uint8Array): DeserializeResult {
 		}
 	}
 
-	for (const name of Object.keys(entries)) {
+	for (const [name, contents] of Object.entries(entries)) {
+		// Info-ZIP's `zip -r` writes an empty `images/` entry for the folder, so an archive someone
+		// unpacked and re-zipped carries one. It holds nothing, so it is dropped rather than refused.
+		if (name.endsWith('/') && contents.length === 0 && isSafePath(name.slice(0, -1))) {
+			delete entries[name];
+			continue;
+		}
+
 		if (!isSafePath(name)) {
 			return fail(
 				'unsafe-path',
-				`This archive holds an entry named "${name}", which points outside the archive, so it was not opened.`,
+				`This archive holds an entry named "${name}", which is not a safe path inside the archive, so it was not opened.`,
 			);
 		}
 	}
@@ -310,11 +317,14 @@ function readChecksums(bytes: Uint8Array): Map<string, number> | null {
 	// go unnoticed.
 	if (end < 0 || end + 22 + view.getUint16(end + 20, true) !== bytes.length) return null;
 
+	// The total-entries count at +10. fflate reads the this-disk count at +8, and a single-disk
+	// archive holds the same number in both. When they differ, the walk below either reaches a
+	// record that isn't a central header or builds a map whose size differs from fflate's, and
+	// both are refused. So is a zip64 marker: 0xffff here stops the walk the same way, and an
+	// offset of 0xffffffff fails the bounds check on its first step.
 	const count = view.getUint16(end + 10, true);
 	let offset = view.getUint32(end + 16, true);
 	const checksums = new Map<string, number>();
-
-	if (count === 0xffff || offset === 0xffffffff) return null;
 
 	for (let i = 0; i < count; i += 1) {
 		if (offset + 46 > end || view.getUint32(offset, true) !== CENTRAL) return null;
