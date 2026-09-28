@@ -13,6 +13,7 @@ import {
 	SCHEME_NAMES,
 	type SchemeName,
 	type ScaleEngine,
+	type ScaleEngineResult,
 } from './scale-engine';
 import { BALANCED, type InterpretationParams } from './interpretation';
 import { STEP_ROLES } from './step-roles';
@@ -122,6 +123,17 @@ function serializeSchemes(schemes: Schemes): string {
 }
 
 /**
+ * The whole `ScaleEngineResult`, not just `schemes`. `anchorReport` rounds `anchor` independently
+ * of the ramps it describes, and a params combination this contract doesn't reach can land on the
+ * failure shape instead of the success one—a schemes-only digest saw neither: it hashed the one
+ * field two different results could share. PR #162 caught it live, over a change that touched only
+ * `anchor`.
+ */
+function serializeResult(result: ScaleEngineResult): string {
+	return JSON.stringify(result);
+}
+
+/**
  * Balanced plus one set that moves chromaSpread, harmonization, accentRotation, neutralTinting and
  * surfaceTinting all well away from it at once, so the digest pin below samples more than the single
  * params set every other case in this file runs under. chromaSpread 1.6 is the same figure the
@@ -152,7 +164,7 @@ const PARAM_SETS: ReadonlyArray<readonly [string, InterpretationParams]> = [
  * here in its own turn once it ships.
  */
 const PINNED_DIGESTS: Readonly<Record<string, string>> = {
-	'cambium-oklch-1': '0a383775a85aee1a28e3a7ec7de39dc9e71a53f02a0021ec078efa2f8f2ecb1a',
+	'cambium-oklch-1': 'e094831b05d498887caef00d6cd3c0000e0269dbf78b3e2a3a16b1cda2d2705b',
 };
 
 export function testScaleEngineContract(createEngine: () => ScaleEngine) {
@@ -344,11 +356,14 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 		// what `generate` produces, for any seed or params, obliges a new id. This pin samples that
 		// rule rather than proving it—it covers the four seeds across PARAM_SETS (Balanced plus one
 		// set that moves every other field away from it), so a change reachable only through some
-		// seed or params combination outside that sample can still slip past.
+		// seed or params combination outside that sample can still slip past. Hashing the whole
+		// result rather than `schemes` alone is what makes it a sample of the rule as written: the
+		// rule covers everything `generate` returns, and that includes `anchor` and the failure
+		// shape a params combination outside this sample could land on.
 		it("pins the engine id to a digest of its own output, so an id survives only beside output that hasn't moved", () => {
 			const engine = createEngine();
 			const bytes = SEEDS.flatMap(([, brand]) =>
-				PARAM_SETS.map(([, params]) => serializeSchemes(generate(brand, params).schemes)),
+				PARAM_SETS.map(([, params]) => serializeResult(engine.generate(seedWith(brand), params))),
 			).join('\n');
 			const digest = createHash('sha256').update(bytes).digest('hex');
 			const pinned = ENGINE_DIGESTS[engine.id];
@@ -367,17 +382,21 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 		// output would satisfy that first case on its own. This one holds every shipped entry to a
 		// copy the contract carries independently, so re-blessing an id in place now takes editing
 		// two literals in two files, which a reviewer sees.
-		it('keeps every pinned digest exactly as it shipped, with no two ids sharing one', () => {
+		//
+		// No cross-id uniqueness check here on purpose. An intentional change reachable only through
+		// something this sample never varies is invisible to the digest, so the required id bump
+		// still produces the same sampled digest under the new id—appending it beside the old one is
+		// the compliant update, not a collision to reject. Widening what PARAM_SETS or SEEDS samples
+		// is the other legitimate way every entry's digest moves at once: that's a single deliberate
+		// re-pin, visible in review as both literal copies—this file's and `ENGINE_DIGESTS`'s—changing
+		// together, rather than one id drifting out of step with the other.
+		it('keeps every pinned digest exactly as it shipped', () => {
 			for (const [id, digest] of Object.entries(PINNED_DIGESTS)) {
 				expect(
 					ENGINE_DIGESTS[id],
 					`pinned digest for ${id} no longer matches ENGINE_DIGESTS. Editing a shipped digest in place is not allowed: ship changed output under a new engine id and a new digest entry, then pin it here once it ships.`,
 				).toBe(digest);
 			}
-
-			const digests = Object.values(ENGINE_DIGESTS);
-
-			expect(new Set(digests).size, 'two engine ids share a digest').toBe(digests.length);
 		});
 	});
 
