@@ -301,8 +301,14 @@ function toBase64(bytes: Uint8Array): string {
  * image comes back as a different image with no error at all. This reads each entry's CRC from
  * the central directory so `deserializeRecord` can check it. Names decode the way fflate's own
  * reader does, UTF-8 when general-purpose bit 11 is set and Latin-1 otherwise, so the two agree on
- * every key. Returns null for anything it can't walk cleanly, zip64 included, since this module
- * never writes an archive large enough to need it.
+ * every key.
+ *
+ * Checking a CRC only helps if this walk sees every entry fflate extracts. A central directory
+ * with two entries under one name, where fflate keeps the last, has to reach the duplicate check
+ * below. So this returns null unless it walks exactly the entries fflate walks: it takes its
+ * count and offset from the same fields fflate does, the classic end record's two counts agree,
+ * and the walk ends where the central directory does. A zip64 archive with a locator still
+ * imports when it walks cleanly, whether or not its classic fields carry 0xffff markers.
  */
 function readChecksums(bytes: Uint8Array): Map<string, number> | null {
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -317,17 +323,40 @@ function readChecksums(bytes: Uint8Array): Map<string, number> | null {
 	// go unnoticed.
 	if (end < 0 || end + 22 + view.getUint16(end + 20, true) !== bytes.length) return null;
 
-	// The total-entries count at +10. fflate reads the this-disk count at +8, and a single-disk
-	// archive holds the same number in both. When they differ, the walk below either reaches a
-	// record that isn't a central header or builds a map whose size differs from fflate's, and
-	// both are refused. So is a zip64 marker: 0xffff here stops the walk the same way, and an
-	// offset of 0xffffffff fails the bounds check on its first step.
-	const count = view.getUint16(end + 10, true);
+	// fflate reads the this-disk count at +8. +10 is the total across disks, and a single-disk
+	// archive holds the same number in both. Walking one count while fflate walks the other is how
+	// a CRC-forged duplicate name slipped past the checks here, so a mismatch is refused outright.
+	let count = view.getUint16(end + 8, true);
+
+	if (view.getUint16(end + 10, true) !== count) return null;
+
 	let offset = view.getUint32(end + 16, true);
+	let directoryEnd = end;
+
+	// Where a locator (the 20 bytes before the classic end record) points at a zip64 end record,
+	// fflate takes the count and offset from that record instead, reading the same low 32 bits
+	// read here. Mirrored so both walk one span, which then ends where the zip64 record begins.
+	const ZIP64_LOCATOR = 0x07064b50;
+	const ZIP64_END = 0x06064b50;
+
+	if (end >= 20 && view.getUint32(end - 20, true) === ZIP64_LOCATOR) {
+		const zip64End = view.getUint32(end - 12, true);
+
+		if (zip64End + 4 <= bytes.length && view.getUint32(zip64End, true) === ZIP64_END) {
+			// fflate trusts this record from its signature alone, so one too short to hold its
+			// fields can't be mirrored and is refused.
+			if (zip64End + 56 > end - 20) return null;
+
+			count = view.getUint32(zip64End + 32, true);
+			offset = view.getUint32(zip64End + 48, true);
+			directoryEnd = zip64End;
+		}
+	}
+
 	const checksums = new Map<string, number>();
 
 	for (let i = 0; i < count; i += 1) {
-		if (offset + 46 > end || view.getUint32(offset, true) !== CENTRAL) return null;
+		if (offset + 46 > directoryEnd || view.getUint32(offset, true) !== CENTRAL) return null;
 
 		const flags = view.getUint16(offset + 8, true);
 		const crc = view.getUint32(offset + 16, true);
@@ -336,7 +365,7 @@ function readChecksums(bytes: Uint8Array): Map<string, number> | null {
 		const commentLength = view.getUint16(offset + 32, true);
 		const nameEnd = offset + 46 + nameLength;
 
-		if (nameEnd > end) return null;
+		if (nameEnd > directoryEnd) return null;
 
 		const name = strFromU8(bytes.subarray(offset + 46, nameEnd), !(flags & 0x800));
 
@@ -345,6 +374,9 @@ function readChecksums(bytes: Uint8Array): Map<string, number> | null {
 		checksums.set(name, crc);
 		offset = nameEnd + extraLength + commentLength;
 	}
+
+	// Stopping short means central entries this walk never saw, and fflate may have extracted them.
+	if (offset !== directoryEnd) return null;
 
 	return checksums;
 }

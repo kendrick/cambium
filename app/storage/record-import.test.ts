@@ -1,3 +1,5 @@
+import { crc32 } from 'node:zlib';
+
 import { strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -69,6 +71,63 @@ function rezip(
 }
 
 const validBytes = serializeRecord(makeRecord());
+
+/**
+ * The red-team archive from #20, rebuilt here so this test doesn't lean on a scratch script: a
+ * second central entry for the image, placed last so fflate keeps it, holding different bytes
+ * with the original's CRC, and an end record whose total count at +10 stops one entry short.
+ * `core/record-archive.test.ts` builds the same shape to test `deserializeRecord` directly.
+ */
+function twinArchive(): { bytes: Uint8Array; twin: Uint8Array } {
+	const table = Array.from({ length: 256 }, (_, n) => {
+		let c = n;
+		for (let k = 0; k < 8; k += 1) c = c & 1 ? (0xedb88320 ^ (c >>> 1)) >>> 0 : c >>> 1;
+		return c >>> 0;
+	});
+	const original = unzipSync(validBytes);
+	const image = original[`images/${IMAGE_ID}.webp`]!;
+	const prefix = strToU8('EVIL-TWIN');
+
+	// Four appended bytes steer the CRC register onto the original image's CRC.
+	const indices: number[] = [];
+	let t = (crc32(image) ^ 0xffffffff) >>> 0;
+	for (let i = 0; i < 4; i += 1) {
+		const j = table.findIndex((entry) => entry >>> 24 === t >>> 24);
+		indices.unshift(j);
+		t = ((t ^ table[j]!) << 8) >>> 0;
+	}
+	let register = (crc32(prefix) ^ 0xffffffff) >>> 0;
+	const twin = Uint8Array.from([
+		...prefix,
+		...indices.map((j) => {
+			const byte = (register ^ j) & 0xff;
+			register = ((register >>> 8) ^ table[j]!) >>> 0;
+			return byte;
+		}),
+	]);
+
+	const decoy = `images/${IMAGE_ID}.webX`;
+	const zipped = zipSync(
+		{
+			[`images/${IMAGE_ID}.webp`]: image,
+			'record.json': original['record.json']!,
+			[decoy]: twin,
+		},
+		{ level: 0 },
+	);
+
+	const from = strToU8(decoy);
+	const to = strToU8(`images/${IMAGE_ID}.webp`);
+	for (let i = 0; i + from.length <= zipped.length; i += 1) {
+		if (from.every((byte, j) => zipped[i + j] === byte)) zipped.set(to, i);
+	}
+
+	const view = new DataView(zipped.buffer, zipped.byteOffset, zipped.byteLength);
+	const end = zipped.length - 22;
+	view.setUint16(end + 10, view.getUint16(end + 8, true) - 1, true);
+
+	return { bytes: zipped, twin };
+}
 
 /**
  * One archive per `ArchiveError` kind `deserializeRecord` can return, exercised here only to prove
@@ -167,6 +226,20 @@ describe('importRecordArchive', () => {
 		// tsconfig targets ES2022, and both arrays are fresh.
 		// oxlint-disable-next-line unicorn/no-array-sort
 		expect(all.map((record) => record.id).sort()).toEqual([first.id, second.id].sort());
+	});
+
+	it('refuses a CRC-forged duplicate image entry and calls put zero times', async () => {
+		const { bytes, twin } = twinArchive();
+
+		// fflate alone would hand back the twin, whose CRC matches the image it replaces.
+		expect(unzipSync(bytes)[`images/${IMAGE_ID}.webp`]).toEqual(twin);
+		expect(crc32(twin)).toBe(crc32(unzipSync(validBytes)[`images/${IMAGE_ID}.webp`]!));
+
+		const { store, put } = spyStore();
+		const result = await importRecordArchive(store, bytes);
+
+		expect(result).toMatchObject({ ok: false, error: { kind: 'not-an-archive' } });
+		expect(put).not.toHaveBeenCalled();
 	});
 
 	it.each(Object.entries(FAILURE_ARCHIVES) as [ArchiveErrorKind, Uint8Array][])(

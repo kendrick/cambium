@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { crc32 } from 'node:zlib';
 
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -161,7 +162,75 @@ function dataOffset(archive: Uint8Array, name: string): number {
 	throw new Error(`no local header for ${name}`);
 }
 
+/** Rewrites the end record's this-disk count (+8) and total count (+10). */
+function setCounts(bytes: Uint8Array, thisDisk: number, total: number): Uint8Array {
+	const copy = bytes.slice();
+	const view = new DataView(copy.buffer);
+	const end = copy.length - 22;
+	view.setUint16(end + 8, thisDisk, true);
+	view.setUint16(end + 10, total, true);
+	return copy;
+}
+
 /** Rewrites every occurrence of one name's bytes, in local and central headers alike. */
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+	let c = n;
+	for (let k = 0; k < 8; k += 1) c = c & 1 ? (0xedb88320 ^ (c >>> 1)) >>> 0 : c >>> 1;
+	return c >>> 0;
+});
+
+/** Appends four bytes to `prefix` so the result's CRC-32 is `target`. */
+function forgeCrc(prefix: Uint8Array, target: number): Uint8Array {
+	const indices: number[] = [];
+	let t = (target ^ 0xffffffff) >>> 0;
+
+	for (let i = 0; i < 4; i += 1) {
+		const j = CRC_TABLE.findIndex((entry) => entry >>> 24 === t >>> 24);
+		indices.unshift(j);
+		t = ((t ^ CRC_TABLE[j]!) << 8) >>> 0;
+	}
+
+	let register = (crc32(prefix) ^ 0xffffffff) >>> 0;
+	const suffix = indices.map((j) => {
+		const byte = (register ^ j) & 0xff;
+		register = ((register >>> 8) ^ CRC_TABLE[j]!) >>> 0;
+		return byte;
+	});
+
+	return Uint8Array.from([...prefix, ...suffix]);
+}
+
+/**
+ * A second central entry named `images/img-2.png` whose different bytes carry the original's
+ * CRC, placed last so fflate keeps it. The end record's total at +10 is one short of the this-disk
+ * count at +8, so a walk that trusts +10 stops before the twin, sees three distinct names, and
+ * agrees with fflate's three keys.
+ */
+function twinArchive(): { bytes: Uint8Array; twin: Uint8Array } {
+	const original = unzipSync(serializeRecord(record));
+	const png = original['images/img-2.png']!;
+	const twin = forgeCrc(
+		Uint8Array.from([...PNG_BYTES.subarray(0, 8), ...strToU8('EVIL-TWIN')]),
+		crc32(png),
+	);
+	const zipped = zipSync(
+		{
+			'images/img-1.webp': original['images/img-1.webp']!,
+			'images/img-2.png': png,
+			'record.json': original['record.json']!,
+			'images/img-2.pnX': twin,
+		},
+		{ level: 0 },
+	);
+	const bytes = renameEverywhere(zipped, 'images/img-2.pnX', 'images/img-2.png');
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	const end = bytes.length - 22;
+
+	view.setUint16(end + 10, view.getUint16(end + 8, true) - 1, true);
+
+	return { bytes, twin };
+}
+
 function renameEverywhere(archive: Uint8Array, from: string, to: string): Uint8Array {
 	const source = strToU8(from);
 	const target = strToU8(to);
@@ -426,6 +495,41 @@ describe('deserializeRecord', () => {
 
 		// fflate reads both of these without complaint: a duplicate name keeps whichever entry came
 		// last, and it scans back past trailing bytes to find the end record.
+		it('a CRC-forged duplicate name hidden behind a short total-entries count as not-an-archive', () => {
+			const { bytes, twin } = twinArchive();
+
+			// The attack is real: fflate keeps the twin, whose bytes differ and whose CRC matches.
+			expect(unzipSync(bytes)['images/img-2.png']).toEqual(twin);
+			expect(twin).not.toEqual(PNG_BYTES);
+			expect(crc32(twin)).toBe(crc32(PNG_BYTES));
+
+			const error = refusal(bytes);
+
+			expect(error.kind).toBe('not-an-archive');
+			expect(error.message).toContain('table of contents');
+		});
+
+		// Nothing here is extracted differently, since fflate walks +8, but two counts that disagree
+		// mean the end record can't be trusted.
+		it('an end record whose total count disagrees with its this-disk count as not-an-archive', () => {
+			const error = refusal(setCounts(serializeRecord(record), 3, 4));
+
+			expect(error.kind).toBe('not-an-archive');
+			expect(error.message).toContain('table of contents');
+		});
+
+		// fflate stops after the counted entries and never sees the fourth, so the archive is
+		// refused for holding a central entry nobody checked.
+		it('a central directory holding more entries than its end record counts as not-an-archive', () => {
+			const withExtra = rezip(serializeRecord(record), (entries) => {
+				entries['zz-uncounted'] = strToU8('x');
+			});
+			const error = refusal(setCounts(withExtra, 3, 3));
+
+			expect(error.kind).toBe('not-an-archive');
+			expect(error.message).toContain('table of contents');
+		});
+
 		it('an archive listing record.json twice as not-an-archive', () => {
 			const withTwin = rezip(serializeRecord(record), (entries) => {
 				entries['record.jsoX'] = strToU8('{}');
