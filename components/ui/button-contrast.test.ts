@@ -11,7 +11,7 @@
  * compiled classes and measures the composite with `compositeOver`. Chromium rounds a fill's alpha
  * to 1/255 before it blends (10% paints as 26/255). The badge loop rounds the same way through
  * `paintedAlpha`, because on `card` the badge's margin is thin enough for that rounding to flip a
- * verdict: `/30` dark hover reads 4.505:1 unrounded and 4.488:1 rounded. The button loop still
+ * verdict: at `/30` dark hover the red seed reads 4.553:1 unrounded and 4.488:1 rounded. The button loop still
  * blends at unrounded alpha, which is what `core/semantic-map.ts` quotes, so on light destructive
  * hover it reads about 0.03 above what the browser paints (4.56:1 against 4.53:1). Rounding alpha
  * narrows that gap without closing it, so a ratio near the line still needs
@@ -443,8 +443,8 @@ describe('badgeVariants destructive', () => {
 	 * ("Refunded", `components/workspace/preview/app-screen.tsx`) sits in the orders table's
 	 * `bg-card`. Card is one step closer to the text than the page in both schemes, so it is the
 	 * binding surface; the gallery specimen sits on `background`. Alpha is snapped through
-	 * `paintedAlpha` before the blend (module docblock), since the button's `/30` dark hover would
-	 * pass on card unrounded (4.505:1) and fails rounded (4.488:1).
+	 * `paintedAlpha` before the blend (module docblock), since the badge's old `/30` dark hover
+	 * passes on card unrounded (red seed, 4.553:1) and fails rounded (4.488:1).
 	 */
 	it.each(SCHEME_NAMES)('clears 4.5:1 for every state and seed, %s', async (scheme) => {
 		const declarations = destructiveFillDeclarations(await compiledPromise);
