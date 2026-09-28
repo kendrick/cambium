@@ -312,7 +312,9 @@ test('a pin toggled without saving reverts on reload, and holds once saved', asy
 	await expect(radiusPin()).toHaveAttribute('aria-pressed', 'true');
 });
 
-test("a pinned field's value is unchanged by a preset switch", async ({ page }) => {
+test("switching from Faithful to Expressive moves a token while a pinned field's value stays", async ({
+	page,
+}) => {
 	const record = buildRecordWithSeed();
 	await seedWorkspaceRecord(page, record);
 
@@ -325,18 +327,74 @@ test("a pinned field's value is unchanged by a preset switch", async ({ page }) 
 	const radiusBase = page.getByLabel('Radius base', { exact: true });
 	await expect(radiusBase).toHaveValue('8');
 
-	// `PRESET_PARAMS` maps every preset to the same `BALANCED` params until #37, so no preset moves a
-	// seed value today; the pin's guarantee is structural rather than observable through a value that
-	// actually changes. The switch itself still has to complete and the control still has to keep
-	// reading the same number, which is what these assertions check.
+	// `primitive.danger.9` is `statusAnchor`'s own placement (core/oklch-scale-engine.ts): the
+	// canonical danger hue rotated toward the brand by `harmonization`. FAITHFUL holds that at 0 and
+	// EXPRESSIVE at 0.15 (core/interpretation.ts), and the rotation runs whether or not the seed
+	// states a second key colour, so this is the token the switch below is supposed to move.
+	const dangerFill = page.locator('[data-token="primitive.danger.9"] [data-swatch-value]');
+	await expect(dangerFill).toBeVisible();
+
 	await page.getByLabel('Interpretation').selectOption('faithful');
 	await expect(page.getByLabel('Interpretation')).toHaveValue('faithful');
 	await expect(radiusBase).toHaveValue('8');
 	await expect(radiusPin).toHaveAttribute('aria-pressed', 'true');
 
-	await page.getByLabel('Interpretation').selectOption('balanced');
-	await expect(page.getByLabel('Interpretation')).toHaveValue('balanced');
+	const faithfulDanger = await dangerFill.textContent();
+
+	await page.getByLabel('Interpretation').selectOption('expressive');
+	await expect(page.getByLabel('Interpretation')).toHaveValue('expressive');
 	await expect(radiusBase).toHaveValue('8');
+	await expect(radiusPin).toHaveAttribute('aria-pressed', 'true');
+
+	await expect.poll(() => dangerFill.textContent()).not.toBe(faithfulDanger);
+});
+
+test('moving a slider tunes the derived tokens live with no network call, marks the preset Tuned, and disables Save until a preset switch clears it', async ({
+	page,
+}) => {
+	// `neutralTemperature` stated on `SEED` fixes the neutral ramp's tint outright
+	// (`core/oklch-scale-engine.ts`'s `neutralAnchor`), which would leave `neutralTinting` with
+	// nothing left to move. Clearing it here is what lets the slider below reach a token.
+	const record = buildRecordWithSeed({ ...SEED, neutralTemperature: null });
+	await seedWorkspaceRecord(page, record);
+
+	const requestUrls: string[] = [];
+	page.on('request', (request) => requestUrls.push(request.url()));
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const neutralFill = page.locator('[data-token="primitive.neutral.9"] [data-swatch-value]');
+	await expect(neutralFill).toBeVisible();
+	const beforeTuning = await neutralFill.textContent();
+
+	const tunedMarker = page.locator('[data-tuned-marker]');
+	const save = page.getByRole('button', { name: 'Save', exact: true });
+
+	// A pin toggle leaves the draft dirty with nothing tuned, so Save starts enabled: the slider
+	// below has to be what disables it again, not merely an untouched draft.
+	await page.getByRole('button', { name: 'Pin radius' }).click();
+	await expect(save).toBeEnabled();
+	await expect(tunedMarker).toHaveCount(0);
+
+	await page.getByRole('button', { name: 'Advanced parameters' }).click();
+
+	const neutralTinting = page.getByLabel('Neutral tinting', { exact: true });
+	await expect(neutralTinting).toBeVisible();
+
+	const requestsBeforeSlide = requestUrls.length;
+
+	await neutralTinting.fill('0.9');
+
+	await expect.poll(() => neutralFill.textContent()).not.toBe(beforeTuning);
+	await expect(tunedMarker).toBeVisible();
+	await expect(save).toBeDisabled();
+	await expect(save).toHaveAttribute('aria-describedby', 'tuned-save-note');
+	await expect(page.locator('#tuned-save-note')).toBeVisible();
+
+	expect(requestUrls.length).toBe(requestsBeforeSlide);
+
+	await page.getByLabel('Interpretation').selectOption('expressive');
+	await expect(tunedMarker).toHaveCount(0);
 });
 
 test("showing a key colour's source draws the region box at the stored fraction, and a colour with no region shows the whole image", async ({

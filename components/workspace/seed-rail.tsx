@@ -12,6 +12,12 @@ import {
 } from '../../app/state/workspace-store';
 import type { BrandRecord, BrandVersion } from '../../core/brand-record';
 import type { BrandSeed, KeyColor } from '../../core/brand-seed';
+import {
+	BALANCED,
+	EXPRESSIVE,
+	FAITHFUL,
+	type InterpretationParams,
+} from '../../core/interpretation';
 import type { SeedPinPath } from '../../core/seed-pins';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -34,6 +40,44 @@ import { PinToggle } from '@/components/workspace/seed-rail/pin-toggle';
 import { SourceRegion } from '@/components/workspace/seed-rail/source-region';
 
 const PRESETS: readonly Interpretation[] = ['faithful', 'balanced', 'expressive'];
+
+type ParamField = keyof InterpretationParams;
+
+/** Display names for the advanced disclosure, in the order `InterpretationParams` declares them. */
+const PARAM_LABELS: Record<ParamField, string> = {
+	neutralTinting: 'Neutral tinting',
+	chromaSpread: 'Chroma spread',
+	harmonization: 'Harmonization',
+	accentRotation: 'Accent rotation',
+	surfaceTinting: 'Surface tinting',
+};
+
+/**
+ * Slider bounds, from the issue's decision thread (2026-09-27, #37). Each range comfortably
+ * bounds both FAITHFUL and EXPRESSIVE so a slider can reach either preset's value and beyond it,
+ * without running so wide that a drag can't land on a useful number.
+ */
+const PARAM_RANGES: Record<ParamField, { min: number; max: number; step: number }> = {
+	neutralTinting: { min: 0, max: 1, step: 0.01 },
+	chromaSpread: { min: 0.5, max: 1.6, step: 0.05 },
+	harmonization: { min: 0, max: 1, step: 0.01 },
+	accentRotation: { min: 0, max: 180, step: 5 },
+	surfaceTinting: { min: 0, max: 0.05, step: 0.001 },
+};
+
+const PARAM_FIELDS = Object.keys(PARAM_LABELS) as ParamField[];
+
+/**
+ * Mirrors the private `PRESET_PARAMS` in `app/state/workspace-store.ts`. The store keeps that map
+ * to itself, and the rail only needs it for one thing the store doesn't expose: what to seed a
+ * slider at before anything is tuned. Derivation itself still runs through the store's own map, so
+ * a drift between the two would only make a slider start in the wrong place, never a wrong token.
+ */
+const PRESET_PARAM_SEEDS: Record<Interpretation, InterpretationParams> = {
+	faithful: FAITHFUL,
+	balanced: BALANCED,
+	expressive: EXPRESSIVE,
+};
 
 type Field = Exclude<keyof BrandSeed, 'keyColors'>;
 
@@ -132,14 +176,20 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 	const preset = useStore(store, (state) => state.preset);
 	const pins = useStore(store, (state) => state.draftPins);
 	const overrides = useStore(store, (state) => state.overrides);
+	const tunedParams = useStore(store, (state) => state.tunedParams);
 	const editSeed = useStore(store, (state) => state.editSeed);
 	const togglePin = useStore(store, (state) => state.togglePin);
 	const selectPreset = useStore(store, (state) => state.selectPreset);
+	const tuneParam = useStore(store, (state) => state.tuneParam);
 	const commit = useStore(store, (state) => state.commit);
 	const discardEdits = useStore(store, (state) => state.discardEdits);
 
 	const [saving, setSaving] = useState(false);
 	const [saveError, setSaveError] = useState<string | null>(null);
+	const [advancedOpen, setAdvancedOpen] = useState(false);
+
+	const tuned = tunedParams !== null;
+	const activeParams = tunedParams ?? PRESET_PARAM_SEEDS[preset];
 
 	const active =
 		record && activeOrdinal !== null ? (record.versions[activeOrdinal - 1] ?? null) : null;
@@ -180,22 +230,34 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 					Seed
 				</h2>
 				{active ? (
-					<div className="flex items-center gap-2">
-						{dirty ? <span className="text-muted-foreground text-xs">Unsaved edits</span> : null}
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={!dirty || saving}
-							onClick={() => {
-								setSaveError(null);
-								discardEdits();
-							}}
-						>
-							Discard
-						</Button>
-						<Button size="sm" disabled={!dirty || saving} onClick={() => void save()}>
-							{saving ? 'Saving…' : 'Save'}
-						</Button>
+					<div className="flex flex-col items-end gap-1">
+						<div className="flex items-center gap-2">
+							{dirty ? <span className="text-muted-foreground text-xs">Unsaved edits</span> : null}
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={!dirty || saving}
+								onClick={() => {
+									setSaveError(null);
+									discardEdits();
+								}}
+							>
+								Discard
+							</Button>
+							<Button
+								size="sm"
+								disabled={!dirty || saving || tuned}
+								aria-describedby={tuned ? 'tuned-save-note' : undefined}
+								onClick={() => void save()}
+							>
+								{saving ? 'Saving…' : 'Save'}
+							</Button>
+						</div>
+						{tuned ? (
+							<p id="tuned-save-note" className="text-muted-foreground text-xs">
+								Tuned parameters can't be saved under a preset name. Pick a preset to save.
+							</p>
+						) : null}
 					</div>
 				) : null}
 			</div>
@@ -209,18 +271,75 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 
 			<label className="flex items-center justify-between gap-2 text-sm">
 				Interpretation
-				<select
-					value={preset}
-					onChange={(event) => selectPreset(event.target.value as Interpretation)}
-					className="bg-background rounded border px-1 py-0.5 text-sm"
-				>
-					{PRESETS.map((option) => (
-						<option key={option} value={option}>
-							{option}
-						</option>
-					))}
-				</select>
+				<span className="flex items-center gap-2">
+					{tuned ? (
+						<span data-tuned-marker className="text-muted-foreground text-xs font-medium">
+							Tuned
+						</span>
+					) : null}
+					<select
+						value={preset}
+						onChange={(event) => selectPreset(event.target.value as Interpretation)}
+						className="bg-background rounded border px-1 py-0.5 text-sm"
+					>
+						{PRESETS.map((option) => (
+							<option key={option} value={option}>
+								{option}
+							</option>
+						))}
+					</select>
+				</span>
 			</label>
+
+			<div>
+				{/*
+				 * A button with `aria-expanded` rather than a native `<details>`. `TokenRow`'s own
+				 * expand control (`components/workspace/token-list/token-row.tsx`) took the same route for
+				 * the same reason: `e2e/workspace.spec.ts` finds the raw-response panel's one `<details>`
+				 * with a bare `page.locator('details')`, on the strength of it being the only one on the
+				 * page. A second `<details>` here would turn every one of those into a strict-mode
+				 * violation instead of the element they're after.
+				 */}
+				<button
+					type="button"
+					aria-expanded={advancedOpen}
+					onClick={() => setAdvancedOpen((value) => !value)}
+					className="text-muted-foreground text-xs underline"
+				>
+					Advanced parameters
+				</button>
+				{advancedOpen ? (
+					<div className="mt-2 flex flex-col gap-2 rounded border px-2 py-2">
+						{PARAM_FIELDS.map((field) => {
+							const { min, max, step } = PARAM_RANGES[field];
+							const value = activeParams[field];
+
+							return (
+								<label key={field} className="flex flex-col gap-1 text-xs">
+									<span className="flex items-center justify-between gap-2">
+										<span className="text-muted-foreground">{PARAM_LABELS[field]}</span>
+										<span className="font-mono">{value}</span>
+									</span>
+									<input
+										type="range"
+										// `aria-label` pins the accessible name to the field alone. Without it, the
+										// wrapping `<label>`'s content is also the readout span above, and a screen
+										// reader (and `getByLabel`) would read "Neutral tinting 0.25" as the name
+										// rather than the number moving `aria-valuetext` already carries.
+										aria-label={PARAM_LABELS[field]}
+										min={min}
+										max={max}
+										step={step}
+										value={value}
+										aria-valuetext={String(value)}
+										onChange={(event) => tuneParam(field, Number(event.target.value))}
+									/>
+								</label>
+							);
+						})}
+					</div>
+				) : null}
+			</div>
 
 			{seed === null || record === null ? (
 				<p className="text-muted-foreground text-sm">
