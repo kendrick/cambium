@@ -349,7 +349,7 @@ test("switching from Faithful to Expressive moves a token while a pinned field's
 	await expect.poll(() => dangerFill.textContent()).not.toBe(faithfulDanger);
 });
 
-test('moving a slider tunes the derived tokens live with no network call, marks the preset Tuned, and disables Save until a preset switch clears it', async ({
+test('moving a slider tunes the derived tokens live with no network call, marks the preset Tuned, and disables Save until a preset switch or a discard clears it', async ({
 	page,
 }) => {
 	// `neutralTemperature` stated on `SEED` fixes the neutral ramp's tint outright
@@ -395,6 +395,26 @@ test('moving a slider tunes the derived tokens live with no network call, marks 
 
 	await page.getByLabel('Interpretation').selectOption('expressive');
 	await expect(tunedMarker).toHaveCount(0);
+
+	// Discard has to clear a tuned session the same way a preset switch does: `discardEdits` runs
+	// through `workspaceFor`, which resets `tunedParams` to null on every path that lands the
+	// workspace on a stored version, the same moment it resets `draftPins` and `overrides` to that
+	// version's own. 0.3 rather than 0.9 this time, since the preset is now Expressive, whose own
+	// `neutralTinting` sits at 0.6—tuning back onto a preset's own value un-tunes the session
+	// outright (the sibling store test in `app/state/workspace-store.test.ts` covers that directly),
+	// so this has to land somewhere Expressive doesn't already sit to stay a real tuned session.
+	const discard = page.getByRole('button', { name: 'Discard' });
+
+	await neutralTinting.fill('0.3');
+	await expect(tunedMarker).toBeVisible();
+	await expect(discard).toBeEnabled();
+
+	await discard.click();
+
+	await expect(tunedMarker).toHaveCount(0);
+	await expect(save).toBeDisabled();
+	await expect(discard).toBeDisabled();
+	await expect.poll(() => neutralFill.textContent()).toBe(beforeTuning);
 });
 
 test("showing a key colour's source draws the region box at the stored fraction, and a colour with no region shows the whole image", async ({

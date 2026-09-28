@@ -25,16 +25,31 @@ import type { RecordStore } from '../storage/record-store';
 export type Interpretation = BrandVersion['interpretation'];
 
 /**
- * `core/interpretation.ts`'s three named presets, keyed by the value `BrandVersion.interpretation`
- * stores. This is the map a preset name resolves through; a tuned session bypasses it, which is
- * why every derivation site below reads `tunedParams ?? PRESET_PARAMS[preset]` rather than this
- * map alone.
+ * Keyed by name rather than holding the params directly, because `BrandVersion.interpretation`
+ * stores a name, not a value: a version citing "faithful" means whatever `core/interpretation.ts`
+ * currently defines for it, so retuning a preset there reaches every version that named it with no
+ * migration. `activeParams` is what a workspace actually derives from; this map is the preset half
+ * of that answer, and a tuned session is the other.
  */
 const PRESET_PARAMS: Record<Interpretation, InterpretationParams> = {
 	faithful: FAITHFUL,
 	balanced: BALANCED,
 	expressive: EXPRESSIVE,
 };
+
+/**
+ * The params a workspace actually derives from right now: whatever a slider has tuned, or the
+ * active preset's own where nothing has. Every call site that needs live params reads through this
+ * instead of repeating `tunedParams ?? PRESET_PARAMS[preset]`, which is the same three-way
+ * agreement (store, rail, and the six other derivation sites) that `activeParams` exists to hold in
+ * one place. `seed-rail.tsx` imports it too, to seed a slider at the right value before anything is
+ * tuned, rather than keeping its own copy of `PRESET_PARAMS` to go stale against this one.
+ */
+export function activeParams(
+	state: Pick<WorkspaceState, 'preset' | 'tunedParams'>,
+): InterpretationParams {
+	return state.tunedParams ?? PRESET_PARAMS[state.preset];
+}
 
 /**
  * What a new version cannot derive from the workspace: who generated the seed and against what.
@@ -850,7 +865,7 @@ export function createWorkspaceStore({
 									...derivation(
 										engine,
 										adopted,
-										get().tunedParams ?? PRESET_PARAMS[get().preset],
+										activeParams(get()),
 										get().overrides,
 										get().draftPins,
 									),
@@ -960,7 +975,7 @@ export function createWorkspaceStore({
 			editSeed(patch) {
 				const { draftSeed, preset, tunedParams, overrides, draftPins } = get();
 				const next = { ...(draftSeed ?? EMPTY_SEED), ...patch };
-				const params = tunedParams ?? PRESET_PARAMS[preset];
+				const params = activeParams({ preset, tunedParams });
 
 				// Pins ride along unchanged. A pin names a field, not a value, so editing the value under
 				// a pinned field—recolouring a key colour, say—leaves the pin exactly where it was. A key
@@ -978,7 +993,7 @@ export function createWorkspaceStore({
 				const next = draftPins.includes(path)
 					? draftPins.filter((pin) => pin !== path)
 					: canonicalPins([...draftPins, path]);
-				const params = tunedParams ?? PRESET_PARAMS[preset];
+				const params = activeParams({ preset, tunedParams });
 
 				set({ draftPins: next, ...derivation(engine, draftSeed, params, overrides, next) });
 			},
@@ -986,7 +1001,7 @@ export function createWorkspaceStore({
 			setDraftPins(pins) {
 				const { draftSeed, preset, tunedParams, overrides } = get();
 				const next = canonicalPins(pins);
-				const params = tunedParams ?? PRESET_PARAMS[preset];
+				const params = activeParams({ preset, tunedParams });
 
 				set({ draftPins: next, ...derivation(engine, draftSeed, params, overrides, next) });
 			},
@@ -1006,9 +1021,18 @@ export function createWorkspaceStore({
 
 			tuneParam(field, value) {
 				const { draftSeed, preset, tunedParams, overrides, draftPins } = get();
-				const next = { ...(tunedParams ?? PRESET_PARAMS[preset]), [field]: value };
+				const next = { ...activeParams({ preset, tunedParams }), [field]: value };
+				// A slider dragged back to exactly the active preset's own value un-tunes the session
+				// outright, rather than leaving `tunedParams` holding an object that happens to equal
+				// `PRESET_PARAMS[preset]`. The Tuned marker and the Save lock both key on
+				// `tunedParams !== null` (seed-rail.tsx), so treating "equal to the preset" as still
+				// tuned would leave both showing for a slider that landed right back where it started.
+				const resolved = sameJson(next, PRESET_PARAMS[preset]) ? null : next;
 
-				set({ tunedParams: next, ...derivation(engine, draftSeed, next, overrides, draftPins) });
+				set({
+					tunedParams: resolved,
+					...derivation(engine, draftSeed, next, overrides, draftPins),
+				});
 			},
 
 			setOverride(override) {
@@ -1018,7 +1042,7 @@ export function createWorkspaceStore({
 					throw new Error('nothing is derived to override');
 				}
 
-				const params = tunedParams ?? PRESET_PARAMS[preset];
+				const params = activeParams({ preset, tunedParams });
 				const key = overrideKey(override);
 				const next = { ...overrides, [key]: override };
 				// The ramps don't depend on overrides, so the derivation already held is reused rather than
@@ -1043,7 +1067,7 @@ export function createWorkspaceStore({
 					return;
 				}
 
-				const params = tunedParams ?? PRESET_PARAMS[preset];
+				const params = activeParams({ preset, tunedParams });
 				const next = { ...overrides };
 				delete next[key];
 

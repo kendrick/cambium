@@ -3,6 +3,7 @@ import { useStore } from 'zustand';
 import type { StoreApi } from 'zustand/vanilla';
 
 import {
+	activeParams as resolveActiveParams,
 	canonicalPins,
 	type CommitProvenance,
 	type Interpretation,
@@ -12,12 +13,7 @@ import {
 } from '../../app/state/workspace-store';
 import type { BrandRecord, BrandVersion } from '../../core/brand-record';
 import type { BrandSeed, KeyColor } from '../../core/brand-seed';
-import {
-	BALANCED,
-	EXPRESSIVE,
-	FAITHFUL,
-	type InterpretationParams,
-} from '../../core/interpretation';
+import type { InterpretationParams } from '../../core/interpretation';
 import type { SeedPinPath } from '../../core/seed-pins';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -66,18 +62,6 @@ const PARAM_RANGES: Record<ParamField, { min: number; max: number; step: number 
 };
 
 const PARAM_FIELDS = Object.keys(PARAM_LABELS) as ParamField[];
-
-/**
- * Mirrors the private `PRESET_PARAMS` in `app/state/workspace-store.ts`. The store keeps that map
- * to itself, and the rail only needs it for one thing the store doesn't expose: what to seed a
- * slider at before anything is tuned. Derivation itself still runs through the store's own map, so
- * a drift between the two would only make a slider start in the wrong place, never a wrong token.
- */
-const PRESET_PARAM_SEEDS: Record<Interpretation, InterpretationParams> = {
-	faithful: FAITHFUL,
-	balanced: BALANCED,
-	expressive: EXPRESSIVE,
-};
 
 type Field = Exclude<keyof BrandSeed, 'keyColors'>;
 
@@ -189,7 +173,7 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 	const [advancedOpen, setAdvancedOpen] = useState(false);
 
 	const tuned = tunedParams !== null;
-	const activeParams = tunedParams ?? PRESET_PARAM_SEEDS[preset];
+	const activeParams = resolveActiveParams({ preset, tunedParams });
 
 	const active =
 		record && activeOrdinal !== null ? (record.versions[activeOrdinal - 1] ?? null) : null;
@@ -198,9 +182,14 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 	// `canonicalPins` and `samePins` the store's repair cache uses. Sharing the functions keeps the
 	// rail and the store from disagreeing about whether a pin change is real.
 	const pinsEdited = active !== null && !samePins(canonicalPins(active.pins), pins);
+	// A tuned session counts as dirty on its own, with no active version required: it is the one
+	// edit `workspaceFor` cannot express as "differs from what's stored", since nothing is stored
+	// under a tuned session's own name (`ParamsTunedError`'s docblock). "Unsaved edits" and Discard
+	// both key on `dirty`, so this is what makes tuning show up there instead of only disabling Save.
 	const dirty =
 		seedEdited ||
 		pinsEdited ||
+		tuned ||
 		(active !== null &&
 			(preset !== active.interpretation || !sameJson(Object.values(overrides), active.overrides)));
 	const pinned = (path: SeedPinPath) => pins.includes(path);

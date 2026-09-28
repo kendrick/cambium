@@ -103,7 +103,9 @@ export const FAITHFUL: InterpretationParams = {
  * The preset that leans into interpretation instead of staying out of its way. `neutralTinting` at
  * 0.6 pulls the neutral ramp noticeably toward the brand hue, since a preset named "expressive"
  * that still ships a dead-grey scale would not have earned the name. `chromaSpread` above 1 widens
- * the chroma curve so the mid-ramp steps read more saturated too, not only the anchor. `harmonization`
+ * the chroma curve at every step but the anchor itself: step 9 is `fitToSrgbGamut(anchor)` outright
+ * in `buildRamp` (`core/oklch-scale-engine.ts`) and never reads this field, so a wider spread makes
+ * the ramp around the brand and accent colours bolder without moving either colour. `harmonization`
  * is the one field every other preset holds at 0: letting status hues drift toward the brand is the
  * move `BALANCED`'s docblock reserves for this preset, on the understanding that a brand-tinted
  * danger color is a choice here rather than the defect it would be anywhere else. `accentRotation`

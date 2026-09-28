@@ -181,9 +181,10 @@ function brandHue(result: ScaleEngineResult | null): number {
 
 /**
  * Reads the one number `core/interpretation.test.ts` already proved moves between Faithful and
- * Expressive: `neutralTinting` is the field every preset here sets to something other than
- * Balanced's, so it's the plainest way to catch a store that stopped routing a preset's real
- * params to the engine.
+ * Expressive. `surfaceTinting` differs across all three presets too, but it only ever reaches a
+ * shadow's chroma (`core/interpretation.ts`'s own docblock), not a token this helper can read as
+ * directly as neutral step 9—so `neutralTinting` is the plainest number to check, not the only
+ * field a preset switch has to move.
  */
 function neutralChroma(result: ScaleEngineResult | null): number {
 	if (!result?.ok) {
@@ -1968,6 +1969,22 @@ describe('tuning a parameter live (#37)', () => {
 		});
 	});
 
+	it('returns to null once a slider lands back on the active preset’s own value', () => {
+		const { store } = openWorkspace();
+
+		store.getState().tuneParam('neutralTinting', 0.9);
+		expect(store.getState().tunedParams).not.toBeNull();
+
+		// The default record's preset is Balanced, whose `neutralTinting` is 0.25: moving the same
+		// field back to that value leaves nothing tuned. The Tuned marker and the Save lock both key
+		// on `tunedParams !== null` (`components/workspace/seed-rail.tsx`), so a slider dragged back
+		// to its starting point has to un-tune the session rather than hold an object that happens to
+		// equal `BALANCED`.
+		store.getState().tuneParam('neutralTinting', BALANCED.neutralTinting);
+
+		expect(store.getState().tunedParams).toBeNull();
+	});
+
 	it('changes a token value, leaves the pinned key colour’s hue unchanged, and reaches no network', () => {
 		vi.stubGlobal('fetch', () => {
 			throw new Error('the workspace store must not reach the network');
@@ -2035,4 +2052,28 @@ describe('commit refuses while params are tuned (#37)', () => {
 
 		expect(next.versions).toHaveLength(2);
 	});
+});
+
+describe('selecting a preset reaches no network (#37)', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	// `tuneParam`'s own no-network test (above) only ever exercises one preset's own params as its
+	// starting point. `selectPreset` is the other place `PRESET_PARAMS` reaches the engine, and a
+	// wrong entry in that map—say, one preset still pointing at another's constants—would only show
+	// up on the presets actually run, so all three are checked rather than one standing in for them.
+	it.each(['faithful', 'balanced', 'expressive'] as const)(
+		'runs %s with fetch stubbed to throw',
+		(preset) => {
+			vi.stubGlobal('fetch', () => {
+				throw new Error('the workspace store must not reach the network');
+			});
+
+			const { store } = openWorkspace();
+
+			expect(() => store.getState().selectPreset(preset)).not.toThrow();
+			expect(store.getState().preset).toBe(preset);
+		},
+	);
 });

@@ -9,11 +9,10 @@ import { ANCHOR_TOLERANCE } from './scale-engine';
 import { buildTokenSet } from './semantic-layer';
 
 /**
- * `core/scale-engine-contract.ts` states no `SEEDS` or `generate` outside the closure that runs the
- * shared engine suite, by wave rule: lane E (#99) owns that file for the duration, and this lane's
- * job is the two constants, not a change to the seam they get judged against. The four hues below
- * are the same ones that file measures against, copied rather than imported, so a figure here stays
- * comparable to what that suite reports without this file reaching into it.
+ * The same four hues `core/scale-engine-contract.ts` measures against. That file's own `SEEDS` is
+ * module-scope but unexported, so nothing outside it can import the array; copying the values here
+ * keeps a figure in this file comparable to what that suite reports, without reaching into a module
+ * this one has no import path to.
  */
 const SEEDS: ReadonlyArray<readonly [string, OklchTriple]> = [
 	['blue at 259.8', [0.6231, 0.188, 259.8]],
@@ -51,6 +50,10 @@ function generate(seed: BrandSeed, params: InterpretationParams) {
 
 describe('the three presets', () => {
 	it('are pairwise distinct objects', () => {
+		expect(BALANCED).not.toBe(FAITHFUL);
+		expect(BALANCED).not.toBe(EXPRESSIVE);
+		expect(FAITHFUL).not.toBe(EXPRESSIVE);
+
 		expect(BALANCED).not.toEqual(FAITHFUL);
 		expect(BALANCED).not.toEqual(EXPRESSIVE);
 		expect(FAITHFUL).not.toEqual(EXPRESSIVE);
@@ -68,18 +71,45 @@ describe('the three presets', () => {
 	});
 });
 
-describe('faithful reproduces the seed key color', () => {
-	it.each(SEEDS)('keeps step 9 within ANCHOR_TOLERANCE in both schemes for %s', (_label, brand) => {
-		const result = generate(seedWith(brand), FAITHFUL);
-		const target: Oklch = { l: brand[0], c: brand[1], h: brand[2] };
-		const light = result.schemes.light.brand[8]!;
-		const dark = result.schemes.dark.brand[8]!;
+describe('faithful reproduces every seed key colour', () => {
+	// Step 9 of any placed ramp is `fitToSrgbGamut(anchor)` outright, in `buildRamp`
+	// (`core/oklch-scale-engine.ts`), before any `InterpretationParams` field is read. That holds for
+	// Balanced and Expressive exactly as it holds for Faithful, so checking only the brand colour
+	// here would not be a claim that sets Faithful apart—the contract suite already covers it.
+	// What this test is actually for is the seed's *accent* key colour: an observed second colour
+	// the seed places independently of the brand, reproduced at its own step 9 within
+	// `ANCHOR_TOLERANCE`. The value is the accent and the tolerance, not the preset.
+	const ACCENT: OklchTriple = [0.65, 0.19, 50];
 
-		expect(oklchDistance(light, target)).toBeLessThanOrEqual(ANCHOR_TOLERANCE);
-		expect(oklchDistance(dark, target)).toBeLessThanOrEqual(ANCHOR_TOLERANCE);
-		// The engine's own account of the same measurement, checked against what was just measured
+	it.each(SEEDS)('keeps step 9 within ANCHOR_TOLERANCE in both schemes for %s', (_label, brand) => {
+		const seed = seedWith(brand, {
+			keyColors: [
+				{ oklch: brand, proposedRole: 'brand', sourceImageId: 'img-1', sourceRegion: null },
+				{ oklch: ACCENT, proposedRole: 'accent', sourceImageId: 'img-1', sourceRegion: null },
+			],
+		});
+		const result = generate(seed, FAITHFUL);
+		const brandTarget: Oklch = { l: brand[0], c: brand[1], h: brand[2] };
+		const accentTarget: Oklch = { l: ACCENT[0], c: ACCENT[1], h: ACCENT[2] };
+
+		expect(oklchDistance(result.schemes.light.brand[8]!, brandTarget)).toBeLessThanOrEqual(
+			ANCHOR_TOLERANCE,
+		);
+		expect(oklchDistance(result.schemes.dark.brand[8]!, brandTarget)).toBeLessThanOrEqual(
+			ANCHOR_TOLERANCE,
+		);
+		expect(oklchDistance(result.schemes.light.accent[8]!, accentTarget)).toBeLessThanOrEqual(
+			ANCHOR_TOLERANCE,
+		);
+		expect(oklchDistance(result.schemes.dark.accent[8]!, accentTarget)).toBeLessThanOrEqual(
+			ANCHOR_TOLERANCE,
+		);
+		// The engine's own account of the brand anchor, checked against what was just measured
 		// independently rather than trusted on its own — an engine that reported success while
-		// missing the tolerance would fail on this disagreement.
+		// missing the tolerance would fail on this disagreement. `result.anchor` only ever reports
+		// the brand ramp (`anchorReport` in `core/oklch-scale-engine.ts`), so the accent assertions
+		// above have no engine self-report to cross-check against; they stand on the independent
+		// measurement alone.
 		expect(result.anchor.withinTolerance).toBe(true);
 		expect(result.anchor.deviation).toBeLessThanOrEqual(ANCHOR_TOLERANCE);
 	});
