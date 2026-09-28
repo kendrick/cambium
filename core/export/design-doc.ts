@@ -183,6 +183,14 @@ function recordEntries(
 	}));
 }
 
+/**
+ * Merged on the claim alone (`mergeSchemes`'s default `sameValue`), never the value: a shadow tints
+ * from the resolved page surface (this function's own `$extensions.rationale` says so), so light and
+ * dark disagree on colour, alpha and blur on every run, the same way a derived or invented ramp step
+ * does (`sameClaim`'s docblock). "What the interpretation produced" has no Value column for a reader
+ * to compare anyway, and the sentence that section prints above its table is what makes an unlabelled
+ * shadow row here the same claim made twice rather than the same number twice.
+ */
 function shadowEntries(tokens: TokenSet): TokenEntry[] {
 	return mergeSchemes(
 		recordEntries('shadow.values', tokens.schemes.light.shadow.values),
@@ -252,6 +260,12 @@ function allEntries(
  * make that true by construction instead of by convention, but it's ES2023 and this repo's tsconfig
  * targets ES2022 (the trade `core/dtcg/report.ts` also makes), so the lint rule aimed at exactly this
  * mutation is disabled once, here, rather than at each of this file's two call sites.
+ *
+ * Ordered by codepoint, not `localeCompare`: this is the only locale-sensitive sort in `core/`, and a
+ * token path is an identifier, not prose a reader collates by a language's own rules. `localeCompare`
+ * without an explicit locale reads the runtime's default ICU locale, so the same token set could sort
+ * this table into a different row order on a machine configured differently — exactly the kind of
+ * environment-dependent output a pure function (`designDoc`'s own docblock) can't afford.
  */
 function sortedByKeys<T>(items: readonly T[], keysOf: (item: T) => readonly string[]): T[] {
 	// oxlint-disable-next-line unicorn/no-array-sort
@@ -259,7 +273,8 @@ function sortedByKeys<T>(items: readonly T[], keysOf: (item: T) => readonly stri
 		const [aKeys, bKeys] = [keysOf(a), keysOf(b)];
 
 		for (let i = 0; i < aKeys.length; i += 1) {
-			const compared = aKeys[i]!.localeCompare(bKeys[i]!);
+			const [aKey, bKey] = [aKeys[i]!, bKeys[i]!];
+			const compared = aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
 
 			if (compared !== 0) return compared;
 		}
@@ -325,6 +340,14 @@ function keyColourSection(tokens: TokenSet): string[] {
 	];
 }
 
+/**
+ * Printed under both sections whose rows carry no Value column. Derived and invented ramp steps,
+ * and shadows, differ by scheme on every run, yet merge into one unlabelled row because their claim
+ * doesn't (`mergeSchemes`), so a reader could otherwise take an unlabelled row as scheme-invariant.
+ */
+const SAME_CLAIM_NOTE =
+	'A row with no `light:` or `dark:` label makes the same claim in both schemes, even where the value it resolves to differs between them.';
+
 function interpretationSection(entries: readonly TokenEntry[]): string[] {
 	const rows = sortedByKeys(
 		entries.filter((entry) => entry.extensions.provenance === 'derived'),
@@ -333,6 +356,8 @@ function interpretationSection(entries: readonly TokenEntry[]): string[] {
 
 	return [
 		'## What the interpretation produced',
+		'',
+		SAME_CLAIM_NOTE,
 		'',
 		...table(['Token', 'Seed field', 'Rationale'], rows),
 	];
@@ -350,7 +375,13 @@ function inventedSection(entries: readonly TokenEntry[]): string[] {
 		(entry) => [entryPath(entry)],
 	).map((entry) => [entryPath(entry), entry.extensions.provenance, entry.extensions.rationale]);
 
-	return ['## Invented tokens', '', ...table(['Token', 'Provenance', 'Rationale'], rows)];
+	return [
+		'## Invented tokens',
+		'',
+		SAME_CLAIM_NOTE,
+		'',
+		...table(['Token', 'Provenance', 'Rationale'], rows),
+	];
 }
 
 /** `SuggestedPairingSchema`'s three roles, in the order the schema declares them. */

@@ -475,6 +475,49 @@ describe('designDoc scheme handling', () => {
 			'an unpaired dark token must not print without its scheme label',
 		).toBeUndefined();
 	});
+
+	/**
+	 * `xs` is a shadow, and a shadow's colour tints from the resolved page surface (`shadowEntries`'s
+	 * own WHY comment in design-doc.ts), so light and dark disagree on lightness, alpha and blur on
+	 * every run — the value genuinely differs, even though the row still makes the same claim in both
+	 * schemes. Pinning this to the unsplit case removes the coverage test's 1/0/0-or-0/1/1 ambiguity
+	 * for shadow specifically: a regression that started splitting shadow rows would still satisfy
+	 * that test's "either is fine" bar, but not this one's.
+	 */
+	it('keeps a shadow value merged into one unlabelled row even though its value differs by scheme', () => {
+		const lightXs = tokens.schemes.light.shadow.values.xs;
+		const darkXs = tokens.schemes.dark.shadow.values.xs;
+
+		// The fixture only proves this test if light and dark genuinely disagree on this shadow's
+		// value; check that against the real schemes before trusting what the doc does.
+		expect(lightXs.color.l).not.toBe(darkXs.color.l);
+		expect(lightXs.color.alpha).not.toBe(darkXs.color.alpha);
+		expect(lightXs.blur.value).not.toBe(darkXs.blur.value);
+
+		const interpretation = tables.find(
+			(t) => t.headers[0] === 'Token' && t.headers[1] === 'Seed field',
+		)!;
+		const unlabeledRow = interpretation.rows.find((r) => r[0] === 'shadow.values.xs');
+		const lightRow = interpretation.rows.find((r) => r[0] === 'light:shadow.values.xs');
+		const darkRow = interpretation.rows.find((r) => r[0] === 'dark:shadow.values.xs');
+
+		expect(unlabeledRow, 'shadow.values.xs must print as one unlabelled row').toBeDefined();
+		expect(lightRow, 'shadow.values.xs must not split despite its differing value').toBeUndefined();
+		expect(darkRow, 'shadow.values.xs must not split despite its differing value').toBeUndefined();
+	});
+
+	/**
+	 * The shadow row above is the concrete case; this is the doc saying so in words, for a reader who
+	 * never cross-checks a row against the two schemes themselves.
+	 */
+	it.each(['What the interpretation produced', 'Invented tokens'])(
+		'states under "%s" that an unlabelled row makes the same claim in both schemes',
+		(heading) => {
+			expect(sectionLines(doc, heading)).toContain(
+				'A row with no `light:` or `dark:` label makes the same claim in both schemes, even where the value it resolves to differs between them.',
+			);
+		},
+	);
 });
 
 describe('designDoc repairs', () => {
@@ -695,6 +738,29 @@ describe('designDoc traceability', () => {
 
 		// A per-row pass that checked nothing would pass vacuously, same as the set-membership pass above.
 		expect(checked).toBeGreaterThan(0);
+	});
+
+	/**
+	 * The Suggested table's first column is a role, not a token path, so `tokenTables` above never
+	 * picks it up and the set-membership check has the last word on it: "Geo Sans" and 92 are real
+	 * atoms no matter which role's row prints them, so a bug that mapped every role to
+	 * `seed.suggestedPairing.display` would still pass that check. Looking a row's own role up in
+	 * `seed.suggestedPairing` and matching on family, the way `typeSection`'s own `flatMap` does,
+	 * closes that gap the same way `rowToken` closes it for the Token-keyed tables above.
+	 */
+	it('ties every Suggested row to a candidate its own role actually holds', () => {
+		const suggested = tables.find((t) => t.headers[0] === 'Family')!;
+
+		expect(suggested.rows.length).toBeGreaterThan(0);
+
+		for (const row of suggested.rows) {
+			const [family, role, scoreCell] = row;
+			const candidates = seed.suggestedPairing![role as (typeof PAIRING_ROLES)[number]];
+			const candidate = candidates.find((c) => c.family === family);
+
+			expect(candidate, `no "${role}" candidate named "${family}"`).toBeDefined();
+			expect(scoreCell).toBe(candidate!.score === null ? 'no score' : String(candidate!.score));
+		}
 	});
 });
 
