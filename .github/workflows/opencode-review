@@ -1,0 +1,22 @@
+name: OpenCode review
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+concurrency:
+  group: opencode-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      id-token: write
+      actions: read
+    uses: tonythethompson/opencode-review-threads/.github/workflows/opencode-review.yml@ca210394a5d109a12d1031d58e3cdc6abb9cd9fe # v1.4.9
+    with:
+      models-review: ${{ vars.OPENCODE_MODELS_REVIEW }}
+    secrets:
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
