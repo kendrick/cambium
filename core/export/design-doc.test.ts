@@ -6,19 +6,18 @@ import { toOklchCss } from '../css/oklch-css';
 import { BALANCED } from '../interpretation';
 import { createOklchScaleEngine } from '../oklch-scale-engine';
 import { CAMBIUM_NAMESPACE, type TokenProvenance } from '../provenance';
-import { RAMP_NAMES } from '../scale-engine';
+import { SCHEME_NAMES } from '../scale-engine';
 import { buildTokenSet } from '../semantic-layer';
 import type { TokenSet } from '../token-set';
-import { designDoc } from './design-doc';
+import { designDoc, extensionsOf } from './design-doc';
 
 /**
  * Two key colours, both character fields, a full type classification and a ranked pairing, built
  * the way every other fixture in `core/` is: a literal `BrandSeedSchema.parse` with each of the
- * eleven fields spelled out. No existing `core/*.test.ts` fixture combines two key colours with a
- * stated `typeClassification` in one seed (`provenance.test.ts`'s `STATED_SEED` has two key colours
- * and no type classification; `rank-fonts.test.ts`'s classified seeds carry no second key colour),
- * so this fixture is its own rather than an import — see `plan_concerns` in the report for why the
- * plan's "reuse a seed fixture" step didn't apply as written.
+ * eleven fields spelled out. No seed literal in this repo's test suite combines two key colours with
+ * a stated `typeClassification` (`provenance.test.ts`'s `STATED_SEED` has two key colours and no
+ * type classification; `rank-fonts.test.ts`'s classified seeds carry no second key colour), so this
+ * fixture is its own rather than an import.
  *
  * The brand hue sits at magenta, mid-lightness: `core/contrast/repair.ts`'s own docblock names
  * magenta's dark-scheme repair as the case that drove `STRICT_EPSILON`, so it is a color already
@@ -69,6 +68,9 @@ const seed: BrandSeed = BrandSeedSchema.parse({
 	imageClassifications: [{ imageId: 'img-1', detected: 'logo' }],
 	expressive: [{ axis: 'Calm', score: 88 }],
 });
+
+/** `SuggestedPairingSchema`'s three roles, in the order the schema declares them. */
+const PAIRING_ROLES = ['display', 'body', 'mono'] as const;
 
 const generated = createOklchScaleEngine().generate(seed, BALANCED);
 
@@ -146,7 +148,7 @@ function parseTables(lines: readonly string[]): ParsedTable[] {
 const tables = parseTables(docLines);
 
 describe('designDoc structure', () => {
-	it('renders valid markdown that parses without broken structure', () => {
+	it('is non-empty and ends with a trailing newline', () => {
 		expect(doc.length).toBeGreaterThan(0);
 		expect(doc.endsWith('\n')).toBe(true);
 	});
@@ -200,112 +202,208 @@ describe('designDoc purity', () => {
 	});
 });
 
-/**
- * Independently re-derived from the three inputs, not imported from `design-doc.ts`: a coverage or
- * traceability check that walked the set the same way the generator does would only prove the
- * generator agrees with itself. `TokenSet`'s shape is public (`core/token-set.ts`), so re-walking it
- * here is the same move `core/provenance.test.ts`'s `payloadOf` makes.
- */
-function extensionsOf(holder: {
-	$extensions: { [CAMBIUM_NAMESPACE]: TokenProvenance };
-}): TokenProvenance {
-	return holder.$extensions[CAMBIUM_NAMESPACE];
+/** One `$extensions` payload this walk found, at the path it found it, plus a colour if it had one. */
+type Observed = { path: string; extensions: TokenProvenance; value?: string };
+
+function isCambiumHolder(
+	node: unknown,
+): node is { $extensions: { [CAMBIUM_NAMESPACE]: TokenProvenance } } {
+	if (typeof node !== 'object' || node === null || !Object.hasOwn(node, '$extensions'))
+		return false;
+
+	const extensions = (node as { $extensions: unknown }).$extensions;
+
+	return typeof extensions === 'object' && extensions !== null && CAMBIUM_NAMESPACE in extensions;
 }
 
-type Observed = { path: string; extensions: TokenProvenance; value?: string };
+/** A primitive ramp step is the one `$extensions` holder that also carries its own OKLCH channels. */
+function colourValueOf(node: Record<string, unknown>): string | undefined {
+	const { l, c, h } = node;
+
+	return typeof l === 'number' && typeof c === 'number' && typeof h === 'number'
+		? toOklchCss({ l, c, h })
+		: undefined;
+}
+
+/**
+ * Walks the whole top-level `TokenSet` for `$extensions` payloads, rather than naming the nine
+ * categories that happen to carry one today. `design-doc.ts`'s `allEntries` names them one by one
+ * because the doc's section order depends on telling them apart; this walk doesn't need to, so it
+ * doesn't hold a second copy of that list. A category the generator forgets to include still turns
+ * up here, so a coverage or traceability test built on this catches the omission — with a hard-coded
+ * list on both sides, one bug in the list would have been invisible to both.
+ *
+ * `schemes` is skipped on purpose: the top level already mirrors `schemes.light`
+ * (`checkMirroredLayers`, `token-set.ts`), so walking it too would double every light-scheme entry,
+ * and the behaviour that actually depends on both schemes — a path where light and dark disagree —
+ * is checked directly against `tokens.schemes.light` / `tokens.schemes.dark` in the "scheme
+ * handling" tests below, not through this walk.
+ *
+ * Path segments follow the real property path, with one exception: `primitives` contributes no
+ * segment of its own, so a ramp step's path reads `brand.9` rather than `primitives.brand.9`,
+ * matching the `ramp.step` alias spelling `semantic-map.ts` already uses everywhere else. An array
+ * index becomes a 1-based segment, which for a primitive ramp is exactly its `step` number
+ * (`RampSchema` pins a ramp to steps 1 through 12, each exactly once, in order).
+ */
+function walkGeneric(node: unknown, path: string, out: Observed[]): void {
+	if (isCambiumHolder(node)) {
+		out.push({ path, extensions: extensionsOf(node), value: colourValueOf(node) });
+		return;
+	}
+
+	if (Array.isArray(node)) {
+		node.forEach((item, index) => walkGeneric(item, `${path}.${index + 1}`, out));
+		return;
+	}
+
+	if (node !== null && typeof node === 'object') {
+		for (const [key, value] of Object.entries(node)) {
+			if (key === 'schemes') continue;
+
+			const nextPath = key === 'primitives' ? path : path ? `${path}.${key}` : key;
+
+			walkGeneric(value, nextPath, out);
+		}
+	}
+}
 
 function independentWalk(set: TokenSet): Observed[] {
 	const out: Observed[] = [];
 
-	for (const ramp of RAMP_NAMES) {
-		for (const step of set.primitives[ramp] ?? []) {
-			out.push({
-				path: `${ramp}.${step.step}`,
-				extensions: extensionsOf(step),
-				value: toOklchCss({ l: step.l, c: step.c, h: step.h }),
-			});
-		}
-	}
-
-	for (const [token, entry] of Object.entries(set.semantic)) {
-		out.push({ path: `semantic.${token}`, extensions: extensionsOf(entry) });
-	}
-
-	const record = (prefix: string, values: Record<string, { $extensions: unknown }>) => {
-		for (const [key, value] of Object.entries(values)) {
-			out.push({ path: `${prefix}.${key}`, extensions: extensionsOf(value as never) });
-		}
-	};
-
-	record('shadow.values', set.shadow.values);
-	record('radius.values', set.radius.values);
-	record('typography.values.size', set.typography.values.size);
-	record('typography.values.weight', set.typography.values.weight);
-	record('typography.values.lineHeight', set.typography.values.lineHeight);
-	record('tracking.values', set.tracking.values);
-	record('spacing.values', set.spacing.values);
-	record('opacity.values', set.opacity.values);
-	record('motion.values.duration', set.motion.values.duration);
-	record('motion.values.easing', set.motion.values.easing);
-	out.push({
-		path: 'focusRing.values.width',
-		extensions: extensionsOf(set.focusRing.values.width),
-	});
-	out.push({
-		path: 'focusRing.values.offset',
-		extensions: extensionsOf(set.focusRing.values.offset),
-	});
-	record('zIndex.values', set.zIndex.values);
+	walkGeneric(set, '', out);
 
 	return out;
 }
 
 const walked = independentWalk(tokens);
-const observedTokens = walked.filter((e) => e.extensions.provenance === 'observed');
+/**
+ * "Observed key colour" means a primitive ramp step, not any observed payload: `semantic.primary`
+ * and `semantic.sidebar-primary` both inherit `observed` from the `brand.9` they alias
+ * (`semantic-layer.ts`'s `inheritedFrom`), and the Key colours section — Task 2's own definition —
+ * lists ramp steps, not the semantic tokens that point at them. `value` is only ever set by
+ * `colourValueOf` on a node with its own `l`/`c`/`h`, which is exactly a ramp step, so filtering on
+ * it scopes this to the same set `design-doc.ts`'s `colourEntries` builds, without re-naming
+ * `primitives` as a special case a second time.
+ */
+const observedTokens = walked.filter(
+	(e) => e.extensions.provenance === 'observed' && e.value !== undefined,
+);
 const inventedTokens = walked.filter((e) => e.extensions.provenance === 'invented');
 
 describe('designDoc coverage', () => {
-	it('names every observed token path and the seed field it came from', () => {
+	it('names every observed token exactly, with the seed field it came from, in the Key colours table', () => {
+		const keyColours = tables.find((t) => t.headers[0] === 'Token' && t.headers[1] === 'Value')!;
+
 		expect(observedTokens.length).toBeGreaterThan(0);
 
 		for (const entry of observedTokens) {
-			expect(doc).toContain(entry.path);
-			expect(doc).toContain(entry.extensions.seedField as string);
+			const row = keyColours.rows.find(
+				(r) => r[0] === entry.path || r[0] === `light:${entry.path}`,
+			);
+
+			expect(row, `no exact row for "${entry.path}"`).toBeDefined();
+			expect(row![2]).toBe(entry.extensions.seedField);
 		}
 	});
 
-	it('marks every invented token path on a line naming it invented', () => {
+	it('marks every invented token exactly, on a row whose Provenance cell says invented', () => {
+		const invented = tables.find((t) => t.headers[0] === 'Token' && t.headers[1] === 'Provenance')!;
+
 		expect(inventedTokens.length).toBeGreaterThan(0);
 
 		for (const entry of inventedTokens) {
-			const line = docLines.find((l) => l.includes(entry.path));
+			const row = invented.rows.find((r) => r[0] === entry.path || r[0] === `light:${entry.path}`);
 
-			expect(line, `no line carries ${entry.path}`).toBeDefined();
-			expect(line).toContain('invented');
+			expect(row, `no exact row for "${entry.path}"`).toBeDefined();
+			expect(row![1]).toBe('invented');
 		}
 	});
 
-	it('prints both ratios of every repair', () => {
+	it('prints the exact before/after ratio pair for every repair', () => {
+		const repairsTable = tables.find((t) => t.headers[0] === 'Scheme')!;
+		const ratioCells = repairsTable.rows.map((r) => r[3]);
+
 		for (const entry of repairs) {
-			expect(doc).toContain(entry.measured.toFixed(2));
-			expect(doc).toContain(entry.achieved.toFixed(2));
+			expect(ratioCells).toContain(`${entry.measured.toFixed(2)} → ${entry.achieved.toFixed(2)}`);
 		}
 	});
+});
 
-	it('distinguishes the measured type classification from the suggested family list', () => {
-		expect(doc).toContain(seed.typeClassification!.category);
-		expect(doc).toContain(seed.typeClassification!.tone);
-		expect(doc).toContain(seed.typeClassification!.xHeight);
-		expect(doc).toContain('Geo Sans');
-		expect(doc).toContain('Reading Sans');
-		expect(doc).toContain('no score');
+describe('designDoc scheme handling', () => {
+	it('keeps a semantic alias that differs between schemes split and labeled, and collapses one that does not', () => {
+		const lightPrimaryFg = extensionsOf(tokens.schemes.light.semantic['primary-foreground']!);
+		const darkPrimaryFg = extensionsOf(tokens.schemes.dark.semantic['primary-foreground']!);
+		const lightRing = extensionsOf(tokens.schemes.light.semantic.ring!);
+		const darkRing = extensionsOf(tokens.schemes.dark.semantic.ring!);
+
+		// The fixture only proves this test if light and dark genuinely disagree on one alias and
+		// agree on another; check that against the real schemes before trusting what the doc does.
+		expect(lightPrimaryFg.rationale).not.toBe(darkPrimaryFg.rationale);
+		expect(lightRing.rationale).toBe(darkRing.rationale);
+
+		const interpretation = tables.find(
+			(t) => t.headers[0] === 'Token' && t.headers[1] === 'Seed field',
+		)!;
+		const lightRow = interpretation.rows.find((r) => r[0] === 'light:semantic.primary-foreground');
+		const darkRow = interpretation.rows.find((r) => r[0] === 'dark:semantic.primary-foreground');
+		const ambiguousRow = interpretation.rows.find((r) => r[0] === 'semantic.primary-foreground');
+		const ringRow = interpretation.rows.find((r) => r[0] === 'semantic.ring');
+
+		expect(lightRow, 'no light: row for primary-foreground').toBeDefined();
+		expect(darkRow, 'no dark: row for primary-foreground').toBeDefined();
+		expect(lightRow![2]).toBe(lightPrimaryFg.rationale);
+		expect(darkRow![2]).toBe(darkPrimaryFg.rationale);
+		// An unlabeled row here would tell a reader nothing about which scheme it describes.
+		expect(ambiguousRow, 'primary-foreground printed without a scheme label').toBeUndefined();
+		expect(ringRow, 'ring, which agrees across schemes, printed unnecessarily split').toBeDefined();
+		expect(ringRow![2]).toBe(lightRing.rationale);
+	});
+});
+
+describe('designDoc repairs', () => {
+	it("names each repair row's scheme and the moved ramp.step token beside its ratios", () => {
+		const repairsTable = tables.find((t) => t.headers[0] === 'Scheme')!;
+
+		expect(repairsTable.rows).toHaveLength(repairs.length);
+
+		for (const entry of repairs) {
+			const row = repairsTable.rows.find(
+				(r) => r[0] === entry.scheme && r[2] === `${entry.ramp}.${entry.step}`,
+			);
+
+			expect(row, `no row for ${entry.scheme} ${entry.ramp}.${entry.step}`).toBeDefined();
+			expect(row![1]).toBe(`${entry.foreground} / ${entry.background}`);
+			expect(row![3]).toBe(`${entry.measured.toFixed(2)} → ${entry.achieved.toFixed(2)}`);
+			expect(row![4]).toBe(`${toOklchCss(entry.from)} → ${toOklchCss(entry.to)}`);
+			expect(row![5]).toBe(String(entry.target));
+		}
+	});
+});
+
+describe('designDoc type section', () => {
+	it("labels the Measured and Suggested tables and shows the seed's typeScaleRatio", () => {
+		expect(docLines).toContain('**Measured**');
+		expect(docLines).toContain('**Suggested**');
+
+		const measured = tables.find((t) => t.headers[0] === 'Category')!;
+
+		expect(measured.rows[0]?.[3]).toBe(String(seed.typeScaleRatio));
+	});
+
+	it('shows an empty-ratio state when typeScaleRatio is null but typeClassification is stated', () => {
+		const noRatioDoc = designDoc({ tokens, seed: { ...seed, typeScaleRatio: null }, repairs });
+		const noRatioTables = parseTables(noRatioDoc.split('\n'));
+		const measured = noRatioTables.find((t) => t.headers[0] === 'Category')!;
+
+		expect(measured.rows[0]?.[3]).toBe('no ratio');
 	});
 });
 
 /**
  * The universe of strings a table cell is allowed to be built from: every rationale, every path
- * component, every seed field name, every provenance value, every formatted number the three
- * inputs actually carry. A cell outside this set is a free-form assertion the plan forbids.
+ * component, every seed field name, every provenance value, every scheme name, every formatted
+ * number the three inputs actually carry. A cell outside this set is a free-form assertion the plan
+ * forbids.
  */
 function allowedAtoms(): Set<string> {
 	const atoms = new Set<string>();
@@ -318,14 +416,29 @@ function allowedAtoms(): Set<string> {
 		if (entry.value) atoms.add(entry.value);
 	}
 
+	// Scheme-qualified rows glue one of these onto a path with `:` (see `partsOf`); both are real
+	// `SchemeName` values. The dark half of a split semantic alias isn't in `walked` (that walk
+	// skips `schemes` on purpose), so its rationale and seed field are added here instead, read
+	// straight off `tokens.schemes.dark`.
+	for (const scheme of SCHEME_NAMES) atoms.add(scheme);
+
+	for (const entry of Object.values(tokens.schemes.dark.semantic)) {
+		const extensions = extensionsOf(entry);
+
+		atoms.add(extensions.rationale);
+		if (extensions.seedField) atoms.add(extensions.seedField);
+	}
+
 	if (seed.typeClassification) {
 		atoms.add(seed.typeClassification.category);
 		atoms.add(seed.typeClassification.tone);
 		atoms.add(seed.typeClassification.xHeight);
 	}
 
+	atoms.add(seed.typeScaleRatio === null ? 'no ratio' : String(seed.typeScaleRatio));
+
 	if (seed.suggestedPairing) {
-		for (const role of ['display', 'body', 'mono'] as const) {
+		for (const role of PAIRING_ROLES) {
 			atoms.add(role);
 			for (const candidate of seed.suggestedPairing[role]) {
 				atoms.add(candidate.family);
@@ -335,8 +448,10 @@ function allowedAtoms(): Set<string> {
 	}
 
 	for (const entry of repairs) {
+		atoms.add(entry.scheme);
 		atoms.add(entry.foreground);
 		atoms.add(entry.background);
+		atoms.add(`${entry.ramp}.${entry.step}`);
 		atoms.add(entry.measured.toFixed(2));
 		atoms.add(entry.achieved.toFixed(2));
 		atoms.add(toOklchCss(entry.from));
@@ -348,11 +463,16 @@ function allowedAtoms(): Set<string> {
 }
 
 const atoms = allowedAtoms();
+const SCHEME_PREFIX = new RegExp(`^(${SCHEME_NAMES.join('|')}):(.+)$`);
 
 /** Cells built from two atoms glued with a separator the generator, not the data, supplies. */
 function partsOf(cell: string): string[] {
 	if (cell.includes(' → ')) return cell.split(' → ');
 	if (cell.includes(' / ')) return cell.split(' / ');
+
+	const schemeMatch = SCHEME_PREFIX.exec(cell);
+
+	if (schemeMatch) return [schemeMatch[1]!, schemeMatch[2]!];
 
 	return [cell];
 }
@@ -364,7 +484,9 @@ describe('designDoc traceability', () => {
 		for (const t of tables) {
 			for (const r of t.rows) {
 				for (const cell of r) {
-					if (cell === '') continue; // an absent seedField on an invented row
+					// `seedFieldOf` (design-doc.ts) asserts a seed field for every row these tables
+					// can produce, so a blank cell would mean that assertion stopped holding.
+					expect(cell).not.toBe('');
 
 					for (const part of partsOf(cell)) {
 						expect(
@@ -396,29 +518,44 @@ function sectionLines(source: string, heading: string): string[] {
 }
 
 /**
- * The same fixture token set with `brand.9`'s rationale replaced by one carrying a literal `|`, so
- * `escapeCell` has something to prove itself against. Only `primitives.brand` changes: `colourEntries`
- * reads the top-level layer alone (see `allEntries`'s docblock in `design-doc.ts`), so the schemes
- * copies never need touching for this to reach the Key colours table.
+ * The fixture token set with one primitive step's rationale replaced, so `escapeCell` has something
+ * to prove itself against. Only the two schemes' copies of `primitives` change: `colourEntries`
+ * (`design-doc.ts`) reads `tokens.schemes.light`/`.dark` directly, not the top-level mirror, and both
+ * copies get the same new rationale so the row stays merged (unprefixed) rather than exercising the
+ * scheme-split behaviour the "scheme handling" tests above already cover on their own.
  */
-function withPipeInRationale(base: TokenSet): TokenSet {
-	const brand = base.primitives.brand!;
-	const target = brand[8]!; // step 9, the observed brand key colour
-
-	const mutated = {
-		...target,
-		$extensions: {
-			...target.$extensions,
-			[CAMBIUM_NAMESPACE]: {
-				...target.$extensions[CAMBIUM_NAMESPACE],
-				rationale: 'Uses a pipe | character to check escaping',
-			},
-		},
-	};
+function withRationale(base: TokenSet, ramp: string, step: number, rationale: string): TokenSet {
+	const replaceStep = (steps: TokenSet['primitives'][string]) =>
+		steps!.map((s) =>
+			s.step === step
+				? {
+						...s,
+						$extensions: {
+							...s.$extensions,
+							[CAMBIUM_NAMESPACE]: { ...s.$extensions[CAMBIUM_NAMESPACE], rationale },
+						},
+					}
+				: s,
+		);
 
 	return {
 		...base,
-		primitives: { ...base.primitives, brand: brand.map((step, i) => (i === 8 ? mutated : step)) },
+		schemes: {
+			light: {
+				...base.schemes.light,
+				primitives: {
+					...base.schemes.light.primitives,
+					[ramp]: replaceStep(base.schemes.light.primitives[ramp]),
+				},
+			},
+			dark: {
+				...base.schemes.dark,
+				primitives: {
+					...base.schemes.dark.primitives,
+					[ramp]: replaceStep(base.schemes.dark.primitives[ramp]),
+				},
+			},
+		},
 	};
 }
 
@@ -428,7 +565,10 @@ describe('designDoc edge cases', () => {
 		const lines = sectionLines(noType, 'Type');
 
 		for (const line of lines) {
-			expect(line === '' || line.startsWith('|'), `stray prose line: "${line}"`).toBe(true);
+			expect(
+				line === '' || line.startsWith('|') || line === '**Measured**' || line === '**Suggested**',
+				`stray prose line: "${line}"`,
+			).toBe(true);
 		}
 
 		const noTypeTables = parseTables(noType.split('\n'));
@@ -450,7 +590,10 @@ describe('designDoc edge cases', () => {
 		const lines = sectionLines(noPairing, 'Type');
 
 		for (const line of lines) {
-			expect(line === '' || line.startsWith('|'), `stray prose line: "${line}"`).toBe(true);
+			expect(
+				line === '' || line.startsWith('|') || line === '**Measured**' || line === '**Suggested**',
+				`stray prose line: "${line}"`,
+			).toBe(true);
 		}
 
 		const noPairingTables = parseTables(noPairing.split('\n'));
@@ -468,7 +611,11 @@ describe('designDoc edge cases', () => {
 	});
 
 	it('escapes a pipe inside a rationale and keeps the row at the header column count', () => {
-		const pipeDoc = designDoc({ tokens: withPipeInRationale(tokens), seed, repairs });
+		const pipeDoc = designDoc({
+			tokens: withRationale(tokens, 'brand', 9, 'Uses a pipe | character to check escaping'),
+			seed,
+			repairs,
+		});
 
 		expect(pipeDoc).toContain('Uses a pipe \\| character to check escaping');
 
@@ -482,5 +629,27 @@ describe('designDoc edge cases', () => {
 		expect(row).toHaveLength(keyColours.headers.length);
 		// `splitRow` unescapes `\|` back to `|`, so the round-tripped cell holds the real character.
 		expect(row[3]).toBe('Uses a pipe | character to check escaping');
+	});
+
+	it('escapes a newline inside a rationale and keeps the row at the header column count', () => {
+		const newlineDoc = designDoc({
+			tokens: withRationale(tokens, 'brand', 9, 'Has a line\nbreak to check escaping'),
+			seed,
+			repairs,
+		});
+
+		expect(newlineDoc).toContain('Has a line\\nbreak to check escaping');
+		// The raw newline must not survive: a real one would turn the rest of the cell into a
+		// second, headerless line.
+		expect(newlineDoc).not.toContain('Has a line\nbreak');
+
+		const newlineTables = parseTables(newlineDoc.split('\n'));
+		const keyColours = newlineTables.find(
+			(t) => t.headers[0] === 'Token' && t.headers[1] === 'Value',
+		)!;
+		const row = keyColours.rows.find((r) => r[0] === 'brand.9')!;
+
+		expect(row).toBeDefined();
+		expect(row).toHaveLength(keyColours.headers.length);
 	});
 });
