@@ -159,14 +159,17 @@ describe('every preset clears AA after repair', () => {
 	];
 
 	// Flattened rather than nested, so a failure names the exact preset/seed pair rather than
-	// forcing a reader back into a loop body to work out which iteration failed.
+	// forcing a reader back into a loop body to work out which iteration failed. `seedLabel` sits
+	// second in the tuple, ahead of `params`, because `it.each`'s `%s` placeholders fill from the
+	// title template in argument order: a title with `params` in that slot would print the object
+	// instead of the seed, and the four titles per preset would come out identical.
 	const cases = PRESETS.flatMap(([presetName, params]) =>
-		SEEDS.map(([seedLabel, brand]) => [presetName, params, seedLabel, brand] as const),
+		SEEDS.map(([seedLabel, brand]) => [presetName, seedLabel, params, brand] as const),
 	);
 
 	it.each(cases)(
 		'leaves nothing unrepaired for %s under %s',
-		(_presetName, params, _seedLabel, brand) => {
+		(_presetName, _seedLabel, params, brand) => {
 			const seed = seedWith(brand);
 			const result = generate(seed, params);
 			const base = buildTokenSet(result.schemes, seed, params);

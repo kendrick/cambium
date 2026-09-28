@@ -6,7 +6,12 @@ import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/
 import type { BrandSeed } from '../../core/brand-seed';
 import { checkContrast } from '../../core/contrast/check';
 import { withContrastRepairs } from '../../core/contrast/repair';
-import { BALANCED, FAITHFUL } from '../../core/interpretation';
+import {
+	BALANCED,
+	EXPRESSIVE,
+	FAITHFUL,
+	type InterpretationParams,
+} from '../../core/interpretation';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
 import type { RampSet, ScaleEngine, ScaleEngineResult } from '../../core/scale-engine';
 import { defaultSeedPins, repairPinsFor } from '../../core/seed-pins';
@@ -21,6 +26,7 @@ import {
 	CommitAbandonedError,
 	type CommitProvenance,
 	createWorkspaceStore,
+	type Interpretation,
 	OverrideRejectedError,
 	ParamsTunedError,
 	RecordStampedAheadError,
@@ -2059,12 +2065,19 @@ describe('selecting a preset reaches no network (#37)', () => {
 		vi.unstubAllGlobals();
 	});
 
-	// `tuneParam`'s own no-network test (above) only ever exercises one preset's own params as its
-	// starting point. `selectPreset` is the other place `PRESET_PARAMS` reaches the engine, and a
-	// wrong entry in that map—say, one preset still pointing at another's constants—would only show
-	// up on the presets actually run, so all three are checked rather than one standing in for them.
+	const NAMED_PARAMS: Record<Interpretation, InterpretationParams> = {
+		faithful: FAITHFUL,
+		balanced: BALANCED,
+		expressive: EXPRESSIVE,
+	};
+
+	// `not.toThrow` and `preset === name` both hold even if the store's own `PRESET_PARAMS` map has
+	// an entry pointing at the wrong constant—say, `faithful` still routed to `BALANCED`—since
+	// neither assertion looks at what got derived. A second, independent engine run on the preset's
+	// own named export (`FAITHFUL`, `BALANCED`, `EXPRESSIVE`) is what a swapped entry would actually
+	// fail: the store's derived neutral chroma has to match what that constant produces on its own.
 	it.each(['faithful', 'balanced', 'expressive'] as const)(
-		'runs %s with fetch stubbed to throw',
+		'runs %s with fetch stubbed to throw, deriving that preset’s own named params',
 		(preset) => {
 			vi.stubGlobal('fetch', () => {
 				throw new Error('the workspace store must not reach the network');
@@ -2074,6 +2087,14 @@ describe('selecting a preset reaches no network (#37)', () => {
 
 			expect(() => store.getState().selectPreset(preset)).not.toThrow();
 			expect(store.getState().preset).toBe(preset);
+
+			const expected = createOklchScaleEngine().generate(seedWith(259.8), NAMED_PARAMS[preset]);
+
+			if (!expected.ok) {
+				throw new Error(`expected generation failed: ${expected.error.kind}`);
+			}
+
+			expect(neutralChroma(store.getState().derived)).toBe(expected.schemes.light.neutral[8]!.c);
 		},
 	);
 });
