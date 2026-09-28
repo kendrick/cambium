@@ -34,8 +34,10 @@ describe('resolveScheme', () => {
 		const plain = resolveScheme(light);
 		const { __proto__: _dropped, ...rest } = resolved;
 
-		// toEqual compares own enumerable properties, not prototypes, so a null-prototype `rest`
-		// and a null-prototype `plain` count equal here on purpose.
+		// Object rest always builds on Object.prototype, so `rest` isn't null-prototype the way
+		// `resolved` and `plain` are—toEqual is what's wanted here, since it compares own
+		// enumerable properties rather than prototypes; toStrictEqual would fail this on the
+		// mismatch alone.
 		expect(rest).toEqual(plain);
 	});
 });
