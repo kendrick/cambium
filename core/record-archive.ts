@@ -3,7 +3,7 @@ import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import { type BrandRecord, BrandRecordSchema } from './brand-record';
 
 /**
- * A brand record as a zip: `record.json` plus `images/<id>.<ext>` for each reference image, with
+ * A brand record as a zip: `record.json` plus `images/<index>.<ext>` for each reference image, with
  * each image's `downscaled` in `record.json` holding that path instead of the data URL. Images go
  * in as decoded bytes, which saves the third that base64 adds.
  *
@@ -65,7 +65,7 @@ export function serializeRecord(record: BrandRecord): Uint8Array {
 	const epoch = zipEpoch();
 	const files: Record<string, [Uint8Array, { level: 0 | 6; mtime: Date }]> = {};
 
-	const images = record.images.map((image) => {
+	const images = record.images.map((image, index) => {
 		const decoded = decodeDataUrl(image.downscaled);
 
 		if (!decoded) {
@@ -74,9 +74,11 @@ export function serializeRecord(record: BrandRecord): Uint8Array {
 			);
 		}
 
-		// Encoded because the schema lets an id be any non-empty string, and one holding `/` or
-		// `..` would otherwise name a path deserializeRecord rightly refuses.
-		const path = `images/${encodeURIComponent(image.id)}.${decoded.extension}`;
+		// Named by position, never by id. The schema lets an id be any non-empty string, including
+		// `../x` and a lone UTF-16 surrogate, and no encoding turns every such string into a safe
+		// entry name (`encodeURIComponent` throws on the surrogate). `downscaled` in record.json
+		// carries the path, so the id never has to appear in it.
+		const path = `images/${index}.${decoded.extension}`;
 		files[path] = [decoded.bytes, { level: IMAGE_LEVEL, mtime: epoch }];
 
 		return { ...image, downscaled: path };
@@ -234,7 +236,7 @@ function rehydrateImages(
 }
 
 /**
- * Checked per segment rather than by substring, so an encoded id like `...webp` stays legal while
+ * Checked per segment rather than by substring, so a file name like `a..b.png` stays legal while
  * `images/../x` doesn't. Backslashes are refused outright because Windows extractors treat them as
  * separators, and an empty or `.` segment has no business in a path this module wrote.
  */
@@ -258,7 +260,10 @@ function sortKeys(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(sortKeys);
 	if (!isObject(value)) return value;
 
-	const sorted: Record<string, unknown> = {};
+	// Null-prototype because a plain `{}` treats an assigned `__proto__` key as a prototype setter,
+	// and JSON.stringify would then drop it. Foreign `$extensions` payloads can carry that key as
+	// data, and TokenExtensionsSchema passes them through.
+	const sorted: Record<string, unknown> = Object.create(null);
 	// `toSorted` is ES2023 and tsconfig targets ES2022. The array is fresh.
 	// oxlint-disable-next-line unicorn/no-array-sort
 	for (const key of Object.keys(value).sort()) sorted[key] = sortKeys(value[key]);

@@ -201,28 +201,28 @@ function forgeCrc(prefix: Uint8Array, target: number): Uint8Array {
 }
 
 /**
- * A second central entry named `images/img-2.png` whose different bytes carry the original's
+ * A second central entry named `images/1.png` whose different bytes carry the original's
  * CRC, placed last so fflate keeps it. The end record's total at +10 is one short of the this-disk
  * count at +8, so a walk that trusts +10 stops before the twin, sees three distinct names, and
  * agrees with fflate's three keys.
  */
 function twinArchive(): { bytes: Uint8Array; twin: Uint8Array } {
 	const original = unzipSync(serializeRecord(record));
-	const png = original['images/img-2.png']!;
+	const png = original['images/1.png']!;
 	const twin = forgeCrc(
 		Uint8Array.from([...PNG_BYTES.subarray(0, 8), ...strToU8('EVIL-TWIN')]),
 		crc32(png),
 	);
 	const zipped = zipSync(
 		{
-			'images/img-1.webp': original['images/img-1.webp']!,
-			'images/img-2.png': png,
+			'images/0.webp': original['images/0.webp']!,
+			'images/1.png': png,
 			'record.json': original['record.json']!,
-			'images/img-2.pnX': twin,
+			'images/1.pnX': twin,
 		},
 		{ level: 0 },
 	);
-	const bytes = renameEverywhere(zipped, 'images/img-2.pnX', 'images/img-2.png');
+	const bytes = renameEverywhere(zipped, 'images/1.pnX', 'images/1.png');
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	const end = bytes.length - 22;
 
@@ -275,31 +275,27 @@ function reverseKeys(value: unknown): unknown {
 }
 
 describe('serializeRecord', () => {
-	it('writes record.json plus one images/<id>.<ext> entry per image, and nothing else', () => {
+	it('writes record.json plus one images/<index>.<ext> entry per image, and nothing else', () => {
 		const entries = unzipSync(serializeRecord(record));
 
 		// `toSorted` is ES2023 and tsconfig targets ES2022. The array is fresh.
 		// oxlint-disable-next-line unicorn/no-array-sort
-		expect(Object.keys(entries).sort()).toEqual([
-			'images/img-1.webp',
-			'images/img-2.png',
-			'record.json',
-		]);
+		expect(Object.keys(entries).sort()).toEqual(['images/0.webp', 'images/1.png', 'record.json']);
 	});
 
 	it('stores each image as the bytes its data URL decodes to', () => {
 		const entries = unzipSync(serializeRecord(record));
 
-		expect(entries['images/img-1.webp']).toEqual(WEBP_BYTES);
-		expect(entries['images/img-2.png']).toEqual(PNG_BYTES);
+		expect(entries['images/0.webp']).toEqual(WEBP_BYTES);
+		expect(entries['images/1.png']).toEqual(PNG_BYTES);
 	});
 
 	it('writes record.json with each image pointing at its archive path', () => {
 		const json = JSON.parse(strFromU8(unzipSync(serializeRecord(record))['record.json']!));
 
 		expect(json.images.map((image: { downscaled: string }) => image.downscaled)).toEqual([
-			'images/img-1.webp',
-			'images/img-2.png',
+			'images/0.webp',
+			'images/1.png',
 		]);
 		expect(json.versions).toEqual(record.versions);
 	});
@@ -454,17 +450,61 @@ describe('deserializeRecord', () => {
 		},
 	);
 
-	it('restores an image id that would not be a safe path on its own', () => {
-		const awkward = {
+	// Ids never reach an entry name. `../a\\b/..` would be an unsafe path, and a lone surrogate makes
+	// `encodeURIComponent` throw, yet both are ids BrandRecordSchema accepts.
+	it.each(['../a\\b/..', '\uD800'])('round-trips the image id %j', (id) => {
+		const awkward = BrandRecordSchema.parse({
 			...record,
-			images: [{ ...record.images[0]!, id: '../a\\b/..' }],
+			images: [{ ...record.images[0]!, id }],
 			versions: [],
-		};
+		});
 		const result = deserializeRecord(serializeRecord(awkward));
 
 		if (!result.ok) throw new Error(result.error.message);
 
+		expect(result.record.images[0]!.id).toBe(id);
 		expect(result.record).toEqual(awkward);
+	});
+
+	/**
+	 * TokenExtensionsSchema passes foreign `$extensions` through untouched, so a vendor payload can
+	 * carry `__proto__` as a plain data key. Built two ways, since a computed key and JSON.parse
+	 * are the two ways such a key arrives as an own property.
+	 */
+	it('keeps an own __proto__ key inside a foreign $extensions payload', () => {
+		const tokenSet = structuredClone(record.versions[0]!.tokenSet!);
+		const extensions = tokenSet.schemes.light.primitives.brand![0]!.$extensions as Record<
+			string,
+			unknown
+		>;
+		extensions['com.example.parsed'] = JSON.parse('{"__proto__": {"kept": true}, "plain": 1}');
+		extensions['com.example.computed'] = { ['__proto__']: { kept: true } };
+
+		const withForeign = BrandRecordSchema.parse({
+			...record,
+			versions: [{ ...record.versions[0]!, tokenSet }],
+		});
+		const parsedExtensions = withForeign.versions[0]!.tokenSet!.schemes.light.primitives.brand![0]!
+			.$extensions as Record<string, object>;
+
+		// The premise: the key survives the schema, so anything that loses it is the archive's fault.
+		expect(Object.hasOwn(parsedExtensions['com.example.parsed']!, '__proto__')).toBe(true);
+		expect(Object.hasOwn(parsedExtensions['com.example.computed']!, '__proto__')).toBe(true);
+
+		const result = deserializeRecord(serializeRecord(withForeign));
+
+		if (!result.ok) throw new Error(result.error.message);
+
+		const restored = result.record.versions[0]!.tokenSet!.schemes.light.primitives.brand![0]!
+			.$extensions as Record<string, object>;
+
+		for (const key of ['com.example.parsed', 'com.example.computed']) {
+			expect(Object.hasOwn(restored[key]!, '__proto__')).toBe(true);
+			expect(JSON.stringify(restored[key])).toBe(JSON.stringify(parsedExtensions[key]));
+		}
+		expect(JSON.stringify(restored['com.example.parsed'])).toBe(
+			'{"__proto__":{"kept":true},"plain":1}',
+		);
 	});
 
 	describe('refuses', () => {
@@ -486,11 +526,11 @@ describe('deserializeRecord', () => {
 		// checksum can tell this archive from a good one.
 		it('a flipped byte inside a stored image as not-an-archive', () => {
 			const bytes = serializeRecord(record);
-			const error = refusal(flipByte(bytes, dataOffset(bytes, 'images/img-1.webp') + 3));
+			const error = refusal(flipByte(bytes, dataOffset(bytes, 'images/0.webp') + 3));
 
 			expect(error.kind).toBe('not-an-archive');
 
-			expect(error.message).toContain('images/img-1.webp');
+			expect(error.message).toContain('images/0.webp');
 		});
 
 		// fflate reads both of these without complaint: a duplicate name keeps whichever entry came
@@ -499,7 +539,7 @@ describe('deserializeRecord', () => {
 			const { bytes, twin } = twinArchive();
 
 			// The attack is real: fflate keeps the twin, whose bytes differ and whose CRC matches.
-			expect(unzipSync(bytes)['images/img-2.png']).toEqual(twin);
+			expect(unzipSync(bytes)['images/1.png']).toEqual(twin);
 			expect(twin).not.toEqual(PNG_BYTES);
 			expect(crc32(twin)).toBe(crc32(PNG_BYTES));
 
@@ -620,28 +660,28 @@ describe('deserializeRecord', () => {
 		it('an image stored under an extension it cannot be restored from as invalid-record', () => {
 			const bytes = editRecordJson(
 				rezip(serializeRecord(record), (entries) => {
-					entries['images/img-1.gif'] = entries['images/img-1.webp']!;
-					delete entries['images/img-1.webp'];
+					entries['images/0.gif'] = entries['images/0.webp']!;
+					delete entries['images/0.webp'];
 				}),
 				(json) => {
-					(json.images as { downscaled: string }[])[0]!.downscaled = 'images/img-1.gif';
+					(json.images as { downscaled: string }[])[0]!.downscaled = 'images/0.gif';
 				},
 			);
 			const error = refusal(bytes);
 
 			expect(error.kind).toBe('invalid-record');
-			expect(error.message).toContain('images/img-1.gif');
+			expect(error.message).toContain('images/0.gif');
 		});
 
 		it('a record naming an image the archive lacks as missing-image', () => {
 			const bytes = rezip(serializeRecord(record), (entries) => {
-				delete entries['images/img-2.png'];
+				delete entries['images/1.png'];
 			});
 			const error = refusal(bytes);
 
 			expect(error.kind).toBe('missing-image');
 
-			expect(error.message).toContain('images/img-2.png');
+			expect(error.message).toContain('images/1.png');
 		});
 
 		it(`a record stamped schema version ${SCHEMA_VERSION + 1} as invalid-record`, () => {

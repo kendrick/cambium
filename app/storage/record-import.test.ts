@@ -85,7 +85,7 @@ function twinArchive(): { bytes: Uint8Array; twin: Uint8Array } {
 		return c >>> 0;
 	});
 	const original = unzipSync(validBytes);
-	const image = original[`images/${IMAGE_ID}.webp`]!;
+	const image = original['images/0.webp']!;
 	const prefix = strToU8('EVIL-TWIN');
 
 	// Four appended bytes steer the CRC register onto the original image's CRC.
@@ -106,10 +106,10 @@ function twinArchive(): { bytes: Uint8Array; twin: Uint8Array } {
 		}),
 	]);
 
-	const decoy = `images/${IMAGE_ID}.webX`;
+	const decoy = 'images/0.webX';
 	const zipped = zipSync(
 		{
-			[`images/${IMAGE_ID}.webp`]: image,
+			['images/0.webp']: image,
 			'record.json': original['record.json']!,
 			[decoy]: twin,
 		},
@@ -117,7 +117,7 @@ function twinArchive(): { bytes: Uint8Array; twin: Uint8Array } {
 	);
 
 	const from = strToU8(decoy);
-	const to = strToU8(`images/${IMAGE_ID}.webp`);
+	const to = strToU8('images/0.webp');
 	for (let i = 0; i + from.length <= zipped.length; i += 1) {
 		if (from.every((byte, j) => zipped[i + j] === byte)) zipped.set(to, i);
 	}
@@ -143,7 +143,7 @@ const FAILURE_ARCHIVES: Record<ArchiveErrorKind, Uint8Array> = {
 		entries['../escape'] = strToU8('x');
 	}),
 	'missing-image': rezip(validBytes, (entries) => {
-		delete entries[`images/${IMAGE_ID}.webp`];
+		delete entries['images/0.webp'];
 	}),
 	'invalid-record': rezip(validBytes, (entries) => {
 		entries['record.json'] = strToU8('{ not json');
@@ -232,8 +232,8 @@ describe('importRecordArchive', () => {
 		const { bytes, twin } = twinArchive();
 
 		// fflate alone would hand back the twin, whose CRC matches the image it replaces.
-		expect(unzipSync(bytes)[`images/${IMAGE_ID}.webp`]).toEqual(twin);
-		expect(crc32(twin)).toBe(crc32(unzipSync(validBytes)[`images/${IMAGE_ID}.webp`]!));
+		expect(unzipSync(bytes)['images/0.webp']).toEqual(twin);
+		expect(crc32(twin)).toBe(crc32(unzipSync(validBytes)['images/0.webp']!));
 
 		const { store, put } = spyStore();
 		const result = await importRecordArchive(store, bytes);
