@@ -296,8 +296,10 @@ function readRow(
 
 	// Measured on the printed strings the target parses, with unrounded WCAG 2 as its
 	// `contrastRatio` computes it: no 8-bit rounding and no gamut clamp. `renderedContrast` rounds
-	// to bytes first, and near 4.5:1 that can pick the candidate the target then fails. Ties go to
-	// the first candidate.
+	// to bytes first, and near 4.5:1 that can pick the candidate the target then fails. The test
+	// fixture for that case has a winning margin of 1.2e-4. culori's OKLab matrices differ from the
+	// target's there by under 1e-8, so they only disagree on a near-exact tie. Ties go to the first
+	// candidate.
 	const ratio = (name: string) =>
 		contrastFromOklch(readOklch(toOklchCss(resolved[name]!)), readOklch(toOklchCss(against)));
 	const best = candidates.reduce((winner, name) => (ratio(name) > ratio(winner) ? name : winner));

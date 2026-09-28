@@ -7,8 +7,10 @@ import { z } from 'zod';
 import { BrandSeedSchema } from '../brand-seed';
 import { withContrastRepairs } from '../contrast/repair';
 import { BALANCED } from '../interpretation';
+import { type Oklch, renderedContrast } from '../oklch';
 import { createOklchScaleEngine } from '../oklch-scale-engine';
 import { buildTokenSet } from '../semantic-layer';
+import type { TokenSet } from '../token-set';
 import {
 	toUnbrandedDsSource,
 	toUnbrandedDsTheme,
@@ -323,12 +325,40 @@ describe('toUnbrandedDsTheme', () => {
 		expect(unbrandedDsReport(tokenSet)).toEqual({ light: light.report, dark: dark.report });
 	});
 
+	it('picks the destructive-foreground the target measures higher, where byte rounding disagrees', () => {
+		// Found by search: the target's unrounded arithmetic puts background ahead, 4.500043 to
+		// 4.499923, while 8-bit rounding puts foreground ahead, 4.5098 to 4.4728. Only background
+		// clears the target's 4.5 floor, so the rounded pick would ship a pair the target rejects.
+		// The unrounded margin is 1.2e-4. culori's matrices and the target's differ by under 1e-8
+		// on these colours, so the two agree on the winner here.
+		const foreground = { l: 0.061, c: 0, h: 0 };
+		const background = { l: 0.988907, c: 0, h: 0 };
+		const destructive = { l: 0.564, c: 0.032, h: 25 };
+		const patched = withDarkColours(tokenSet, { foreground, background, destructive });
+		const { color } = toUnbrandedDsTheme(patched, { ...identity, scheme: 'dark' }).theme.tokens;
+
+		// The fixture's premise, so a later change to it can't pass by no longer straddling.
+		expect(renderedContrast(foreground, destructive)).toBeGreaterThan(
+			renderedContrast(background, destructive),
+		);
+		expect(targetContrast(color!.background!, color!.destructive!)).toBeGreaterThan(
+			targetContrast(color!.foreground!, color!.destructive!),
+		);
+
+		expect(color!['destructive-foreground']).toBe(color!.background);
+		expect(
+			targetContrast(color!['destructive-foreground']!, color!.destructive!),
+		).toBeGreaterThanOrEqual(4.5);
+	});
+
 	it('makes no network call', () => {
 		vi.stubGlobal('fetch', () => {
-			throw new Error('toUnbrandedDsTheme reached the network');
+			throw new Error('an unbranded-ds adapter reached the network');
 		});
 
 		expect(() => toUnbrandedDsTheme(tokenSet, { ...identity, scheme: 'dark' })).not.toThrow();
+		expect(() => toUnbrandedDsSource(tokenSet, 'acme')).not.toThrow();
+		expect(() => unbrandedDsReport(tokenSet)).not.toThrow();
 	});
 
 	it('refuses an empty name, which the target rejects on registration', () => {
@@ -405,6 +435,27 @@ describe('toUnbrandedDsSource', () => {
 		expect(() => toUnbrandedDsSource(tokenSet, bad)).toThrow("can't name a theme directory");
 	});
 });
+
+/**
+ * A copy of `set` with three dark semantic colours moved, by rewriting the primitive step each one
+ * aliases. Moving the step keeps the set schema-valid, where editing a resolved value can't.
+ */
+function withDarkColours(
+	set: TokenSet,
+	colours: Record<'foreground' | 'background' | 'destructive', Oklch>,
+): TokenSet {
+	const patched = structuredClone(set);
+	const dark = patched.schemes.dark;
+
+	for (const [token, colour] of Object.entries(colours)) {
+		const [ramp, step] = dark.semantic[token]!.alias.split('.');
+		const target = dark.primitives[ramp!]!.find((entry) => entry.step === Number(step))!;
+
+		Object.assign(target, colour);
+	}
+
+	return patched;
+}
 
 function splitPath(path: string): [string, string] {
 	const dot = path.indexOf('.');
