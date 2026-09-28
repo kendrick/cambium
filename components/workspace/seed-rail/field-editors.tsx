@@ -259,8 +259,9 @@ export function TypeClassificationEditor({
 
 /**
  * Nothing reads the pairing downstream yet: `TokenSet` has no font-family field, and the preview
- * renders in the app's own Inter. Until #156's route 1 emits it, the field says so. Otherwise it
- * looks like a control that shapes the output and then quietly drops the choice.
+ * renders in the app's own Inter. The field says so until a `fontFamily` token exists to carry the
+ * choice into what gets exported. Otherwise it looks like a control that shapes the output and then
+ * quietly drops the choice.
  */
 const NOT_EXPORTED_NOTE =
 	"This pairing is a suggestion. It isn't exported, and the preview doesn't use it.";

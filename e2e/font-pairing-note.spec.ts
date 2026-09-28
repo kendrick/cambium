@@ -14,11 +14,17 @@ import { defaultSeedPins } from '../core/seed-pins';
 
 import { expect, test } from './fixtures';
 
+// SEED, buildRecordWithSeed and seedWorkspaceRecord below are copied from `e2e/seed-rail.spec.ts`
+// rather than imported: Playwright refuses a spec importing another spec file outright ("test file
+// … should not import test file …", playwright/lib/runner/index.js), and #37's open run owns that
+// file anyway. IMAGE_1/IMAGE_2 substitute a 1×1 PNG for seed-rail's own fixture images, since this
+// scenario never measures a pixel and a real PNG buys nothing here. Once #37 lands, a follow-up
+// can fold this scenario back into seed-rail.spec.ts and drop the copy.
+
 /**
- * Copied from `e2e/seed-rail.spec.ts` (`SEED`, `buildRecordWithSeed`, `seedWorkspaceRecord`, plus
- * the fixture images they need) rather than imported: #37's open run owns that file, and importing
- * a spec file would register its tests twice. Once #37 lands, a follow-up can fold this scenario
- * back in and drop the copy.
+ * Spelled out rather than imported: `components/stored-record.tsx` owns the constant, and every
+ * other spec in this tree has its own copy for the same reason. A rename should fail whichever
+ * spec forgot to move with it, not silently agree with the others.
  */
 const RECORD_PARAM = 'record';
 
@@ -86,6 +92,13 @@ const SEED: BrandSeed = {
 	expressive: [{ axis: 'Calm', score: 60 }],
 };
 
+/**
+ * A record holding one version whose seed derives real tokens. Parsed through `BrandRecordSchema`
+ * before anything writes it to IndexedDB, the same guard the other specs' builders apply, so a
+ * shape the schema has moved past fails here rather than as a silent mismatch on read-back. The
+ * literal is also held to `BrandRecord` at compile time: `parse` takes `unknown`, so without that a
+ * new required field only surfaces once a browser run trips over it.
+ */
 function buildRecordWithSeed(seed: BrandSeed = SEED): BrandRecord {
 	const createdAt = new Date().toISOString();
 
@@ -109,12 +122,20 @@ function buildRecordWithSeed(seed: BrandSeed = SEED): BrandRecord {
 				fontTable: { source: 'cambium-e2e-fixture', version: '1' },
 				interpretation: 'balanced',
 				overrides: [],
+				// Every key colour starts pinned, the same as a freshly generated version: `saveGeneratedVersion`
+				// (`app/generation/generate.ts`) applies `defaultSeedPins` to every version it writes, and
+				// this fixture stands in for one.
 				pins: defaultSeedPins(seed),
 			},
 		],
 	} satisfies BrandRecord);
 }
 
+/**
+ * Writes one row straight into the `records` object store, bypassing `RecordStore` entirely, the
+ * same mechanism the other specs use and for the same reason: IndexedDB is scoped to the page's
+ * origin, not to this Node process, so the write has to run inside the page.
+ */
 async function writeIndexedDbRow(page: Page, value: unknown): Promise<void> {
 	await page.evaluate(
 		async ([databaseName, storeName, storedValue]) => {
