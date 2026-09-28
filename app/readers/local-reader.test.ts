@@ -109,20 +109,20 @@ describe('the local reader', () => {
 	});
 });
 
+async function localSeed() {
+	const result = parseSeed(await reader().read([storedImage(LOGO_FIXTURE.id)], { auth: null }));
+
+	if (!result.ok) throw new Error('a local read has to produce a parseable seed');
+
+	return result.seed;
+}
+
 /**
  * The ticket's claim is that everything downstream is unchanged and that the gap between a keyless
  * read and a keyed one shows up as provenance rather than as a failure. That is a claim about the
  * core, so it is checked against the core rather than assumed.
  */
 describe('what derivation does with a locally extracted seed', () => {
-	async function localSeed() {
-		const result = parseSeed(await reader().read([storedImage(LOGO_FIXTURE.id)], { auth: null }));
-
-		if (!result.ok) throw new Error('a local read has to produce a parseable seed');
-
-		return result.seed;
-	}
-
 	/**
 	 * Asserts only that the engine accepts a colours-only seed, never how well it ramps one. Ramp
 	 * quality and anchor deviation belong to Seam 1 against fixture seeds in `core/`, per

@@ -96,10 +96,11 @@ export function compositeOver(backdrop: Oklch, source: Oklch, alpha: number): Ok
 	return { l: mixed.l ?? 0, c: mixed.c ?? 0, h: canonicalHue(mixed.h) };
 }
 
+const byte = (channel: number | undefined) => Math.round(displayable(channel) * 255) / 255;
+
 /** The sRGB triple a display actually receives, each channel clamped and then rounded to a byte. */
 function toDisplayedSrgb(color: Oklch) {
 	const rgb = toRgb({ mode: 'oklch', ...color })!;
-	const byte = (channel: number | undefined) => Math.round(displayable(channel) * 255) / 255;
 
 	return { mode: 'rgb', r: byte(rgb.r), g: byte(rgb.g), b: byte(rgb.b) } as const;
 }

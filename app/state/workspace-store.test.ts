@@ -1060,6 +1060,19 @@ function constantDerivedEngine(): ScaleEngine {
 	};
 }
 
+/** A second version, newer than `makeVersion()`'s, carrying the overrides it is handed. */
+const savedWith = (overrides: TokenOverride[], seed = seedWith(259.8)) =>
+	makeVersion({ createdAt: '2026-02-01T00:00:00.000Z', ordinal: 2, seed, overrides });
+
+/** What the same seed derives to with nothing overridden, so a test can tell a restore apart. */
+const underived = () => openWorkspace().store.getState().tokenSet;
+
+const twoVersions = () =>
+	makeRecord([
+		makeVersion(),
+		makeVersion({ createdAt: '2026-02-01T00:00:00.000Z', ordinal: 2, seed: seedWith(200) }),
+	]);
+
 describe('the workspace store’s token set and overrides', () => {
 	it('builds the token set from the same derivation, and rebuilds it when the seed changes', () => {
 		const { store } = openWorkspace();
@@ -1196,13 +1209,6 @@ describe('the workspace store’s token set and overrides', () => {
 		expect(written.tokenSet).toBeNull();
 		expect(written.seed).toEqual(seedWith(30));
 	});
-
-	/** A second version, newer than `makeVersion()`'s, carrying the overrides it is handed. */
-	const savedWith = (overrides: TokenOverride[], seed = seedWith(259.8)) =>
-		makeVersion({ createdAt: '2026-02-01T00:00:00.000Z', ordinal: 2, seed, overrides });
-
-	/** What the same seed derives to with nothing overridden, so a test can tell a restore apart. */
-	const underived = () => openWorkspace().store.getState().tokenSet;
 
 	it('commits the overrides it holds, restored ones included, in the order they were first made', async () => {
 		const { store, recordStore } = openWorkspace(
@@ -1353,12 +1359,6 @@ describe('the workspace store’s token set and overrides', () => {
 			overrideKey(RING_TO_BRAND_9),
 		]);
 	});
-
-	const twoVersions = () =>
-		makeRecord([
-			makeVersion(),
-			makeVersion({ createdAt: '2026-02-01T00:00:00.000Z', ordinal: 2, seed: seedWith(200) }),
-		]);
 
 	it.each([
 		[

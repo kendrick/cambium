@@ -127,6 +127,17 @@ const FOREIGN = {
 	nested: { deep: true, absent: null },
 };
 
+const annotate = (layer: TokenSet['schemes']['light'] | TokenSet) => ({
+	...layer.primitives,
+	brand: [
+		{
+			...layer.primitives.brand![0]!,
+			$extensions: { ...layer.primitives.brand![0]!.$extensions, 'com.someothertool': FOREIGN },
+		},
+		...layer.primitives.brand!.slice(1),
+	],
+});
+
 /**
  * `set` with a foreign namespace planted on the first brand step of whichever copies `on` names.
  *
@@ -134,17 +145,6 @@ const FOREIGN = {
  * learn that, so annotating one copy is the ordinary outcome of walking a Cambium file.
  */
 function plantForeign(set: TokenSet, on: 'top' | 'light' | 'both'): unknown {
-	const annotate = (layer: TokenSet['schemes']['light'] | TokenSet) => ({
-		...layer.primitives,
-		brand: [
-			{
-				...layer.primitives.brand![0]!,
-				$extensions: { ...layer.primitives.brand![0]!.$extensions, 'com.someothertool': FOREIGN },
-			},
-			...layer.primitives.brand!.slice(1),
-		],
-	});
-
 	const light =
 		on === 'light' || on === 'both'
 			? { ...set.schemes.light, primitives: annotate(set.schemes.light) }

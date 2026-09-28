@@ -86,6 +86,14 @@ if (!generated.ok) throw new Error(`the seed fixture no longer generates: ${gene
 const seedTokenSet = buildTokenSet(generated.schemes, seed);
 const seedDocuments = serializeDtcg(seedTokenSet);
 
+// toSorted would say this better, but it's ES2023 and tsconfig targets ES2022; the mapped
+// array is already fresh, so sort has nothing of the caller's to mutate.
+const paths = (document: unknown) =>
+	walkTokens(document)
+		.map((walked) => walked.path.join('.'))
+		// oxlint-disable-next-line unicorn/no-array-sort
+		.sort();
+
 describe('serializeDtcg', () => {
 	it('emits light and dark documents the published DTCG schema accepts', () => {
 		expect(violationLines(seedDocuments.light)).toEqual([]);
@@ -112,14 +120,6 @@ describe('serializeDtcg', () => {
 	});
 
 	it('gives light and dark the same key set', () => {
-		// toSorted would say this better, but it's ES2023 and tsconfig targets ES2022; the mapped
-		// array is already fresh, so sort has nothing of the caller's to mutate.
-		const paths = (document: unknown) =>
-			walkTokens(document)
-				.map((walked) => walked.path.join('.'))
-				// oxlint-disable-next-line unicorn/no-array-sort
-				.sort();
-
 		expect(paths(seedDocuments.dark)).toEqual(paths(seedDocuments.light));
 	});
 

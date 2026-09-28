@@ -62,12 +62,12 @@ async function compiledStylesheet(
 	return result.css;
 }
 
-function markup(css: string): string {
-	const elements = (scheme: string) =>
-		CASES.map(({ id, className }) => `<div id="${scheme}-${id}" class="${className}">x</div>`).join(
-			'',
-		);
+const elements = (scheme: string) =>
+	CASES.map(({ id, className }) => `<div id="${scheme}-${id}" class="${className}">x</div>`).join(
+		'',
+	);
 
+function markup(css: string): string {
 	return `<!doctype html><html><head><style>${css}</style></head><body><div>${elements('light')}</div><div class="dark">${elements('dark')}</div></body></html>`;
 }
 

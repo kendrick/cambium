@@ -37,6 +37,18 @@ const PAGE_DARK = pageSurface({ l: 0.18, c: 0.012, h: 259.8 });
 
 const tinted = { spread: 'diffuse', tintFromSurface: true } as const;
 
+const rising = (read: (step: (typeof STEPS)[number]) => number) =>
+	STEPS.map(read).every((n, i, all) => i === 0 || n > all[i - 1]!);
+
+const painted = (surfaceTinting: number) => {
+	const { color } = shadowScale(PAGE_LIGHT, tinted, {
+		...BALANCED,
+		surfaceTinting,
+	}).values.md!;
+
+	return compositeOver(PAGE_LIGHT.color, color, color.alpha).c;
+};
+
 describe('shadowScale', () => {
 	it('emits five elevation steps carrying a colour and four dimensions', () => {
 		const { source, values } = shadowScale(PAGE_LIGHT, tinted, BALANCED);
@@ -57,8 +69,6 @@ describe('shadowScale', () => {
 
 	it('climbs in offset, blur and opacity as the elevation rises', () => {
 		const { values } = shadowScale(PAGE_LIGHT, tinted, BALANCED);
-		const rising = (read: (step: (typeof STEPS)[number]) => number) =>
-			STEPS.map(read).every((n, i, all) => i === 0 || n > all[i - 1]!);
 
 		expect(rising((step) => values[step]!.offsetY.value)).toBe(true);
 		expect(rising((step) => values[step]!.blur.value)).toBe(true);
@@ -161,15 +171,6 @@ describe('shadowScale', () => {
 	 * same near-black at every value of this parameter, so the assertion there could not fail.
 	 */
 	it('paints more chroma as `surfaceTinting` rises', () => {
-		const painted = (surfaceTinting: number) => {
-			const { color } = shadowScale(PAGE_LIGHT, tinted, {
-				...BALANCED,
-				surfaceTinting,
-			}).values.md!;
-
-			return compositeOver(PAGE_LIGHT.color, color, color.alpha).c;
-		};
-
 		expect(painted(0)).toBeLessThan(painted(BALANCED.surfaceTinting));
 		expect(painted(BALANCED.surfaceTinting)).toBeLessThan(painted(0.06));
 	});
