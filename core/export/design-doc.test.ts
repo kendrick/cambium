@@ -227,9 +227,9 @@ function colourValueOf(node: Record<string, unknown>): string | undefined {
 
 /**
  * Walks the whole top-level `TokenSet` for `$extensions` payloads, rather than naming the nine
- * categories that happen to carry one today. `design-doc.ts`'s `allEntries` names them one by one
- * because the doc's section order depends on telling them apart; this walk doesn't need to, so it
- * doesn't hold a second copy of that list. A category the generator forgets to include still turns
+ * categories that happen to carry one today. `design-doc.ts`'s `allEntries` still works from lists:
+ * it picks colours, semantic and shadow out by name and walks `VALUE_CATEGORIES` for the rest. This
+ * walk shares neither list, so a category the generator forgets to include still turns
  * up here, so a coverage or traceability test built on this catches the omission — with a hard-coded
  * list on both sides, one bug in the list would have been invisible to both.
  *
