@@ -277,17 +277,15 @@ function independentWalk(set: TokenSet): Observed[] {
 
 const walked = independentWalk(tokens);
 /**
- * "Observed key colour" means a primitive ramp step, not any observed payload: `semantic.primary`
- * and `semantic.sidebar-primary` both inherit `observed` from the `brand.9` they alias
- * (`semantic-layer.ts`'s `inheritedFrom`), and the Key colours section — Task 2's own definition —
- * lists ramp steps, not the semantic tokens that point at them. `value` is only ever set by
- * `colourValueOf` on a node with its own `l`/`c`/`h`, which is exactly a ramp step, so filtering on
- * it scopes this to the same set `design-doc.ts`'s `colourEntries` builds, without re-naming
- * `primitives` as a special case a second time.
+ * Every observed payload the walk finds, ramp step or semantic alias alike: `semantic.primary` and
+ * `semantic.sidebar-primary` inherit `observed` from the `brand.9` they alias
+ * (`semantic-layer.ts`'s `inherit`), and the Key colours section prints both kinds now
+ * (`design-doc.ts`'s `keyColourSection`, given `semanticEntries` alongside `colourEntries`). Scoping
+ * this to entries with a colour `value` (as an earlier pass did) silently excluded the alias rows,
+ * which is exactly the gap that went unnoticed until an exact-cell check was run over the two
+ * separately instead of assuming the first sufficed.
  */
-const observedTokens = walked.filter(
-	(e) => e.extensions.provenance === 'observed' && e.value !== undefined,
-);
+const observedTokens = walked.filter((e) => e.extensions.provenance === 'observed');
 const inventedTokens = walked.filter((e) => e.extensions.provenance === 'invented');
 
 describe('designDoc coverage', () => {
@@ -325,6 +323,34 @@ describe('designDoc coverage', () => {
 
 		for (const entry of repairs) {
 			expect(ratioCells).toContain(`${entry.measured.toFixed(2)} → ${entry.achieved.toFixed(2)}`);
+		}
+	});
+
+	/**
+	 * `walkGeneric`'s docblock claims a category the generator forgets still turns up here, so a
+	 * coverage test built on it catches the omission. No test actually did that for derived tokens
+	 * until now: a category dropped from `allEntries` (`shadowEntries`, any one `recordEntries` call)
+	 * left the suite green, because the three tables above are each checked against their own
+	 * filtered slice, and a path missing from every slice at once was never cross-checked against the
+	 * full walk. This closes that gap by checking every walked path against every table row at once.
+	 */
+	it('places every path walkGeneric finds in exactly one row of the document, or its light/dark split pair', () => {
+		const allRows = tables.flatMap((t) => t.rows);
+
+		for (const entry of walked) {
+			const plain = allRows.filter((r) => r[0] === entry.path).length;
+			const light = allRows.filter((r) => r[0] === `light:${entry.path}`).length;
+			const dark = allRows.filter((r) => r[0] === `dark:${entry.path}`).length;
+
+			// Printed once, unsplit (1/0/0), or split into exactly a light/dark pair (0/1/1). A
+			// dropped category leaves all three at zero; anything else is a stray duplicate.
+			const isUnsplit = plain === 1 && light === 0 && dark === 0;
+			const isSplitPair = plain === 0 && light === 1 && dark === 1;
+
+			expect(
+				isUnsplit || isSplitPair,
+				`"${entry.path}" appears plain=${plain} light=${light} dark=${dark}, want 1/0/0 or 0/1/1`,
+			).toBe(true);
 		}
 	});
 });
@@ -560,9 +586,11 @@ function withRationale(base: TokenSet, ramp: string, step: number, rationale: st
 }
 
 describe('designDoc edge cases', () => {
-	it('renders an empty Measured table and no added prose when typeClassification is null', () => {
-		const noType = designDoc({ tokens, seed: { ...seed, typeClassification: null }, repairs });
-		const lines = sectionLines(noType, 'Type');
+	it('keeps the Measured row, labelled "not classified", when only typeClassification is null', () => {
+		// A stated ratio with no classification is still a measured scale, so the row must survive —
+		// this is the scenario criterion 4 names, not the true-empty case covered separately below.
+		const noClass = designDoc({ tokens, seed: { ...seed, typeClassification: null }, repairs });
+		const lines = sectionLines(noClass, 'Type');
 
 		for (const line of lines) {
 			expect(
@@ -571,18 +599,33 @@ describe('designDoc edge cases', () => {
 			).toBe(true);
 		}
 
-		const noTypeTables = parseTables(noType.split('\n'));
-		const measured = noTypeTables.find((t) => t.headers[0] === 'Category');
-		const suggested = noTypeTables.find((t) => t.headers[0] === 'Family');
+		const noClassTables = parseTables(noClass.split('\n'));
+		const measured = noClassTables.find((t) => t.headers[0] === 'Category');
+		const suggested = noClassTables.find((t) => t.headers[0] === 'Family');
 
-		expect(measured).toBeDefined();
-		expect(measured!.rows).toHaveLength(0);
+		expect(measured!.rows).toEqual([
+			['not classified', 'not classified', 'not classified', String(seed.typeScaleRatio)],
+		]);
 		// suggestedPairing is still stated, so that table keeps its rows.
 		expect(suggested!.rows.length).toBeGreaterThan(0);
 
-		for (const t of noTypeTables) {
+		for (const t of noClassTables) {
 			for (const r of t.rows) expect(r).toHaveLength(t.headers.length);
 		}
+	});
+
+	it('renders an empty Measured table only when neither typeClassification nor typeScaleRatio is stated', () => {
+		const noMeasurement = designDoc({
+			tokens,
+			seed: { ...seed, typeClassification: null, typeScaleRatio: null },
+			repairs,
+		});
+		const measured = parseTables(noMeasurement.split('\n')).find(
+			(t) => t.headers[0] === 'Category',
+		);
+
+		expect(measured).toBeDefined();
+		expect(measured!.rows).toHaveLength(0);
 	});
 
 	it('renders an empty Suggested table and no added prose when suggestedPairing is null', () => {

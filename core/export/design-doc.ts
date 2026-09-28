@@ -3,6 +3,7 @@ import type { RepairEntry } from '../contrast/repair';
 import { toOklchCss } from '../css/oklch-css';
 import { CAMBIUM_NAMESPACE, type TokenProvenance } from '../provenance';
 import { RAMP_NAMES, type SchemeName } from '../scale-engine';
+import { VALUE_CATEGORIES } from '../token-overrides';
 import type { ColorScheme, TokenSet } from '../token-set';
 
 export type DesignDocInput = {
@@ -18,7 +19,11 @@ export type DesignDocInput = {
  */
 type TokenEntry = { path: string; extensions: TokenProvenance; scheme?: SchemeName };
 
-/** The same entry, plus the CSS colour only a primitive ramp step carries. */
+/**
+ * The same entry, plus a value: a primitive ramp step's CSS colour, or a semantic alias's target
+ * (`ramp.step`, the same spelling the alias field itself uses). Both answer the same reader
+ * question — "what does this token actually resolve to" — so one field serves both.
+ */
 type ColourEntry = TokenEntry & { value: string };
 
 /**
@@ -120,14 +125,16 @@ function colourEntries(tokens: TokenSet): ColourEntry[] {
 	);
 }
 
-function semanticEntriesFor(semantic: ColorScheme['semantic']): TokenEntry[] {
+/** Every semantic alias in one scheme, `entry.alias` (`ramp.step`) doubling as its printable value. */
+function semanticEntriesFor(semantic: ColorScheme['semantic']): ColourEntry[] {
 	return Object.entries(semantic).map(([token, entry]) => ({
 		path: `semantic.${token}`,
+		value: entry.alias,
 		extensions: extensionsOf(entry),
 	}));
 }
 
-function semanticEntries(tokens: TokenSet): TokenEntry[] {
+function semanticEntries(tokens: TokenSet): ColourEntry[] {
 	return mergeSchemes(
 		semanticEntriesFor(tokens.schemes.light.semantic),
 		semanticEntriesFor(tokens.schemes.dark.semantic),
@@ -151,37 +158,60 @@ function shadowEntries(tokens: TokenSet): TokenEntry[] {
 	);
 }
 
+/** The one shape `valueEntries`' walk bottoms out on; anything else found along the way is nesting. */
+function isValueHolder(
+	node: unknown,
+): node is { $extensions: { [CAMBIUM_NAMESPACE]: TokenProvenance } } {
+	if (typeof node !== 'object' || node === null || !Object.hasOwn(node, '$extensions'))
+		return false;
+
+	const extensions = (node as { $extensions: unknown }).$extensions;
+
+	return typeof extensions === 'object' && extensions !== null && CAMBIUM_NAMESPACE in extensions;
+}
+
+function walkValues(node: unknown, path: string, out: TokenEntry[]): void {
+	if (isValueHolder(node)) {
+		out.push({ path, extensions: extensionsOf(node) });
+		return;
+	}
+
+	if (typeof node === 'object' && node !== null) {
+		for (const [key, value] of Object.entries(node)) walkValues(value, `${path}.${key}`, out);
+	}
+}
+
+/**
+ * `VALUE_CATEGORIES`'s eight names (`token-overrides.ts`) cover four shapes: a flat record, one
+ * further level of nesting under a fixed key (`typography`'s `size`/`weight`/`lineHeight`,
+ * `motion`'s `duration`/`easing`), and two named fields rather than a record at all (`focusRing`).
+ * Walking generically by node kind — plain object versus `$extensions` holder — covers all four
+ * without branching on which category is which, the same way `design-doc.test.ts`'s own
+ * `walkGeneric` already covers the whole token set to check this function's output independently.
+ */
+function valueEntries(tokens: TokenSet): TokenEntry[] {
+	const entries: TokenEntry[] = [];
+
+	for (const category of VALUE_CATEGORIES) {
+		walkValues(tokens[category].values, `${category}.values`, entries);
+	}
+
+	return entries;
+}
+
 /**
  * Every token in the set. `primitives`, `semantic` and `shadow` are the three categories
  * `SCHEME_SHAPE` (`token-set.ts`) makes per-scheme, so each is walked in both `schemes.light` and
  * `schemes.dark` and merged by `mergeSchemes`. The other eight categories (`VALUE_CATEGORIES`) live
- * at the top level only — nothing in the seed or the engine varies them by scheme — so each is read
- * once, straight from `tokens.<category>.values`.
- *
- * `recordEntries` is called once per category rather than looped over a list of names, because the
- * eight don't share one shape: most are a flat record, `typography` and `motion` nest a further
- * level (`size`/`weight`/`lineHeight`, `duration`/`easing`), and `focusRing` is two named fields, not
- * a record at all. A loop general enough to cover all four shapes would be longer and harder to read
- * than the eight calls it replaced.
+ * at the top level only — nothing in the seed or the engine varies them by scheme — so `valueEntries`
+ * walks each one's `.values` tree generically instead of reading it once by name.
  */
-function allEntries(tokens: TokenSet, colours: readonly ColourEntry[]): TokenEntry[] {
-	return [
-		...colours,
-		...semanticEntries(tokens),
-		...shadowEntries(tokens),
-		...recordEntries('radius.values', tokens.radius.values),
-		...recordEntries('typography.values.size', tokens.typography.values.size),
-		...recordEntries('typography.values.weight', tokens.typography.values.weight),
-		...recordEntries('typography.values.lineHeight', tokens.typography.values.lineHeight),
-		...recordEntries('tracking.values', tokens.tracking.values),
-		...recordEntries('spacing.values', tokens.spacing.values),
-		...recordEntries('opacity.values', tokens.opacity.values),
-		...recordEntries('motion.values.duration', tokens.motion.values.duration),
-		...recordEntries('motion.values.easing', tokens.motion.values.easing),
-		{ path: 'focusRing.values.width', extensions: extensionsOf(tokens.focusRing.values.width) },
-		{ path: 'focusRing.values.offset', extensions: extensionsOf(tokens.focusRing.values.offset) },
-		...recordEntries('zIndex.values', tokens.zIndex.values),
-	];
+function allEntries(
+	tokens: TokenSet,
+	colours: readonly ColourEntry[],
+	semantic: readonly ColourEntry[],
+): TokenEntry[] {
+	return [...colours, ...semantic, ...shadowEntries(tokens), ...valueEntries(tokens)];
 }
 
 /**
@@ -218,17 +248,33 @@ function seedFieldOf(extensions: TokenProvenance): string {
 	return extensions.seedField!;
 }
 
-function keyColourSection(colours: readonly ColourEntry[]): string[] {
-	const rows = colours
-		.filter((entry) => entry.extensions.provenance === 'observed')
-		.map((entry) => [
-			entryPath(entry),
-			entry.value,
-			seedFieldOf(entry.extensions),
-			entry.extensions.rationale,
-		]);
+function keyColourSection(
+	colours: readonly ColourEntry[],
+	semantic: readonly ColourEntry[],
+): string[] {
+	const toRow = (entry: ColourEntry) => [
+		entryPath(entry),
+		entry.value,
+		seedFieldOf(entry.extensions),
+		entry.extensions.rationale,
+	];
 
-	return ['## Key colours', '', ...table(['Token', 'Value', 'Seed field', 'Rationale'], rows)];
+	const rampRows = colours.filter((entry) => entry.extensions.provenance === 'observed').map(toRow);
+
+	// An observed semantic alias (this fixture's `primary`, `sidebar-primary`) inherits its
+	// provenance straight from the ramp step it names (`semantic-layer.ts`'s `inherit`), so it is as
+	// much an observed key colour as that step is — the alias itself is the "value" a reader checks
+	// against the seed, the way a ramp step's own OKLCH channels are.
+	const aliasRows = sortedByKeys(
+		semantic.filter((entry) => entry.extensions.provenance === 'observed'),
+		(entry) => [entryPath(entry)],
+	).map(toRow);
+
+	return [
+		'## Key colours',
+		'',
+		...table(['Token', 'Value', 'Seed field', 'Rationale'], [...rampRows, ...aliasRows]),
+	];
 }
 
 function interpretationSection(entries: readonly TokenEntry[]): string[] {
@@ -262,17 +308,23 @@ function inventedSection(entries: readonly TokenEntry[]): string[] {
 /** `SuggestedPairingSchema`'s three roles, in the order the schema declares them. */
 const PAIRING_ROLES = ['display', 'body', 'mono'] as const;
 
+/**
+ * A stated ratio with no classification is still a measured scale (criterion 4 asks the doc to say
+ * so), so the row prints whenever either half is present, each missing half saying it's missing
+ * rather than the whole row vanishing because one field came back empty.
+ */
 function typeSection(seed: BrandSeed): string[] {
-	const measured = seed.typeClassification
-		? [
-				[
-					seed.typeClassification.category,
-					seed.typeClassification.tone,
-					seed.typeClassification.xHeight,
-					seed.typeScaleRatio === null ? 'no ratio' : String(seed.typeScaleRatio),
-				],
-			]
-		: [];
+	const measured =
+		seed.typeClassification || seed.typeScaleRatio !== null
+			? [
+					[
+						seed.typeClassification?.category ?? 'not classified',
+						seed.typeClassification?.tone ?? 'not classified',
+						seed.typeClassification?.xHeight ?? 'not classified',
+						seed.typeScaleRatio === null ? 'no ratio' : String(seed.typeScaleRatio),
+					],
+				]
+			: [];
 
 	const suggestedRows = seed.suggestedPairing
 		? PAIRING_ROLES.flatMap((role) =>
@@ -328,13 +380,14 @@ function repairsSection(repairs: readonly RepairEntry[]): string[] {
  */
 export function designDoc({ tokens, seed, repairs }: DesignDocInput): string {
 	const colours = colourEntries(tokens);
-	const entries = allEntries(tokens, colours);
+	const semantic = semanticEntries(tokens);
+	const entries = allEntries(tokens, colours, semantic);
 
 	return (
 		[
 			'# Design doc',
 			'',
-			...keyColourSection(colours),
+			...keyColourSection(colours, semantic),
 			'',
 			...interpretationSection(entries),
 			'',
