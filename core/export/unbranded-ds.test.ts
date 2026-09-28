@@ -2,23 +2,52 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { wcagContrast } from 'culori/fn';
 import { z } from 'zod';
 
 import { BrandSeedSchema } from '../brand-seed';
+import { withContrastRepairs } from '../contrast/repair';
 import { BALANCED } from '../interpretation';
 import { createOklchScaleEngine } from '../oklch-scale-engine';
 import { buildTokenSet } from '../semantic-layer';
-import { toUnbrandedDsSource, toUnbrandedDsTheme } from './unbranded-ds';
+import {
+	toUnbrandedDsSource,
+	toUnbrandedDsTheme,
+	UNBRANDED_DS_MAPPING,
+	unbrandedDsReport,
+} from './unbranded-ds';
 import vendored from './unbranded-ds.vendor.json';
 
 /**
- * WCAG 2 contrast between two `oklch(L C H)` strings, through culori rather than Cambium's own
- * `renderedContrast`, so the check doesn't agree with the adapter just by sharing its code. It
- * parses the strings the target parses, no byte rounding, as the target's `contrastRatio` does.
+ * unbranded-ds's contrast arithmetic, transcribed from `packages/tokens/src/color.ts` at the
+ * vendored SHA: `parseOklch`, `oklchToOklab`, `oklabToLinearRgb`, `relativeLuminance` and
+ * `contrastRatio`, with no 8-bit rounding and no gamut clamp. Transcribing it keeps each contrast
+ * assertion here in the units `validateTheme` measures. Importing Cambium's colour math would let
+ * the test agree with the adapter by sharing its code.
  */
-function wcagRatio(foreground: string, background: string): number {
-	return wcagContrast(foreground, background);
+function targetContrast(foreground: string, background: string): number {
+	const [one, two] = [targetLuminance(foreground), targetLuminance(background)];
+
+	return (Math.max(one, two) + 0.05) / (Math.min(one, two) + 0.05);
+}
+
+function targetLuminance(color: string): number {
+	const match = TARGET_OKLCH.exec(color.trim());
+
+	if (!match) throw new Error(`the target can't parse ${color}`);
+
+	const lightness = Number.parseFloat(match[1]!) / (match[2] === '%' ? 100 : 1);
+	const chroma = Number.parseFloat(match[3]!);
+	const hue = (Number.parseFloat(match[4]!) * Math.PI) / 180;
+	const a = chroma * Math.cos(hue);
+	const b = chroma * Math.sin(hue);
+	const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+	const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+	const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
+	const red = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+	const green = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+	const blue = -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s;
+
+	return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
 
 const seedPath = fileURLToPath(new URL('../../scripts/fixtures/seed.json', import.meta.url));
@@ -27,7 +56,11 @@ const generated = createOklchScaleEngine().generate(seed, BALANCED);
 
 if (!generated.ok) throw new Error(`the seed fixture no longer generates: ${generated.error.kind}`);
 
-const tokenSet = buildTokenSet(generated.schemes, seed);
+/**
+ * The contrast-repaired set, which is what the app exports and what the adapters document as their
+ * input. The unrepaired set fails the target's own light-scheme pairs before any mapping happens.
+ */
+const tokenSet = withContrastRepairs(buildTokenSet(generated.schemes, seed)).tokenSet;
 const identity = { name: 'acme', displayName: 'Acme' };
 
 const vendoredTokens = vendored.tokens as Record<string, Record<string, string>>;
@@ -37,8 +70,9 @@ const optionalCategories = new Set<string>(vendored.optionalCategories);
  * A mirror of unbranded-ds's `themeSchema` (`packages/tokens/src/schema.ts`) built from the vendored
  * key list, but strict where the original is lenient. The target merges a partial theme onto its
  * defaults before validating, so a missing key there passes silently by inheriting; here it fails,
- * which is the only way to see whether Cambium actually supplied it. Strict also catches a mapping
- * row whose target key the target never declared, which the target would carry along unread.
+ * which is the only way to see whether Cambium actually supplied it. Strict also fails a document
+ * carrying a key the target never declared. A mapping row naming such a key never reaches the
+ * document at all, so the test over `UNBRANDED_DS_MAPPING` below covers that case.
  */
 const StrictThemeMirror = z.strictObject({
 	name: z.string().min(1),
@@ -66,8 +100,10 @@ const TARGET_OKLCH =
 	/^oklch\(\s*([\d.]+)(%?)\s+([\d.]+)\s+([\d.]+(?:deg)?)\s*(?:\/\s*[\d.]+%?\s*)?\)$/i;
 
 /**
- * The #12 decision posted 2026-09-27, less `color.destructive-foreground`, which the orchestrator's
- * later ruling maps from Cambium: required keys Cambium has no source for.
+ * Required keys Cambium has no source for, from the #12 decision
+ * (https://github.com/kendrick/cambium/issues/12#issuecomment-5858594179). That list also names
+ * `color.destructive-foreground`, which the adapter now maps from Cambium instead: no fixed default
+ * clears contrast in both schemes. The `UNBRANDED_DS_MAPPING` row for it records why.
  */
 const DECIDED_DEFAULTS = [
 	'typography.font-sans',
@@ -173,10 +209,14 @@ describe('toUnbrandedDsTheme', () => {
 		'maps %s destructive-foreground to a Cambium colour that clears AA on destructive',
 		(_, result) => {
 			const { color } = result.theme.tokens;
-			const ratio = wcagRatio(color!['destructive-foreground']!, color!.destructive!);
+			const picked = color!['destructive-foreground']!;
+			const other = picked === color!.foreground ? color!.background! : color!.foreground!;
 
-			expect([color!.foreground, color!.background]).toContain(color!['destructive-foreground']);
-			expect(ratio).toBeGreaterThanOrEqual(4.5);
+			expect([color!.foreground, color!.background]).toContain(picked);
+			expect(targetContrast(picked, color!.destructive!)).toBeGreaterThanOrEqual(
+				targetContrast(other, color!.destructive!),
+			);
+			expect(targetContrast(picked, color!.destructive!)).toBeGreaterThanOrEqual(4.5);
 		},
 	);
 
@@ -249,6 +289,40 @@ describe('toUnbrandedDsTheme', () => {
 		expect(light.theme.tokens.color!.background).not.toBe(dark.theme.tokens.color!.background);
 	});
 
+	it.each([
+		['light', light],
+		['dark', dark],
+	])('clears every contrast pair the target validates in the %s document', (_, result) => {
+		const failing = vendored.contrastPairs.pairs
+			.map((pair) => {
+				const [fgCategory, fgKey] = splitPath(pair.foreground);
+				const [bgCategory, bgKey] = splitPath(pair.background);
+				const ratio = targetContrast(
+					result.theme.tokens[fgCategory]![fgKey]!,
+					result.theme.tokens[bgCategory]![bgKey]!,
+				);
+
+				return { ...pair, ratio };
+			})
+			.filter((pair) => pair.ratio < pair.threshold);
+
+		expect(failing).toEqual([]);
+	});
+
+	it('maps only onto keys the target declares', () => {
+		const undeclared = UNBRANDED_DS_MAPPING.map((row) => row.target).filter((target) => {
+			const [category, key] = splitPath(target);
+
+			return !Object.hasOwn(vendoredTokens[category] ?? {}, key);
+		});
+
+		expect(undeclared).toEqual([]);
+	});
+
+	it('gives the same report per scheme as unbrandedDsReport', () => {
+		expect(unbrandedDsReport(tokenSet)).toEqual({ light: light.report, dark: dark.report });
+	});
+
 	it('makes no network call', () => {
 		vi.stubGlobal('fetch', () => {
 			throw new Error('toUnbrandedDsTheme reached the network');
@@ -268,45 +342,11 @@ describe('toUnbrandedDsTheme', () => {
 });
 
 /**
- * The target's build-time source nests motion (`motion.duration.fast`) where its runtime document
- * flattens it (`motion.duration-fast`), because Style Dictionary merges a theme file onto
- * `src/tokens/**` by path. A theme writing the flat spelling adds a stray `motion-duration-fast`
- * variable and leaves `--duration-fast` at the base value. These are the target's own source paths,
- * read off `packages/tokens/src/tokens/motion.json` at the vendored SHA.
+ * `$type` by source path, vendored from the target's `packages/tokens/src/tokens/*.json`. Its keys
+ * are the target's own source paths, so motion appears nested (`motion.duration.fast`) because Style
+ * Dictionary merges a theme file onto those files by path.
  */
-const TARGET_MOTION_SOURCE_PATHS = [
-	'motion.duration.fast',
-	'motion.duration.base',
-	'motion.duration.slow',
-	'motion.easing.standard',
-	'motion.easing.decelerate',
-	'motion.easing.accelerate',
-];
-
-/** `$type` by leaf, as the target's `packages/tokens/src/tokens/*.json` declares each at the SHA. */
-function targetType(path: string): string {
-	const [category, ...rest] = path.split('.');
-	const key = rest.join('.');
-
-	switch (category) {
-		case 'color':
-			return 'color';
-		case 'shadow':
-			return 'shadow';
-		case 'opacity':
-		case 'z-index':
-			return 'number';
-		case 'motion':
-			return key.startsWith('duration') ? 'duration' : 'cubicBezier';
-		case 'typography':
-			if (key.startsWith('font-')) return 'fontFamily';
-			if (key.startsWith('weight-')) return 'fontWeight';
-			if (key.startsWith('leading-')) return 'number';
-			return 'dimension';
-		default:
-			return 'dimension';
-	}
-}
+const targetSourceTypes: Record<string, string> = vendored.sourceTypes.types;
 
 type SourceLeaf = { path: string; token: { $value: unknown; $type: unknown } };
 
@@ -327,14 +367,9 @@ describe('toUnbrandedDsSource', () => {
 	});
 
 	it.each([lightPath, darkPath])('gives %s every source path the target declares', (path) => {
-		const expected = sorted([
-			...leaves(vendoredTokens)
-				.map(([leaf]) => leaf)
-				.filter((leaf) => !leaf.startsWith('motion.')),
-			...TARGET_MOTION_SOURCE_PATHS,
-		]);
-
-		expect(sorted(sourceLeaves(files[path]).map((leaf) => leaf.path))).toEqual(expected);
+		expect(sorted(sourceLeaves(files[path]).map((leaf) => leaf.path))).toEqual(
+			sorted(Object.keys(targetSourceTypes)),
+		);
 	});
 
 	it.each([lightPath, darkPath])(
@@ -344,7 +379,7 @@ describe('toUnbrandedDsSource', () => {
 				const literal = typeof token.$value === 'string' && !token.$value.includes('{');
 				const parses = token.$type !== 'color' || TARGET_OKLCH.test(String(token.$value));
 
-				return !literal || !parses || token.$type !== targetType(leaf);
+				return !literal || !parses || token.$type !== targetSourceTypes[leaf];
 			});
 
 			expect(wrong).toEqual([]);

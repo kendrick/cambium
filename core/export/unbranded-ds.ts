@@ -1,12 +1,10 @@
+import { boxShadow, length } from '../css/globals-css';
 import { formatCssNumber, toOklchCss } from '../css/oklch-css';
-import { type Oklch, renderedContrast } from '../oklch';
+import { contrastFromOklch, type Oklch, readOklch } from '../oklch';
 import { resolveScheme } from '../resolve-scheme';
 import {
 	type CubicBezierValue,
-	type DimensionValue,
 	type DurationValue,
-	type Shadow,
-	type SignedDimensionValue,
 	type TokenSet,
 	TokenSetSchema,
 } from '../token-set';
@@ -32,17 +30,7 @@ export type UnbrandedDsReport = {
  * number or a weight, and no `$extensions`. That differs from Cambium's `DtcgToken`, whose values
  * are typed, so this document doesn't reuse `DtcgDocument`.
  */
-export type UnbrandedDsSourceToken = { $value: string; $type: UnbrandedDsSourceType };
-
-export type UnbrandedDsSourceType =
-	| 'color'
-	| 'cubicBezier'
-	| 'dimension'
-	| 'duration'
-	| 'fontFamily'
-	| 'fontWeight'
-	| 'number'
-	| 'shadow';
+export type UnbrandedDsSourceToken = { $value: string; $type: string };
 
 export type UnbrandedDsSourceDocument = {
 	[name: string]: UnbrandedDsSourceDocument | UnbrandedDsSourceToken;
@@ -56,6 +44,12 @@ const VENDORED_TOKENS: Readonly<UnbrandedDsTokens> = vendored.tokens;
  * from the light set would put a pale `destructive-subtle` surface on a dark page.
  */
 const DARK_COLOR_DEFAULTS: Readonly<Record<string, string>> = vendored.darkColorDefaults.color;
+
+/**
+ * `$type` by source path, off the target's `packages/tokens/src/tokens/*.json`. A type the target
+ * changes shows up as a diff in the vendored file when #49 refreshes it.
+ */
+const SOURCE_TYPES: Readonly<Record<string, string>> = vendored.sourceTypes.types;
 
 const COLOR_KEYS = [
 	'background',
@@ -71,20 +65,23 @@ const COLOR_KEYS = [
 	'destructive',
 ] as const;
 
-/**
- * Target key → Cambium token path, or for one key a contrast pick between two paths. Both adapters and both report lists read this
- * one table: `defaulted` is every vendored key with no row, `unmapped` is every Cambium path no row
- * names. So the reports can't disagree with what was actually emitted, and adding a row is the only
- * way to move a key off either list.
- *
- * Cambium paths follow `TokenSet`'s own field names, except that semantic colours sit under
- * `color.` since that's the name both vocabularies share.
- */
-type MappingRow =
+export type UnbrandedDsMappingRow =
 	| { target: string; source: string }
 	| { target: string; contrastAgainst: string; candidates: readonly string[] };
 
-const MAPPING: readonly MappingRow[] = [
+/**
+ * Target key → Cambium token path, or for one key a contrast pick between two colours. Both
+ * adapters and {@link unbrandedDsReport} read this one table: `defaulted` is every vendored key with
+ * no row, `unmapped` is every Cambium path no row reads. So the report can't disagree with what was
+ * emitted, and adding a row is the only way to move a key off either list.
+ *
+ * Cambium paths follow `TokenSet`'s own field names, except that semantic colours sit under
+ * `color.` since that's the name both vocabularies share.
+ *
+ * Exported for the test that checks every `target` is a key the target declares. The adapters only
+ * emit vendored keys, so a row naming anything else would never fire and nothing else would notice.
+ */
+export const UNBRANDED_DS_MAPPING: readonly UnbrandedDsMappingRow[] = [
 	...COLOR_KEYS.map((key) => ({ target: `color.${key}`, source: `color.${key}` })),
 	// Cambium has no destructive-foreground, and no fixed default fits both schemes. The target's
 	// own dark scheme keeps `destructive` dark (L 0.577), so its near-white default works there.
@@ -133,11 +130,27 @@ const MAPPING: readonly MappingRow[] = [
 ];
 
 /**
+ * What each scheme's documents default and leave out, as {@link toUnbrandedDsTheme} returns it for
+ * one scheme and {@link toUnbrandedDsSource} would for both. The source adapter's return type is
+ * the file map #15 consumes, so its report lives here instead.
+ */
+export function unbrandedDsReport(tokens: TokenSet): Record<UnbrandedDsScheme, UnbrandedDsReport> {
+	const parsed = TokenSetSchema.parse(tokens);
+
+	return { light: mapScheme(parsed, 'light').report, dark: mapScheme(parsed, 'dark').report };
+}
+
+/**
  * The runtime theme unbranded-ds's `registerTheme` takes, for one colour scheme. The target keeps
  * scheme on its own axis, so a document carries one scheme's values and a caller registers two.
  *
  * Every key the target requires is present, so the document doesn't depend on the target merging it
- * onto its defaults, and `report.defaulted` names each value Cambium didn't supply.
+ * onto its defaults, and `report.defaulted` names each value Cambium didn't supply. The same report
+ * is available for both schemes from {@link unbrandedDsReport}.
+ *
+ * Pass the contrast-repaired set, `withContrastRepairs(...).tokenSet`, which is what the app
+ * exports. The target's `validateTheme` checks WCAG pairs, and the unrepaired seed fixture fails its
+ * light scheme at 3.66:1 on primary-foreground/primary and 4.42:1 on muted-foreground/muted.
  *
  * Pure: parses its own copy of `tokens` the way `serializeDtcg` does, and reads nothing else.
  */
@@ -169,7 +182,9 @@ export function toUnbrandedDsTheme(
 
 /**
  * The build-time theme source: one DTCG file per scheme at the path unbranded-ds's Style Dictionary
- * config walks, `themes/theme/<identity>/<scheme>.json`. Same values as {@link toUnbrandedDsTheme}.
+ * config walks, `themes/theme/<identity>/<scheme>.json`. Same values as {@link toUnbrandedDsTheme},
+ * and the same contrast-repaired input. Which keys defaulted and which Cambium tokens have no key
+ * comes from {@link unbrandedDsReport}.
  *
  * Motion nests here where the runtime document flattens it. The build merges a theme file onto
  * `src/tokens/**` by path, and the source spells motion `motion.duration.fast`, so the flat runtime
@@ -196,11 +211,15 @@ export function toUnbrandedDsSource(
 			const group: Record<string, UnbrandedDsSourceDocument | UnbrandedDsSourceToken> = {};
 
 			for (const key of Object.keys(keys)) {
-				const token = {
-					$value: values.get(`${category}.${key}`)!,
-					$type: sourceType(category, key),
-				};
 				const nested = category === 'motion' ? /^(duration|easing)-(.+)$/.exec(key) : null;
+				const sourcePath = nested ? `${category}.${nested[1]}.${nested[2]}` : `${category}.${key}`;
+				const $type = SOURCE_TYPES[sourcePath];
+
+				if ($type === undefined) {
+					throw new Error(`the vendored unbranded-ds source declares no $type for ${sourcePath}`);
+				}
+
+				const token = { $value: values.get(`${category}.${key}`)!, $type };
 
 				if (nested) {
 					const [, subgroup, name] = nested as unknown as [string, string, string];
@@ -221,7 +240,8 @@ export function toUnbrandedDsSource(
 }
 
 /**
- * Every target key's value for one scheme, and the two report lists, all off {@link MAPPING}. A row
+ * Every target key's value for one scheme, and the two report lists, all off
+ * {@link UNBRANDED_DS_MAPPING}. A row
  * whose Cambium source this set happens not to hold falls back to the default and is reported
  * defaulted, so a sparse hand-built set can't leave a hole the target fills silently.
  */
@@ -238,7 +258,7 @@ function mapScheme(
 	for (const [category, keys] of Object.entries(VENDORED_TOKENS)) {
 		for (const [key, lightDefault] of Object.entries(keys)) {
 			const target = `${category}.${key}`;
-			const row = MAPPING.find((entry) => entry.target === target);
+			const row = UNBRANDED_DS_MAPPING.find((entry) => entry.target === target);
 			const mapped = row ? readRow(row, cambium, resolved) : undefined;
 
 			if (mapped) {
@@ -259,7 +279,7 @@ function mapScheme(
 
 /** One row's value for this scheme and the Cambium paths it read, or undefined if a source is absent. */
 function readRow(
-	row: MappingRow,
+	row: UnbrandedDsMappingRow,
 	cambium: Map<string, string>,
 	resolved: Record<string, Oklch>,
 ): { value: string; sources: string[] } | undefined {
@@ -274,19 +294,20 @@ function readRow(
 
 	if (!against || candidates.length !== row.candidates.length) return undefined;
 
-	// WCAG 2 contrast, the ratio the target's validator gates on. Ties go to the first candidate.
-	const best = candidates.reduce((winner, name) =>
-		renderedContrast(resolved[name]!, against) > renderedContrast(resolved[winner]!, against)
-			? name
-			: winner,
-	);
+	// Measured on the printed strings the target parses, with unrounded WCAG 2 as its
+	// `contrastRatio` computes it: no 8-bit rounding and no gamut clamp. `renderedContrast` rounds
+	// to bytes first, and near 4.5:1 that can pick the candidate the target then fails. Ties go to
+	// the first candidate.
+	const ratio = (name: string) =>
+		contrastFromOklch(readOklch(toOklchCss(resolved[name]!)), readOklch(toOklchCss(against)));
+	const best = candidates.reduce((winner, name) => (ratio(name) > ratio(winner) ? name : winner));
 
 	return { value: toOklchCss(resolved[best]!), sources: candidates.map((name) => `color.${name}`) };
 }
 
 /**
  * Every token Cambium generates for one scheme, keyed by path and already formatted as the CSS
- * literal the target stores. Enumerated from the set rather than from {@link MAPPING}, so a token
+ * literal the target stores. Enumerated from the set rather than from {@link UNBRANDED_DS_MAPPING}, so a token
  * no row reads still shows up, and lands in `unmapped`.
  */
 function cambiumLeaves(tokenSet: TokenSet, scheme: UnbrandedDsScheme): Map<string, string> {
@@ -321,48 +342,10 @@ function cambiumLeaves(tokenSet: TokenSet, scheme: UnbrandedDsScheme): Map<strin
 	return leaves;
 }
 
-/** `$type` as the target's `packages/tokens/src/tokens/*.json` declares it for each key. */
-function sourceType(category: string, key: string): UnbrandedDsSourceType {
-	switch (category) {
-		case 'color':
-			return 'color';
-		case 'shadow':
-			return 'shadow';
-		case 'opacity':
-		case 'z-index':
-			return 'number';
-		case 'motion':
-			return key.startsWith('duration-') ? 'duration' : 'cubicBezier';
-		case 'typography':
-			if (key.startsWith('font-')) return 'fontFamily';
-			if (key.startsWith('weight-')) return 'fontWeight';
-			if (key.startsWith('leading-')) return 'number';
-			return 'dimension';
-		default:
-			return 'dimension';
-	}
-}
-
-function length(dimension: DimensionValue | SignedDimensionValue): string {
-	return `${formatCssNumber(dimension.value)}${dimension.unit}`;
-}
-
 function duration(token: DurationValue): string {
 	return `${formatCssNumber(token.value)}${token.unit}`;
 }
 
 function cubicBezier(points: CubicBezierValue): string {
 	return `cubic-bezier(${points.map((point) => formatCssNumber(point)).join(', ')})`;
-}
-
-/**
- * Duplicates `boxShadow` in `core/css/globals-css.ts`, which isn't exported. Export that one and
- * delete this copy, so the two can't print a shadow differently.
- */
-function boxShadow(shadow: Shadow): string {
-	const geometry = [shadow.offsetX, shadow.offsetY, shadow.blur, shadow.spread]
-		.map(length)
-		.join(' ');
-
-	return `${geometry} ${toOklchCss(shadow.color)}`;
 }

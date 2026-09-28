@@ -125,5 +125,139 @@
 			"popover": "oklch(0.1408 0.0044 285.82)",
 			"popover-foreground": "oklch(0.9851 0.0000 89.88)"
 		}
+	},
+	"contrastPairs": {
+		"source": {
+			"repo": "kendrick/unbranded-ds",
+			"path": "packages/tokens/src/schema.ts",
+			"sha": "4b718629ed7f26c5d45cc8066a07741d53d4a686"
+		},
+		"pairs": [
+			{
+				"foreground": "color.foreground",
+				"background": "color.background",
+				"threshold": 4.5
+			},
+			{
+				"foreground": "color.primary-foreground",
+				"background": "color.primary",
+				"threshold": 4.5
+			},
+			{
+				"foreground": "color.muted-foreground",
+				"background": "color.muted",
+				"threshold": 4.5
+			},
+			{
+				"foreground": "color.destructive-foreground",
+				"background": "color.destructive",
+				"threshold": 4.5
+			},
+			{
+				"foreground": "color.muted-foreground",
+				"background": "color.background",
+				"threshold": 4.5
+			},
+			{
+				"foreground": "color.destructive-subtle-foreground",
+				"background": "color.destructive-subtle",
+				"threshold": 4.5
+			},
+			{
+				"foreground": "color.popover-foreground",
+				"background": "color.popover",
+				"threshold": 4.5
+			},
+			{
+				"foreground": "color.muted-foreground",
+				"background": "color.popover",
+				"threshold": 4.5
+			}
+		]
+	},
+	"sourceTypes": {
+		"source": {
+			"repo": "kendrick/unbranded-ds",
+			"path": "packages/tokens/src/tokens/*.json",
+			"sha": "4b718629ed7f26c5d45cc8066a07741d53d4a686"
+		},
+		"types": {
+			"color.background": "color",
+			"color.foreground": "color",
+			"color.primary": "color",
+			"color.primary-foreground": "color",
+			"color.muted": "color",
+			"color.muted-foreground": "color",
+			"color.border": "color",
+			"color.ring": "color",
+			"color.destructive": "color",
+			"color.destructive-foreground": "color",
+			"color.destructive-subtle": "color",
+			"color.destructive-subtle-foreground": "color",
+			"color.popover": "color",
+			"color.popover-foreground": "color",
+			"motion.duration.fast": "duration",
+			"motion.duration.base": "duration",
+			"motion.duration.slow": "duration",
+			"motion.easing.standard": "cubicBezier",
+			"motion.easing.decelerate": "cubicBezier",
+			"motion.easing.accelerate": "cubicBezier",
+			"opacity.disabled": "number",
+			"opacity.hover": "number",
+			"radius.sm": "dimension",
+			"radius.md": "dimension",
+			"radius.lg": "dimension",
+			"radius.xl": "dimension",
+			"radius.2xl": "dimension",
+			"radius.3xl": "dimension",
+			"radius.full": "dimension",
+			"ring.width": "dimension",
+			"shadow.sm": "shadow",
+			"shadow.md": "shadow",
+			"shadow.lg": "shadow",
+			"spacing.px": "dimension",
+			"spacing.1": "dimension",
+			"spacing.2": "dimension",
+			"spacing.3": "dimension",
+			"spacing.4": "dimension",
+			"spacing.5": "dimension",
+			"spacing.6": "dimension",
+			"spacing.7": "dimension",
+			"spacing.8": "dimension",
+			"spacing.9": "dimension",
+			"spacing.10": "dimension",
+			"spacing.11": "dimension",
+			"spacing.12": "dimension",
+			"spacing.13": "dimension",
+			"spacing.14": "dimension",
+			"spacing.15": "dimension",
+			"spacing.16": "dimension",
+			"tracking.tighter": "dimension",
+			"tracking.tight": "dimension",
+			"tracking.normal": "dimension",
+			"tracking.wide": "dimension",
+			"tracking.wider": "dimension",
+			"tracking.widest": "dimension",
+			"typography.font-sans": "fontFamily",
+			"typography.font-mono": "fontFamily",
+			"typography.font-serif": "fontFamily",
+			"typography.size-sm": "dimension",
+			"typography.size-base": "dimension",
+			"typography.size-lg": "dimension",
+			"typography.size-xl": "dimension",
+			"typography.size-2xl": "dimension",
+			"typography.size-3xl": "dimension",
+			"typography.weight-normal": "fontWeight",
+			"typography.weight-medium": "fontWeight",
+			"typography.weight-semibold": "fontWeight",
+			"typography.weight-bold": "fontWeight",
+			"typography.leading-normal": "number",
+			"typography.leading-tight": "number",
+			"typography.leading-relaxed": "number",
+			"z-index.overlay": "number",
+			"z-index.popover": "number",
+			"z-index.tooltip": "number",
+			"z-index.max": "number"
+		}
 	}
 }
