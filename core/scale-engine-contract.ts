@@ -122,13 +122,37 @@ function serializeSchemes(schemes: Schemes): string {
 }
 
 /**
+ * Balanced plus one set that moves chromaSpread, harmonization, accentRotation, neutralTinting and
+ * surfaceTinting all well away from it at once, so the digest pin below samples more than the single
+ * params set every other case in this file runs under. chromaSpread 1.6 is the same figure the
+ * determinism block above already uses; harmonization 0.5 is the value `core/oklch-scale-engine.test.ts`
+ * already exercises. #37's Faithful and Expressive presets would be the more natural second and
+ * third entries here, but they aren't on this branch, so this stays a local literal rather than an
+ * import.
+ */
+const PARAM_SETS: ReadonlyArray<readonly [string, InterpretationParams]> = [
+	['balanced', BALANCED],
+	[
+		'stress',
+		{
+			...BALANCED,
+			chromaSpread: 1.6,
+			harmonization: 0.5,
+			accentRotation: 200,
+			neutralTinting: 1,
+			surfaceTinting: 0.08,
+		},
+	],
+];
+
+/**
  * A literal copy of every digest that has ever shipped, kept apart from `ENGINE_DIGESTS` so that
  * editing the fixture cannot carry this pin along with it. Append only: a shipped id's entry never
  * changes here, so the only way to ship changed output is a new id with a new fixture entry, pinned
  * here in its own turn once it ships.
  */
 const PINNED_DIGESTS: Readonly<Record<string, string>> = {
-	'cambium-oklch-1': 'e4d6a1874554b831892f52ab35f0e31d89e67a4f3dff7c733af77ca7b874ba4c',
+	'cambium-oklch-1': '0a383775a85aee1a28e3a7ec7de39dc9e71a53f02a0021ec078efa2f8f2ecb1a',
 };
 
 export function testScaleEngineContract(createEngine: () => ScaleEngine) {
@@ -317,12 +341,15 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 
 	describe('digest pin', () => {
 		// The rule this guards lives on `ScaleEngine.id` in `core/scale-engine.ts`: any change to
-		// what `generate` produces, for any seed or params, obliges a new id. Hashing all four seeds
-		// together rather than one at a time is what makes that true for every seed at once — a
-		// digest that only covered some of them could go stale while the output it left out moved.
+		// what `generate` produces, for any seed or params, obliges a new id. This pin samples that
+		// rule rather than proving it—it covers the four seeds across PARAM_SETS (Balanced plus one
+		// set that moves every other field away from it), so a change reachable only through some
+		// seed or params combination outside that sample can still slip past.
 		it("pins the engine id to a digest of its own output, so an id survives only beside output that hasn't moved", () => {
 			const engine = createEngine();
-			const bytes = SEEDS.map(([, brand]) => serializeSchemes(generate(brand).schemes)).join('\n');
+			const bytes = SEEDS.flatMap(([, brand]) =>
+				PARAM_SETS.map(([, params]) => serializeSchemes(generate(brand, params).schemes)),
+			).join('\n');
 			const digest = createHash('sha256').update(bytes).digest('hex');
 			const pinned = ENGINE_DIGESTS[engine.id];
 
@@ -332,13 +359,14 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 			).toBeDefined();
 			expect(
 				digest,
-				`output changed under engine id ${engine.id}. Either the change is unintended (revert it), or it is intended: move the engine id and add a new digest entry beside the existing one, leaving the old entry in place.`,
+				`output changed under engine id ${engine.id}. Either the change is unintended (revert it), or it is intended: move the engine id, add a new digest entry beside the existing one (leaving the old entry in place), pin it in PINNED_DIGESTS once it ships, and update the id literal asserted in core/oklch-scale-engine.test.ts.`,
 			).toBe(pinned);
 		});
 
 		// The paired negative for the case above: editing `ENGINE_DIGESTS` in place to match changed
 		// output would satisfy that first case on its own. This one holds every shipped entry to a
-		// copy the contract carries independently, so the digest itself can't be the thing that moves.
+		// copy the contract carries independently, so re-blessing an id in place now takes editing
+		// two literals in two files, which a reviewer sees.
 		it('keeps every pinned digest exactly as it shipped, with no two ids sharing one', () => {
 			for (const [id, digest] of Object.entries(PINNED_DIGESTS)) {
 				expect(

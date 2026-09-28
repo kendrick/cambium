@@ -86,9 +86,11 @@ export type ScaleEngineResult =
  * holds if the id actually moves when the output does: any change to what `generate` returns, for
  * any seed and any params, obliges a new id, and the old id's digest stays put in the fixture
  * rather than being edited to match. `core/scale-engine-digest.fixture.ts` pins each shipped id to
- * a digest of its output over four seeds, and the "pins the engine id to a digest of its own
- * output" case in `core/scale-engine-contract.ts` is what fails when an id and its digest fall out
- * of step.
+ * a digest of its output over the four seeds and a small sample of params—Balanced plus one set
+ * that moves every other field away from it. That samples the rule above rather than proving it: a
+ * change reachable only through some other params combination can still slip past. The "pins the
+ * engine id to a digest of its own output" case in `core/scale-engine-contract.ts` is what fails
+ * when a sampled id and its digest fall out of step.
  */
 export type ScaleEngine = {
 	readonly id: string;
