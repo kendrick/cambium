@@ -12,8 +12,9 @@ import { TokenSetSchema } from './token-set';
  * quietly wearing a shape it no longer has. `BrandRecordSchema` accepts only
  * `z.literal(SCHEMA_VERSION)`, so an older or newer stamp fails with `schemaVersion` as the first
  * issue, ahead of whatever per-field complaints the shape mismatch would otherwise raise. No
- * migration is written for a bump: the export archive (#20) is the only way across one, because a
- * shim would have to invent the provenance or intent an old record never recorded.
+ * migration is written, so a record from before a bump stays unreadable: the stores parse on the
+ * way out, and `get` and `list` refuse it by name. Pre-release builds stamped records 4 through 10,
+ * and a browser still holding one of those fails here the same way.
  */
 export const SCHEMA_VERSION = 1;
 

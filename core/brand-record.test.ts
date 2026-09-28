@@ -69,9 +69,9 @@ describe('BrandRecordSchema', () => {
 	});
 
 	/**
-	 * The record the version bump exists for. A pre-#7 archive holds a colour-only token set, and
-	 * without the bump it claims a version matching the current format and then dies on a list of
-	 * Zod issues rather than on the loud mismatch `SCHEMA_VERSION` is there to raise.
+	 * A colour-only token set, the shape from before the non-colour categories landed. Stamped with
+	 * the current version it dies on a list of Zod issues rather than on the loud `schemaVersion`
+	 * mismatch, which is why a change like that one needs a bump.
 	 */
 	it('rejects a token set from before the non-colour categories landed', () => {
 		const ramp = Array.from({ length: 12 }, (_, i) => ({

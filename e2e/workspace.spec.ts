@@ -414,12 +414,13 @@ test('a workspace pointed at a row that fails BrandRecordSchema reports the unre
 
 	// Written straight into the object store rather than through `seedWorkspaceRecord`, which
 	// parses first: this row has to reach `RecordStore.get`'s own `BrandRecordSchema.parse` and
-	// fail there. It supplies `revision`, so that's not what trips the schema; `schemaVersion` is a
-	// `z.literal(SCHEMA_VERSION)`, and `1` is a version the schema has moved past.
+	// fail there. It supplies `revision` and `brandUrl`, so neither trips the schema; `schemaVersion`
+	// is a `z.literal(SCHEMA_VERSION)`, and `10` is the stamp a pre-release build left in a browser.
 	await writeIndexedDbRow(page, {
 		id,
-		schemaVersion: 1,
+		schemaVersion: 10,
 		revision: FIRST_REVISION,
+		brandUrl: null,
 		images: [],
 		versions: [],
 	});

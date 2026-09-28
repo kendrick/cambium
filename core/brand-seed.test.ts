@@ -135,9 +135,9 @@ describe('BrandSeedSchema', () => {
 		expect(parsed.imageClassifications?.[0]?.detected).toBe('logo');
 	});
 
-	// #83 removed the field because nothing read it. A reader still sending it, such as a seed
-	// stored before `seed-v4`, has to be refused by name rather than stripped, or the removal is
-	// invisible to the code that still produces it.
+	// #83 removed the field because nothing read it. A reader still sending it, such as a prompt
+	// from before `seed-v4` or a seed stored under an older `SCHEMA_VERSION`, has to be refused by
+	// name rather than stripped, or the removal is invisible to the code that still produces it.
 	it('refuses surfacePolarity as a key it no longer declares', () => {
 		const result = BrandSeedSchema.safeParse({ ...colorsOnly, surfacePolarity: 'light-first' });
 
