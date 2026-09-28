@@ -155,6 +155,9 @@ function pairingOf(seed: BrandSeed, mode?: Parameters<typeof rankFonts>[2]): Sug
 
 const familiesOf = (candidates: FontCandidate[]): string[] => candidates.map((c) => c.family);
 
+const geoSans = (candidates: FontCandidate[]) =>
+	familiesOf(candidates).filter((family) => family.startsWith('Geo Sans'));
+
 /** A pairing carrying one model-named face, for the `model-led` mode to seat ahead of the ranking. */
 function named(family: string, role: keyof SuggestedPairing = 'display'): SuggestedPairing {
 	// Marked `derived` with a score on purpose: that is how the model writes the field, and the
@@ -228,8 +231,6 @@ describe('rankFonts', () => {
 	// requirement.
 	it('keeps a family to one slot per role however many script variants it has', () => {
 		const { display, body, mono } = pairingOf(seedWith({}));
-		const geoSans = (candidates: FontCandidate[]) =>
-			familiesOf(candidates).filter((family) => family.startsWith('Geo Sans'));
 
 		expect(geoSans(display)).toHaveLength(1);
 		expect(geoSans(body)).toHaveLength(1);

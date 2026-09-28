@@ -170,9 +170,9 @@ describe('BrandSeedSchema', () => {
 	});
 });
 
-describe('SuggestedPairingSchema ordering', () => {
-	const at = (score: number) => ({ ...derivedCandidate, score });
+const at = (score: number) => ({ ...derivedCandidate, score });
 
+describe('SuggestedPairingSchema ordering', () => {
 	// The candidates are documented as ranked, and the score is what ranks them. A consumer
 	// taking the first entry would otherwise get the worst face in the list.
 	it('rejects derived candidates that do not descend by score', () => {
@@ -265,13 +265,13 @@ describe('ExpressiveScoreSchema', () => {
 	});
 });
 
-describe('RectSchema', () => {
-	const region = (r: Record<string, number>) =>
-		BrandSeedSchema.safeParse({
-			...colorsOnly,
-			keyColors: [{ ...colorsOnly.keyColors[0], sourceRegion: r }],
-		}).success;
+const region = (r: Record<string, number>) =>
+	BrandSeedSchema.safeParse({
+		...colorsOnly,
+		keyColors: [{ ...colorsOnly.keyColors[0], sourceRegion: r }],
+	}).success;
 
+describe('RectSchema', () => {
 	it('accepts a region expressed as 0 to 1 fractions of the image', () => {
 		expect(region({ x: 0.1, y: 0.2, width: 0.5, height: 0.4 })).toBe(true);
 	});

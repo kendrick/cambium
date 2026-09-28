@@ -24,6 +24,9 @@ function valuesOf(character: Parameters<typeof radiusScale>[0]) {
 	return STEPS.map((step) => values[step]!.value);
 }
 
+const top = (progression: 'sharp' | 'soft' | 'pill') =>
+	valuesOf({ base: 16, progression })[STEPS.length - 1]!;
+
 describe('radiusScale', () => {
 	it('emits the seven steps the vendored theme declares, in rem', () => {
 		const { source, values } = radiusScale(soft);
@@ -70,9 +73,6 @@ describe('radiusScale', () => {
 	 * table someone edits into the wrong order.
 	 */
 	it('spreads the scale further as the character softens', () => {
-		const top = (progression: 'sharp' | 'soft' | 'pill') =>
-			valuesOf({ base: 16, progression })[STEPS.length - 1]!;
-
 		expect(top('sharp')).toBeLessThan(top('soft'));
 		expect(top('soft')).toBeLessThan(top('pill'));
 	});

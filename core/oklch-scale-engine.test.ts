@@ -294,13 +294,13 @@ const ACCENT_IN_SEED = {
  * only, a rule keyed on the ramp's name passes and ships a keyless read whose invented colours
  * claim a seed field.
  */
-describe('createOklchScaleEngine provenance', () => {
-	// Both schemes, every time. Dark is generated on its own pass through the same builder, so a
-	// payload threaded into one and dropped from the other is a live failure mode rather than a
-	// theoretical one.
-	const tracesOf = (name: RampName, overrides = {}, params = BALANCED) =>
-		SCHEME_NAMES.map((scheme) => trace(generate(overrides, params).schemes[scheme][name]));
+// Both schemes, every time. Dark is generated on its own pass through the same builder, so a
+// payload threaded into one and dropped from the other is a live failure mode rather than a
+// theoretical one.
+const tracesOf = (name: RampName, overrides = {}, params = BALANCED) =>
+	SCHEME_NAMES.map((scheme) => trace(generate(overrides, params).schemes[scheme][name]));
 
+describe('createOklchScaleEngine provenance', () => {
 	it('observes the brand key colour at step 9 and derives the other eleven from it', () => {
 		expect(tracesOf('brand')).toEqual([anchoredTrace, anchoredTrace]);
 	});

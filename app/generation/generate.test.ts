@@ -317,6 +317,23 @@ const READ_FAILURE_RUNS = STARTING_RECORDS.flatMap((start) =>
 	READ_FAILURES.map((failure) => ({ ...failure, start })),
 );
 
+function stalledRun(setup: Stored, signal: AbortSignal) {
+	const read = vi.fn<AnthropicBrandReader['read']>();
+
+	const pending = generate({
+		record: setup.stored,
+		key: API_KEY,
+		reader: { read },
+		recordStore: setup.store,
+		engine,
+		signal,
+		now: () => NOW,
+		resolveFontTableRef: () => new Promise<never>(() => {}),
+	});
+
+	return { pending, read };
+}
+
 describe('generate', () => {
 	describe('on success', () => {
 		it.each(STARTING_RECORDS)(
@@ -639,23 +656,6 @@ describe('generate', () => {
 	});
 
 	describe('when the font table lookup stalls', () => {
-		function stalledRun(setup: Stored, signal: AbortSignal) {
-			const read = vi.fn<AnthropicBrandReader['read']>();
-
-			const pending = generate({
-				record: setup.stored,
-				key: API_KEY,
-				reader: { read },
-				recordStore: setup.store,
-				engine,
-				signal,
-				now: () => NOW,
-				resolveFontTableRef: () => new Promise<never>(() => {}),
-			});
-
-			return { pending, read };
-		}
-
 		it.each(STARTING_RECORDS)(
 			'ends as cancelled when Cancel lands mid-lookup, sending nothing and leaving a record with $label deep-equal',
 			async ({ build }) => {

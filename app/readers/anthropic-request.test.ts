@@ -282,11 +282,11 @@ describe('buildSeedRequestBody with a repair', () => {
 	});
 });
 
-describe('seedRequestTextChars', () => {
-	function charsFor(images: ReferenceImage[], repair?: { rawResponse: string; issues: string[] }) {
-		return seedRequestTextChars({ images, model: MODEL, outputMode: 'structured', repair });
-	}
+function charsFor(images: ReferenceImage[], repair?: { rawResponse: string; issues: string[] }) {
+	return seedRequestTextChars({ images, model: MODEL, outputMode: 'structured', repair });
+}
 
+describe('seedRequestTextChars', () => {
 	// The API prices an image by its pixels, so a longer base64 payload must not look like a longer
 	// prompt.
 	it('leaves image payloads out of the count', () => {

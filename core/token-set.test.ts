@@ -286,13 +286,13 @@ const pxDimension = (value: number) => ({ value, unit: 'px', $extensions: extens
  * the generated tracking scale is negative for three of its five steps under a `tight` feel and
  * two under the others.
  */
-describe('TokenSetSchema dimension signs', () => {
-	const shadowWith = (patch: object) =>
-		withMirrored('shadow', {
-			...shadow,
-			values: { md: { ...shadow.values.md, ...patch } },
-		});
+const shadowWith = (patch: object) =>
+	withMirrored('shadow', {
+		...shadow,
+		values: { md: { ...shadow.values.md, ...patch } },
+	});
 
+describe('TokenSetSchema dimension signs', () => {
 	it.each([
 		[
 			'radius',
