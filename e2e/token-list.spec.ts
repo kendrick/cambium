@@ -1146,3 +1146,218 @@ test('two cleared fields of one shadow row list as two items, not one', async ({
 	await leaf('offsetY').blur();
 	await expect(issueItems(shadow)).toHaveCount(2);
 });
+
+/** WCAG 2.x's gamma decode for one 8-bit sRGB channel, into linear light. */
+function linearizeChannel(byte: number): number {
+	const channel = byte / 255;
+	return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+}
+
+/**
+ * WCAG 2.x relative luminance: gamma-decode each 8-bit channel, then weight green over red over
+ * blue the way the spec fixes.
+ */
+function relativeLuminance([r, g, b]: Rgb): number {
+	return 0.2126 * linearizeChannel(r) + 0.7152 * linearizeChannel(g) + 0.0722 * linearizeChannel(b);
+}
+
+/**
+ * WCAG 2.x contrast ratio between two 8-bit sRGB colours, written from the formula directly rather
+ * than through `core/oklch.ts`'s `renderedContrast`, so this checks the row's printed number against
+ * an outside computation of the pixels a browser actually painted, not against the pipeline's own
+ * math running a second time.
+ */
+function wcagRatio(a: Rgb, b: Rgb): number {
+	const lumA = relativeLuminance(a);
+	const lumB = relativeLuminance(b);
+	const lighter = Math.max(lumA, lumB);
+	const darker = Math.min(lumA, lumB);
+
+	return (lighter + 0.05) / (darker + 0.05);
+}
+
+/** Matches the legacy `rgb()`/`rgba()` shape, byte components already in 0-255. */
+function parseLegacyRgb(literal: string): Rgb | null {
+	const match = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/.exec(literal);
+	return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+/** Matches the `color(srgb r g b)` predefined-space shape, whose components are 0-1 fractions. */
+function parsePredefinedSrgb(literal: string): Rgb | null {
+	const match = /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(literal);
+	return match ? [Number(match[1]) * 255, Number(match[2]) * 255, Number(match[3]) * 255] : null;
+}
+
+/**
+ * The 0-255 sRGB triple a `getComputedStyle().color`/`.backgroundColor` string names, whichever
+ * shape Chromium chose to serialize it in.
+ *
+ * The plan behind this scenario assumed that string is always `rgb()`/`rgba()`, matching older
+ * Chromium's habit of converting every computed colour to legacy sRGB. This build's Chromium instead
+ * echoes back the declared colour space: a token declared through `schemeDeclarations`' inline
+ * `oklch()` custom properties reads back as `oklch(L C H)`, which a legacy-rgb regex can't parse.
+ * Asking the browser to `color-mix(in srgb, …)` a colour with itself makes Chromium do the conversion
+ * itself and serialize the result as `color(srgb r g b)` — still the browser's own computation, not
+ * an OKLCH-to-sRGB re-derivation written into this test, which would just move the "independent of
+ * `core/oklch.ts`" risk from an import into a hand-rolled duplicate of its math.
+ */
+async function computedSrgb(page: Page, cssColor: string): Promise<Rgb> {
+	const direct = parseLegacyRgb(cssColor) ?? parsePredefinedSrgb(cssColor);
+	if (direct) return direct;
+
+	const normalized = await page.evaluate((color) => {
+		const probe = document.createElement('div');
+		probe.style.color = `color-mix(in srgb, ${color} 100%, ${color} 0%)`;
+		document.body.appendChild(probe);
+		try {
+			return getComputedStyle(probe).color;
+		} finally {
+			probe.remove();
+		}
+	}, cssColor);
+
+	const parsed = parseLegacyRgb(normalized) ?? parsePredefinedSrgb(normalized);
+	if (!parsed) throw new Error(`unparsed colour "${cssColor}" (normalized to "${normalized}")`);
+
+	return parsed;
+}
+
+/**
+ * The WCAG contrast Chromium actually composites for the preview heading over its container, per
+ * acceptance criterion 2. The heading and every element between it and `[data-preview]` set no
+ * background of their own (`app-screen.tsx`'s header carries none on its ancestors), so the
+ * container's own declared `bg-background` is what really paints behind the text.
+ */
+async function measuredHeadingContrast(page: Page): Promise<number> {
+	const heading = page.locator('[data-preview-app-screen] h3', { hasText: 'Orders' });
+	const container = page.locator('[data-preview]');
+
+	const [colorCss, backgroundCss] = await Promise.all([
+		heading.evaluate((element) => getComputedStyle(element).color),
+		container.evaluate((element) => getComputedStyle(element).backgroundColor),
+	]);
+	const [color, background] = await Promise.all([
+		computedSrgb(page, colorCss),
+		computedSrgb(page, backgroundCss),
+	]);
+
+	return wcagRatio(color, background);
+}
+
+/** One `[data-contrast-verdict]` line, parsed back into the fields `token-row.tsx` printed it from. */
+function parseVerdictLine(text: string): { label: string; wcag: number; target: number } {
+	const match = /^(.+): ([\d.]+):1, needs ([\d.]+)$/.exec(text.trim());
+	if (!match) throw new Error(`unparsed verdict line "${text}"`);
+
+	return { label: match[1]!, wcag: Number(match[2]), target: Number(match[3]) };
+}
+
+/**
+ * The four declared pairs this seed's `background` → `brand.9` override breaks, and the ratio each
+ * lands at: independently reproduced by running this same `SEED`/`BALANCED`/`withContrastRepairs`
+ * pipeline against `core/contrast/check.ts` in a scratch script while planning issue #153, then
+ * confirmed again against this row's own rendered text below. Checked loosely (±0.5): this number is
+ * the pipeline's own, and the tight, independent check is the rendered-pixel comparison further down.
+ */
+const BACKGROUND_OVERRIDE_FAILURES = [
+	{ label: 'foreground on background', target: 4.5, wcag: 3.29 },
+	{ label: 'destructive on background', target: 4.5, wcag: 1.45 },
+	{ label: 'ring on background', target: 3, wcag: 1.37 },
+	{ label: 'sidebar-ring on background', target: 3, wcag: 1.37 },
+] as const;
+
+test('setting semantic.background to brand.9 shows the AA fails it causes, agrees with the rendered pixels, and Revert clears it', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const row = page.locator('[data-token="semantic.background"]');
+	const alias = page.getByLabel('background alias', { exact: true });
+	const verdict = row.locator('[data-contrast-verdict] li');
+
+	await expect(alias).toHaveValue('neutral.1');
+	await expect(verdict).toHaveCount(0);
+
+	await alias.selectOption('brand.9');
+
+	await expect(row).toHaveAttribute('data-overridden', '');
+	await expect(verdict).toHaveCount(BACKGROUND_OVERRIDE_FAILURES.length);
+
+	const lines = (await verdict.allTextContents()).map(parseVerdictLine);
+	expect(lines.map((line) => line.label)).toEqual(
+		BACKGROUND_OVERRIDE_FAILURES.map((failure) => failure.label),
+	);
+
+	for (const [index, failure] of BACKGROUND_OVERRIDE_FAILURES.entries()) {
+		expect(lines[index]!.target, failure.label).toBe(failure.target);
+		expect(lines[index]!.wcag, failure.label).toBeGreaterThan(failure.wcag - 0.5);
+		expect(lines[index]!.wcag, failure.label).toBeLessThan(failure.wcag + 0.5);
+	}
+
+	// Acceptance criterion 2: the row's own ratio for `foreground on background` agrees with what the
+	// browser actually composited for the preview heading, measured independently of the row's pipeline.
+	const printedRatio = lines[0]!.wcag;
+	const measuredRatio = await measuredHeadingContrast(page);
+	expect(measuredRatio).toBeGreaterThan(printedRatio - 0.1);
+	expect(measuredRatio).toBeLessThan(printedRatio + 0.1);
+
+	await row.getByRole('button', { name: 'Revert' }).click();
+
+	await expect(row).not.toHaveAttribute('data-overridden', '');
+	await expect(alias).toHaveValue('neutral.1');
+	await expect(verdict).toHaveCount(0);
+	await expect.poll(() => measuredHeadingContrast(page)).toBeGreaterThanOrEqual(4.5);
+});
+
+test('an override that keeps every declared pair at AA shows no verdict', async ({ page }) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const row = page.locator('[data-token="semantic.secondary"]');
+	const swatch = row.locator('[data-swatch]');
+
+	// `secondary` -> `neutral.4` is the one substituted here: the plan called for re-aliasing
+	// `primary` to `brand.1`, reusing the shape of the earlier "re-aliasing primary" scenario, on the
+	// assumption that `primary` "stays pinned-safe". Measured against this build, it does not --
+	// see `plan_concerns` in this task's report. `secondary` -> `neutral.4` is confirmed safe the same
+	// way: driven through the real app and read back off `contrast.report` via the row's own verdict.
+	const targetStep = LIGHT.primitives.neutral!.find((step) => step.step === 4)!;
+	const target = await referencePaint(page, swatch, oklchFromFields(targetStep));
+
+	await expect(row.locator('[data-contrast-verdict]')).toHaveCount(0);
+
+	await page.getByLabel('secondary alias', { exact: true }).selectOption('neutral.4');
+
+	await expect(row).toHaveAttribute('data-overridden', '');
+	await expect
+		.poll(async () => paintDistance(await paintedCentre(swatch), target))
+		.toBeLessThanOrEqual(1);
+	await expect(row.locator('[data-contrast-verdict]')).toHaveCount(0);
+});
+
+test('the Accessibility tab lists a failing pair instead of the placeholder', async ({ page }) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const placeholder = page.getByText('The accessibility report is not built yet.', {
+		exact: true,
+	});
+	const panel = page.getByRole('tabpanel', { name: 'Accessibility' });
+
+	await expect(placeholder).toHaveCount(0);
+
+	await page.getByRole('tab', { name: 'Accessibility' }).click();
+	await expect(placeholder).toHaveCount(0);
+
+	await page.getByLabel('background alias', { exact: true }).selectOption('brand.9');
+
+	await expect(panel.getByText('light: foreground on background:', { exact: false })).toBeVisible();
+	await expect(placeholder).toHaveCount(0);
+});
