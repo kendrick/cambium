@@ -10,11 +10,16 @@ const badgeVariants = cva(
 			variant: {
 				default: 'bg-primary text-primary-foreground [a]:hover:bg-primary/80',
 				secondary: 'bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80',
-				// Same destructive-surface defect as `components/ui/button.tsx`'s destructive variant: text
-				// on a tint of itself. Same fix, same fractions — that file's comment carries the contrast
-				// figures and the reasoning for why light rest moved down a step.
+				// Same defect as `components/ui/button.tsx`'s destructive variant, text on a tint of itself,
+				// and the same fix: constrain the tint. The fractions differ, though, because a badge's
+				// real surface is `card` (the app screen's orders table), one step closer to the text than
+				// the `background` a button sits on, and card is the surface these were chosen for. Worst
+				// case across the ten-seed sweep on card, alpha rounded to 1/255 the way Chromium paints
+				// it: light rest 4.72:1, light hover 4.54:1, dark rest 5.74:1, dark hover 4.64:1. The
+				// button's own hover fractions (/10, /30) miss on card, at 4.41:1 and 4.49:1. Hover stays
+				// more tinted than rest so a linked badge still visibly reacts.
 				destructive:
-					'bg-destructive/5 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/10 dark:[a]:hover:bg-destructive/30',
+					'bg-destructive/5 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/8 dark:[a]:hover:bg-destructive/29',
 				outline: 'border-border text-foreground [a]:hover:bg-muted [a]:hover:text-muted-foreground',
 				ghost: 'hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50',
 				// Same link-on-brand-fill defect as `components/ui/button.tsx`'s link variant: `text-primary`

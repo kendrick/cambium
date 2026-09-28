@@ -8,9 +8,13 @@
  * `CONTRAST_PAIRS` entry declares (#68): `link` is body text straight on `background`, and
  * `destructive` is body text over a translucent tint of itself. Neither is checkable through
  * `checkContrast`, which only measures declared pairs, so this suite reads the component's actual
- * compiled classes and measures the composite with `compositeOver`. Chromium rounds alpha to 1/255
- * before it blends, so on light destructive hover this suite reads about 0.03 above what the
- * browser paints (4.56:1 against 4.53:1). A ratio inside that gap needs
+ * compiled classes and measures the composite with `compositeOver`. Chromium rounds a fill's alpha
+ * to 1/255 before it blends (10% paints as 26/255). The badge loop rounds the same way through
+ * `paintedAlpha`, because on `card` the badge's margin is thin enough for that rounding to flip a
+ * verdict: `/30` dark hover reads 4.505:1 unrounded and 4.488:1 rounded. The button loop still
+ * blends at unrounded alpha, which is what `core/semantic-map.ts` quotes, so on light destructive
+ * hover it reads about 0.03 above what the browser paints (4.56:1 against 4.53:1). Rounding alpha
+ * narrows that gap without closing it, so a ratio near the line still needs
  * `e2e/button-contrast.spec.ts`, which reads the painted pixels.
  *
  * The compile half follows `core/css/stylesheet.test.ts`'s hermetic technique: `source(none)` plus
@@ -225,6 +229,14 @@ function percentOf(declaration: Declaration): number {
 	return Number(match[1]);
 }
 
+/**
+ * The alpha Chromium actually blends a `color-mix(..., N%, transparent)` fill at: the fraction
+ * snapped to the nearest 1/255, since the compositor stores alpha as a byte.
+ */
+function paintedAlpha(percent: number): number {
+	return Math.round((percent / 100) * 255) / 255;
+}
+
 /** The bare token name inside a `var(--token)` reference, e.g. `"foreground"` from `"var(--foreground)"`. */
 function customPropertyName(value: string): string {
 	const match = /^var\(--([a-z-]+)\)$/.exec(value);
@@ -255,8 +267,10 @@ describe('buttonVariants link', () => {
 	 * that actually shipped.
 	 *
 	 * `foreground`/`background` is already a declared, repair-protected pair
-	 * (`core/contrast/pairs.ts:46`, `core/semantic-map.ts:90-91`: worst case 9.92:1 across the
-	 * sweep), so a passing `link` here is a regression guard tying the component's actual output to
+	 * (`core/contrast/pairs.ts:46`, `core/semantic-map.ts:183-184`), worst case 11.87:1 in light
+	 * and 14.16:1 in dark across the sweep via `renderedContrast`. The 9.92:1 at
+	 * `core/semantic-map.ts:91-92` is the worst of every step-12 foreground (`accent-foreground` on
+	 * `accent`, continuous contrast), not this pair's. So a passing `link` here is a regression guard tying the component's actual output to
 	 * that existing guarantee, not a new proof of it. Verified failing before #68: swapping the class
 	 * back to `text-primary` and rerunning this loop fails on 10 of the 20 seed-and-scheme
 	 * combinations, worst 1.01:1 for `dark-navy` in dark — matching the issue's own figures, because
@@ -297,7 +311,7 @@ describe('buttonVariants destructive', () => {
 
 	it('resolves each state to a distinct destructive color-mix fraction', async () => {
 		// Behaviour, not the pinned numbers: two states sharing a fraction is the same collapse the
-		// "keeps hover darker than rest" case below guards against, generalised to all four states
+		// "keeps hover more tinted than rest" case below guards against, generalised to all four states
 		// rather than just a scheme's own pair. The fractions themselves are pinned in exactly one
 		// place, `components/ui/button.tsx`'s comment on the destructive variant.
 		const { lightRest, lightHover, darkRest, darkHover } = await fractions();
@@ -307,12 +321,12 @@ describe('buttonVariants destructive', () => {
 
 	/**
 	 * A hover fraction equal to rest's clears AA but loses the hover affordance — nothing about the
-	 * surface changes on interaction. Dark already keeps hover (`/30`) darker than rest (`/20`);
-	 * this pins the same ordering for light now that light rest moved to `/5` and light hover holds
+	 * surface changes on interaction. Dark already tints hover (`/30`) more than rest (`/20`),
+	 * which reads lighter there since `danger.11` is the lighter colour in dark; this pins the same ordering for light now that light rest moved to `/5` and light hover holds
 	 * at `/10`, so a future search for "the smallest passing fraction" can't silently collapse the
 	 * two again.
 	 */
-	it.each(SCHEME_NAMES)('keeps hover darker than rest, %s', async (scheme) => {
+	it.each(SCHEME_NAMES)('keeps hover more tinted than rest, %s', async (scheme) => {
 		const { lightRest, lightHover, darkRest, darkHover } = await fractions();
 		const [rest, hover] = scheme === 'dark' ? [darkRest, darkHover] : [lightRest, lightHover];
 
@@ -328,8 +342,8 @@ describe('buttonVariants destructive', () => {
 	 *
 	 * Which fractions landed where, and why light rest moved a step rather than leaving hover to
 	 * match it, is `components/ui/button.tsx`'s comment — this loop only proves the four fractions
-	 * that shipped clear 4.5:1, not the search that picked them. The "keeps hover darker than rest"
-	 * case above is the regression guard for the ordering that search settled on.
+	 * that shipped clear 4.5:1, not the search that picked them. The "keeps hover more tinted than
+	 * rest" case above is the regression guard for the ordering that search settled on.
 	 */
 	it.each(SCHEME_NAMES)('clears 4.5:1 for every state and seed, %s', async (scheme) => {
 		const declarations = destructiveFillDeclarations(await compiledPromise);
@@ -417,13 +431,21 @@ describe('badgeVariants destructive', () => {
 		expect(new Set([lightRest, lightHover, darkRest, darkHover]).size).toBe(4);
 	});
 
-	it.each(SCHEME_NAMES)('keeps hover darker than rest, %s', async (scheme) => {
+	it.each(SCHEME_NAMES)('keeps hover more tinted than rest, %s', async (scheme) => {
 		const { lightRest, lightHover, darkRest, darkHover } = await fractions();
 		const [rest, hover] = scheme === 'dark' ? [darkRest, darkHover] : [lightRest, lightHover];
 
 		expect(hover, `${scheme} hover (${hover}%) vs rest (${rest}%)`).toBeGreaterThan(rest);
 	});
 
+	/**
+	 * Measured over both `background` and `card`, because the one destructive badge the app renders
+	 * ("Refunded", `components/workspace/preview/app-screen.tsx`) sits in the orders table's
+	 * `bg-card`. Card is one step closer to the text than the page in both schemes, so it is the
+	 * binding surface; the gallery specimen sits on `background`. Alpha is snapped through
+	 * `paintedAlpha` before the blend (module docblock), since the button's `/30` dark hover would
+	 * pass on card unrounded (4.505:1) and fails rounded (4.488:1).
+	 */
 	it.each(SCHEME_NAMES)('clears 4.5:1 for every state and seed, %s', async (scheme) => {
 		const declarations = destructiveFillDeclarations(await compiledPromise);
 		const isDark = scheme === 'dark';
@@ -431,17 +453,23 @@ describe('badgeVariants destructive', () => {
 			{ label: 'rest', hover: false },
 			{ label: 'hover', hover: true },
 		];
+		const surfaces = ['background', 'card'] as const;
 
 		for (const state of states) {
-			const fraction = percentOf(declarationFor(declarations, state.hover, isDark)) / 100;
+			const alpha = paintedAlpha(percentOf(declarationFor(declarations, state.hover, isDark)));
 
 			for (const { name, tokenSet } of SWEPT) {
-				const background: Oklch = tokenSet.schemes[scheme].primitives.neutral![0]!;
-				const destructive: Oklch = tokenSet.schemes[scheme].primitives.danger![10]!;
-				const composited = compositeOver(background, destructive, fraction);
-				const ratio = renderedContrast(destructive, composited);
+				const resolved = resolveScheme(tokenSet.schemes[scheme]);
+				const destructive: Oklch = resolved.destructive!;
 
-				expect(ratio, `${name} ${scheme} ${state.label}`).toBeGreaterThanOrEqual(TEXT_TARGET);
+				for (const surface of surfaces) {
+					const composited = compositeOver(resolved[surface]!, destructive, alpha);
+					const ratio = renderedContrast(destructive, composited);
+
+					expect(ratio, `${name} ${scheme} ${surface} ${state.label}`).toBeGreaterThanOrEqual(
+						TEXT_TARGET,
+					);
+				}
 			}
 		}
 	});

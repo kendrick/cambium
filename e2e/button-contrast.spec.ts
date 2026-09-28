@@ -154,6 +154,24 @@ function relativeLuminance({ r, g, b }: Rgb): number {
 	return 0.2126 * linearised(r) + 0.7152 * linearised(g) + 0.0722 * linearised(b);
 }
 
+/**
+ * The `background-color` of the nearest ancestor that paints one, plus whether that ancestor is the
+ * app screen's orders table. Walked in the browser rather than assumed, because a table row or cell
+ * gaining a fill would change the surface the badge composites over, and that fill is what the
+ * browser would actually blend against.
+ */
+async function paintedSurface(locator: Locator): Promise<{ css: string; isTable: boolean }> {
+	return locator.evaluate((node) => {
+		for (let current = node.parentElement; current; current = current.parentElement) {
+			const css = getComputedStyle(current).backgroundColor;
+			if (css !== 'rgba(0, 0, 0, 0)' && css !== 'transparent') {
+				return { css, isTable: current.matches('[data-preview-part="table"]') };
+			}
+		}
+		throw new Error('no ancestor paints a background');
+	});
+}
+
 /** WCAG contrast ratio between two opaque colours. */
 function contrastRatio(a: Rgb, b: Rgb): number {
 	// The array literal is already a fresh array nothing else can see, so this sort mutates nothing
@@ -165,7 +183,7 @@ function contrastRatio(a: Rgb, b: Rgb): number {
 	return (lighter! + 0.05) / (darker! + 0.05);
 }
 
-test('the link Button, the destructive Button (rest and hover), and the destructive Badge clear 4.5:1 as the browser actually paints them, light and dark', async ({
+test('the link Button, the destructive Button (rest and hover), and the destructive Badge on the page and on card clear 4.5:1 as the browser actually paints them, light and dark', async ({
 	page,
 }) => {
 	const preview = await openPopulatedGallery(page);
@@ -174,6 +192,11 @@ test('the link Button, the destructive Button (rest and hover), and the destruct
 	const linkButton = gallery.getByRole('button', { name: 'View receipt' });
 	const destructiveButton = gallery.getByRole('button', { name: 'Delete order' });
 	const destructiveBadge = gallery.getByText('Overdue', { exact: true });
+	// The one destructive badge the app itself renders, inside the orders table's `bg-card`. Rest
+	// only: Badge renders a `<span>`, so its `[a]:hover` fill never paints here.
+	const refundedBadge = preview
+		.locator('[data-preview-app-screen]')
+		.getByText('Refunded', { exact: true });
 
 	for (const scheme of SCHEMES) {
 		await switchScheme(page, preview, scheme);
@@ -215,6 +238,17 @@ test('the link Button, the destructive Button (rest and hover), and the destruct
 		expect(
 			contrastRatio(badgeColor, alphaComposite(backdrop, badgeFill)),
 			`destructive badge ${scheme}`,
+		).toBeGreaterThanOrEqual(TEXT_TARGET);
+
+		const surface = await paintedSurface(refundedBadge);
+		expect(surface.isTable, `refunded badge ${scheme} sits on the orders table`).toBe(true);
+		const card = await resolveToRgb(page, surface.css);
+		expect(card.a, `card ${scheme} is opaque`).toBe(1);
+		const refundedColor = await computedRgb(page, refundedBadge, 'color');
+		const refundedFill = await computedRgb(page, refundedBadge, 'backgroundColor');
+		expect(
+			contrastRatio(refundedColor, alphaComposite(card, refundedFill)),
+			`refunded badge on card ${scheme}`,
 		).toBeGreaterThanOrEqual(TEXT_TARGET);
 	}
 });
