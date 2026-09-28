@@ -156,7 +156,11 @@ function relativeLuminance({ r, g, b }: Rgb): number {
 
 /** WCAG contrast ratio between two opaque colours. */
 function contrastRatio(a: Rgb, b: Rgb): number {
-	const [lighter, darker] = [relativeLuminance(a), relativeLuminance(b)].toSorted((x, y) => y - x);
+	// The array literal is already a fresh array nothing else can see, so this sort mutates nothing
+	// anyone else can see either. `toSorted` would satisfy the rule directly, but it is ES2023 and
+	// tsconfig targets ES2022, the same trade `core/family-variants.ts` makes.
+	// oxlint-disable-next-line unicorn/no-array-sort
+	const [lighter, darker] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
 
 	return (lighter! + 0.05) / (darker! + 0.05);
 }
