@@ -1226,11 +1226,12 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		// Matched against `Error` to stay implementation-blind, like the smuggled-field case. Putting
 		// the same record at the current version afterward shows the stamp is what `put` refused,
 		// because that put succeeds and the stamp is the only difference.
-		it('rejects a record stamped with the previous schema version', async () => {
+		// 10 is the last stamp a pre-release build wrote, so it's one a real store can still hold.
+		it('rejects a record stamped with a pre-release schema version', async () => {
 			const current = makeRecord();
 			const stale = {
 				...current,
-				schemaVersion: SCHEMA_VERSION - 1,
+				schemaVersion: 10,
 			} as unknown as BrandRecord;
 
 			await expect(store.put(stale)).rejects.toThrow(Error);
