@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 
 import type { OverrideIssue } from '../../../core/token-overrides';
 import type { TokenProvenance } from '../../../core/token-set';
@@ -28,6 +28,7 @@ export function TokenRow({
 	onReset,
 	issues,
 	contrastFailures,
+	revertLabel,
 	children,
 }: {
 	id: string;
@@ -38,10 +39,19 @@ export function TokenRow({
 	overridden: boolean;
 	onReset?: () => void;
 	issues?: OverrideIssue[];
+	/**
+	 * Only a semantic row passes this, as an empty list until its override breaks a pair. The live
+	 * region renders whenever this is defined, because screen readers skip a live region that mounts
+	 * with its content already inside.
+	 */
 	contrastFailures?: { label: string; wcag: number; target: number }[];
+	/** Finishes the Revert button's accessible name, "Revert background override", for screen readers. */
+	revertLabel?: string;
 	children: ReactNode;
 }) {
 	const [expanded, setExpanded] = useState(false);
+	const controls = useRef<HTMLDivElement>(null);
+	const revertable = Boolean(contrastFailures && contrastFailures.length > 0 && onReset);
 	// A light-scheme edit is checked against the scheme and the top-level copy that mirrors it, so
 	// the store refuses it once per copy, under paths that differ only by a leading
 	// `['schemes', 'light']`. Keying on the path with that prefix stripped folds the two copies into
@@ -105,32 +115,42 @@ export function TokenRow({
 				</div>
 			) : null}
 
-			<div className="flex flex-wrap items-center gap-2">
+			<div ref={controls} className="flex flex-wrap items-center gap-2">
 				{children}
-				{onReset ? (
+				{/* Revert and Reset both clear the override, so a row shows only one of them. */}
+				{onReset && !revertable ? (
 					<button type="button" onClick={onReset} className="text-xs underline">
 						Reset
 					</button>
 				) : null}
 			</div>
 
-			{contrastFailures && contrastFailures.length > 0 && onReset ? (
-				<div className="flex flex-col gap-1">
-					<ul data-contrast-verdict className="text-destructive text-xs">
-						{contrastFailures.map((failure) => (
-							<li key={failure.label}>
-								{failure.label}: {failure.wcag.toFixed(2)}:1, needs {failure.target}
-							</li>
-						))}
-					</ul>
-					<button
-						type="button"
-						onClick={onReset}
-						className="text-destructive self-start text-xs underline"
-					>
-						Revert
-					</button>
-				</div>
+			{contrastFailures ? (
+				<output aria-live="polite" className="text-destructive block text-xs">
+					{contrastFailures.length > 0 ? (
+						<ul data-contrast-verdict>
+							{contrastFailures.map((failure) => (
+								<li key={failure.label}>
+									{failure.label}: {failure.wcag.toFixed(2)}:1, needs {failure.target}
+								</li>
+							))}
+						</ul>
+					) : null}
+				</output>
+			) : null}
+			{revertable ? (
+				<button
+					type="button"
+					onClick={() => {
+						onReset?.();
+						// The button unmounts with the verdict it sat beside, which would drop focus to
+						// `<body>`; the alias control is where the person was working.
+						controls.current?.querySelector<HTMLElement>('select, input')?.focus();
+					}}
+					className="text-destructive self-start text-xs underline"
+				>
+					Revert{revertLabel ? <span className="sr-only"> {revertLabel}</span> : null}
+				</button>
 			) : null}
 
 			{listed.size > 0 ? (

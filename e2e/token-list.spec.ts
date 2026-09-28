@@ -1147,25 +1147,21 @@ test('two cleared fields of one shadow row list as two items, not one', async ({
 	await expect(issueItems(shadow)).toHaveCount(2);
 });
 
-/** WCAG 2.x's gamma decode for one 8-bit sRGB channel, into linear light. */
+// 0.04045 is what WCAG 2.2 states; older copies carry 0.03928. No 8-bit channel lands between the
+// two (10/255 sits under both, 11/255 over both), so a screenshot byte decodes the same either way.
 function linearizeChannel(byte: number): number {
 	const channel = byte / 255;
-	return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+	return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
 }
 
-/**
- * WCAG 2.x relative luminance: gamma-decode each 8-bit channel, then weight green over red over
- * blue the way the spec fixes.
- */
 function relativeLuminance([r, g, b]: Rgb): number {
 	return 0.2126 * linearizeChannel(r) + 0.7152 * linearizeChannel(g) + 0.0722 * linearizeChannel(b);
 }
 
 /**
- * WCAG 2.x contrast ratio between two 8-bit sRGB colours, written from the formula directly rather
- * than through `core/oklch.ts`'s `renderedContrast`, so this checks the row's printed number against
- * an outside computation of the pixels a browser actually painted, not against the pipeline's own
- * math running a second time.
+ * Written from the WCAG formula rather than imported from `core/oklch.ts`'s `renderedContrast`, so
+ * the pixel check below measures the row's printed number against arithmetic the pipeline didn't
+ * supply.
  */
 function wcagRatio(a: Rgb, b: Rgb): number {
 	const lumA = relativeLuminance(a);
@@ -1176,72 +1172,29 @@ function wcagRatio(a: Rgb, b: Rgb): number {
 	return (lighter + 0.05) / (darker + 0.05);
 }
 
-/** Matches the legacy `rgb()`/`rgba()` shape, byte components already in 0-255. */
-function parseLegacyRgb(literal: string): Rgb | null {
-	const match = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/.exec(literal);
-	return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
-}
-
-/** Matches the `color(srgb r g b)` predefined-space shape, whose components are 0-1 fractions. */
-function parsePredefinedSrgb(literal: string): Rgb | null {
-	const match = /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(literal);
-	return match ? [Number(match[1]) * 255, Number(match[2]) * 255, Number(match[3]) * 255] : null;
-}
-
 /**
- * The 0-255 sRGB triple a `getComputedStyle().color`/`.backgroundColor` string names, whichever
- * shape Chromium chose to serialize it in.
- *
- * The plan behind this scenario assumed that string is always `rgb()`/`rgba()`, matching older
- * Chromium's habit of converting every computed colour to legacy sRGB. This build's Chromium instead
- * echoes back the declared colour space: a token declared through `schemeDeclarations`' inline
- * `oklch()` custom properties reads back as `oklch(L C H)`, which a legacy-rgb regex can't parse.
- * Asking the browser to `color-mix(in srgb, …)` a colour with itself makes Chromium do the conversion
- * itself and serialize the result as `color(srgb r g b)` — still the browser's own computation, not
- * an OKLCH-to-sRGB re-derivation written into this test, which would just move the "independent of
- * `core/oklch.ts`" risk from an import into a hand-rolled duplicate of its math.
+ * The preview heading's contrast as the compositor painted it, read from a screenshot of the
+ * heading's own box (criterion 2). The commonest pixel in that box is the surface behind the text.
+ * Glyph edges are antialiased, and a blend of two colours never out-contrasts either one, so the
+ * pixel farthest from the surface is a fully covered stroke: the text colour itself.
  */
-async function computedSrgb(page: Page, cssColor: string): Promise<Rgb> {
-	const direct = parseLegacyRgb(cssColor) ?? parsePredefinedSrgb(cssColor);
-	if (direct) return direct;
-
-	const normalized = await page.evaluate((color) => {
-		const probe = document.createElement('div');
-		probe.style.color = `color-mix(in srgb, ${color} 100%, ${color} 0%)`;
-		document.body.appendChild(probe);
-		try {
-			return getComputedStyle(probe).color;
-		} finally {
-			probe.remove();
-		}
-	}, cssColor);
-
-	const parsed = parseLegacyRgb(normalized) ?? parsePredefinedSrgb(normalized);
-	if (!parsed) throw new Error(`unparsed colour "${cssColor}" (normalized to "${normalized}")`);
-
-	return parsed;
-}
-
-/**
- * The WCAG contrast Chromium actually composites for the preview heading over its container, per
- * acceptance criterion 2. The heading and every element between it and `[data-preview]` set no
- * background of their own (`app-screen.tsx`'s header carries none on its ancestors), so the
- * container's own declared `bg-background` is what really paints behind the text.
- */
-async function measuredHeadingContrast(page: Page): Promise<number> {
+async function paintedHeadingContrast(page: Page): Promise<number> {
 	const heading = page.locator('[data-preview-app-screen] h3', { hasText: 'Orders' });
-	const container = page.locator('[data-preview]');
+	const png = PNG.sync.read(await heading.screenshot({ animations: 'disabled' }));
 
-	const [colorCss, backgroundCss] = await Promise.all([
-		heading.evaluate((element) => getComputedStyle(element).color),
-		container.evaluate((element) => getComputedStyle(element).backgroundColor),
-	]);
-	const [color, background] = await Promise.all([
-		computedSrgb(page, colorCss),
-		computedSrgb(page, backgroundCss),
-	]);
+	const counts = new Map<string, { rgb: Rgb; count: number }>();
+	for (let offset = 0; offset < png.data.length; offset += 4) {
+		const rgb: Rgb = [png.data[offset]!, png.data[offset + 1]!, png.data[offset + 2]!];
+		const id = rgb.join(',');
+		const seen = counts.get(id);
+		if (seen) seen.count += 1;
+		else counts.set(id, { rgb, count: 1 });
+	}
 
-	return wcagRatio(color, background);
+	const pixels = [...counts.values()];
+	const surface = pixels.reduce((best, pixel) => (pixel.count > best.count ? pixel : best)).rgb;
+
+	return Math.max(...pixels.map((pixel) => wcagRatio(pixel.rgb, surface)));
 }
 
 /** One `[data-contrast-verdict]` line, parsed back into the fields `token-row.tsx` printed it from. */
@@ -1252,12 +1205,16 @@ function parseVerdictLine(text: string): { label: string; wcag: number; target: 
 	return { label: match[1]!, wcag: Number(match[2]), target: Number(match[3]) };
 }
 
+function verdictOf(row: Locator): Locator {
+	return row.locator('[data-contrast-verdict] li');
+}
+
 /**
- * The four declared pairs this seed's `background` → `brand.9` override breaks, and the ratio each
- * lands at: independently reproduced by running this same `SEED`/`BALANCED`/`withContrastRepairs`
- * pipeline against `core/contrast/check.ts` in a scratch script while planning issue #153, then
- * confirmed again against this row's own rendered text below. Checked loosely (±0.5): this number is
- * the pipeline's own, and the tight, independent check is the rendered-pixel comparison further down.
+ * The four declared pairs this seed's `background` -> `brand.9` override breaks, at the two decimals
+ * the row prints. Worked out by running this spec's `SEED` through `BALANCED`,
+ * `withContrastRepairs` and `core/contrast/check.ts` in a scratch script, not read off the row, so
+ * the row can't supply its own expected value. They are still the pipeline's numbers, which is why
+ * criterion 2 is checked against the painted pixels instead of against this table.
  */
 const BACKGROUND_OVERRIDE_FAILURES = [
 	{ label: 'foreground on background', target: 4.5, wcag: 3.29 },
@@ -1277,6 +1234,7 @@ test('setting semantic.background to brand.9 shows the AA fails it causes, agree
 	const row = page.locator('[data-token="semantic.background"]');
 	const alias = page.getByLabel('background alias', { exact: true });
 	const verdict = row.locator('[data-contrast-verdict] li');
+	const revert = row.getByRole('button', { name: 'Revert background override', exact: true });
 
 	await expect(alias).toHaveValue('neutral.1');
 	await expect(verdict).toHaveCount(0);
@@ -1286,30 +1244,65 @@ test('setting semantic.background to brand.9 shows the AA fails it causes, agree
 	await expect(row).toHaveAttribute('data-overridden', '');
 	await expect(verdict).toHaveCount(BACKGROUND_OVERRIDE_FAILURES.length);
 
+	// The verdict lands inside a polite live region the row already held, so it's announced.
+	await expect(row.getByRole('status')).toContainText('foreground on background');
+	// Revert and Reset would both clear the override, so the row offers only Revert.
+	await expect(row.getByRole('button', { name: 'Reset', exact: true })).toHaveCount(0);
+
 	const lines = (await verdict.allTextContents()).map(parseVerdictLine);
-	expect(lines.map((line) => line.label)).toEqual(
-		BACKGROUND_OVERRIDE_FAILURES.map((failure) => failure.label),
-	);
+	expect(lines).toEqual(BACKGROUND_OVERRIDE_FAILURES.map((failure) => ({ ...failure })));
 
-	for (const [index, failure] of BACKGROUND_OVERRIDE_FAILURES.entries()) {
-		expect(lines[index]!.target, failure.label).toBe(failure.target);
-		expect(lines[index]!.wcag, failure.label).toBeGreaterThan(failure.wcag - 0.5);
-		expect(lines[index]!.wcag, failure.label).toBeLessThan(failure.wcag + 0.5);
-	}
-
-	// Acceptance criterion 2: the row's own ratio for `foreground on background` agrees with what the
-	// browser actually composited for the preview heading, measured independently of the row's pipeline.
+	// Criterion 2: the row's `foreground on background` ratio against what the compositor painted.
 	const printedRatio = lines[0]!.wcag;
-	const measuredRatio = await measuredHeadingContrast(page);
-	expect(measuredRatio).toBeGreaterThan(printedRatio - 0.1);
-	expect(measuredRatio).toBeLessThan(printedRatio + 0.1);
+	const paintedRatio = await paintedHeadingContrast(page);
+	expect(Math.abs(paintedRatio - printedRatio)).toBeLessThanOrEqual(0.1);
 
-	await row.getByRole('button', { name: 'Revert' }).click();
+	await revert.click();
 
 	await expect(row).not.toHaveAttribute('data-overridden', '');
 	await expect(alias).toHaveValue('neutral.1');
+	await expect(alias).toBeFocused();
 	await expect(verdict).toHaveCount(0);
-	await expect.poll(() => measuredHeadingContrast(page)).toBeGreaterThanOrEqual(4.5);
+	await expect.poll(() => paintedHeadingContrast(page)).toBeGreaterThanOrEqual(4.5);
+});
+
+test('a verdict lands only on the row whose override broke the pair, and its Revert clears it', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const foregroundRow = page.locator('[data-token="semantic.foreground"]');
+	const backgroundRow = page.locator('[data-token="semantic.background"]');
+	const foregroundAlias = page.getByLabel('foreground alias', { exact: true });
+	const backgroundAlias = page.getByLabel('background alias', { exact: true });
+
+	// Passes on its own. After the background change below, `foreground on background` fails, but
+	// taking this override back wouldn't fix it: the base foreground fails on `brand.9` too.
+	await foregroundAlias.selectOption('neutral.11');
+	await expect(foregroundRow).toHaveAttribute('data-overridden', '');
+	await expect(verdictOf(foregroundRow)).toHaveCount(0);
+
+	await backgroundAlias.selectOption('brand.9');
+	await expect(verdictOf(backgroundRow)).toHaveCount(BACKGROUND_OVERRIDE_FAILURES.length);
+	await expect(verdictOf(backgroundRow).first()).toHaveText(/^foreground on background: /);
+	await expect(verdictOf(foregroundRow)).toHaveCount(0);
+	await expect(
+		foregroundRow.getByRole('button', { name: 'Revert foreground override', exact: true }),
+	).toHaveCount(0);
+
+	await backgroundRow
+		.getByRole('button', { name: 'Revert background override', exact: true })
+		.click();
+
+	await expect(backgroundAlias).toHaveValue('neutral.1');
+	await expect(backgroundAlias).toBeFocused();
+	await expect(verdictOf(backgroundRow)).toHaveCount(0);
+	await expect(foregroundRow).toHaveAttribute('data-overridden', '');
+	await expect(verdictOf(foregroundRow)).toHaveCount(0);
+	await expect.poll(() => paintedHeadingContrast(page)).toBeGreaterThanOrEqual(4.5);
 });
 
 test('an override that keeps every declared pair at AA shows no verdict', async ({ page }) => {
@@ -1321,11 +1314,9 @@ test('an override that keeps every declared pair at AA shows no verdict', async 
 	const row = page.locator('[data-token="semantic.secondary"]');
 	const swatch = row.locator('[data-swatch]');
 
-	// `secondary` -> `neutral.4` is the one substituted here: the plan called for re-aliasing
-	// `primary` to `brand.1`, reusing the shape of the earlier "re-aliasing primary" scenario, on the
-	// assumption that `primary` "stays pinned-safe". Measured against this build, it does not --
-	// see `plan_concerns` in this task's report. `secondary` -> `neutral.4` is confirmed safe the same
-	// way: driven through the real app and read back off `contrast.report` via the row's own verdict.
+	// Not `primary` -> `brand.1`, the shape the earlier re-aliasing scenario uses: `primary-foreground`
+	// is `brand.1` for this seed, so that pair would drop to 1:1. `secondary-foreground` still clears
+	// AA on `neutral.4`, and the paint check below proves the override actually landed.
 	const targetStep = LIGHT.primitives.neutral!.find((step) => step.step === 4)!;
 	const target = await referencePaint(page, swatch, oklchFromFields(targetStep));
 
