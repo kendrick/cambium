@@ -10,11 +10,17 @@ const badgeVariants = cva(
 			variant: {
 				default: 'bg-primary text-primary-foreground [a]:hover:bg-primary/80',
 				secondary: 'bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80',
+				// Same destructive-surface defect as `components/ui/button.tsx`'s destructive variant: text
+				// on a tint of itself. Same fix, same fractions — that file's comment carries the contrast
+				// figures and the reasoning for why light rest moved down a step.
 				destructive:
-					'bg-destructive/10 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/20',
+					'bg-destructive/5 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/10 dark:[a]:hover:bg-destructive/30',
 				outline: 'border-border text-foreground [a]:hover:bg-muted [a]:hover:text-muted-foreground',
 				ghost: 'hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50',
-				link: 'text-primary underline-offset-4 hover:underline',
+				// Same link-on-brand-fill defect as `components/ui/button.tsx`'s link variant: `text-primary`
+				// isn't guaranteed to clear AA against the page. Same fix: `foreground` is the declared,
+				// repair-protected pair.
+				link: 'text-foreground underline-offset-4 hover:underline',
 			},
 		},
 		defaultVariants: {

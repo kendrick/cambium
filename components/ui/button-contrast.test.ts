@@ -1,4 +1,9 @@
 /**
+ * Vitest, not the Playwright tier `docs/agents/testing.md` reserves for component tests. That
+ * exclusion is about the interface still moving; this suite never touches rendered behaviour or the
+ * interface at all — it asserts contrast math over `buttonVariants`'s compiled CSS output, the same
+ * kind of seam `core/css/stylesheet.test.ts` tests other adapters at.
+ *
  * `buttonVariants`'s `link` and `destructive` variants paint text over a surface no
  * `CONTRAST_PAIRS` entry declares (#68): `link` is body text straight on `background`, and
  * `destructive` is body text over a translucent tint of itself. Neither is checkable through
@@ -11,17 +16,21 @@
  * the classes resolve against the same custom properties `app/globals.css` declares. What a compile
  * can prove stops at selectors and property names (`docs/agents/testing.md`, "Where the seam
  * actually is") — it cannot say what a `var()` resolves to or what a browser paints once alpha
- * blends two colours. So the compiled output only supplies two things a hand-written expectation
- * would otherwise hard-code: which custom property `link`'s `color` reads, and which integer
- * percentage `destructive`'s tinted fills use. Both are read back from the AST with a regex, not
- * assumed, so an edit to `buttonVariants` that swaps the token or the fraction is what this test
- * would need to keep reading, not what it would need to be told again.
+ * blends two colours. So the compiled output only supplies what a hand-written expectation would
+ * otherwise hard-code: which custom property `link`'s `color` reads, and which integer percentage
+ * `destructive`'s tinted fills use. Both are read back from the AST with a regex, not assumed — for
+ * `link`, by filtering on the `color` property rather than on a selector spelling, so a regression
+ * back to `text-primary` fails the contrast loop below on its own merits, not only the compiled
+ * `.text-foreground` pin beside it. An edit to `buttonVariants` that swaps the token or the fraction
+ * is what this test would need to keep reading, not what it would need to be told again.
  *
- * From there the gate is `renderedContrast`/`compositeOver` (`core/oklch.ts`) over real engine
- * output (`createOklchScaleEngine` + `buildTokenSet`), the same two functions every other contrast
- * assertion in `core/` gates on, and never the continuous `contrastFromOklch` the issue's own
- * illustrative snippet calls — a value solved a hair over target in full precision can round under
- * it once both colours hit the byte grid a browser actually paints (#72).
+ * From there the gate is `renderedContrast`/`compositeOver` (`core/oklch.ts`): a per-channel sRGB
+ * alpha blend, then 8-bit rounding — the same method `core/contrast/check.ts`'s `checkContrast`
+ * gates production contrast repair on, over real engine output (`createOklchScaleEngine` +
+ * `buildTokenSet`). Not the continuous `contrastFromOklch` `core/semantic-layer.test.ts`'s own
+ * assertions use, and not the issue's illustrative snippet either — a value solved a hair over
+ * target in full precision can round under it once both colours hit the byte grid a browser
+ * actually paints (#72).
  */
 import postcss, { type Container, type Declaration, type Document, parse, Rule } from 'postcss';
 import tailwindcss from '@tailwindcss/postcss';
@@ -36,6 +45,7 @@ import { resolveScheme } from '../../core/resolve-scheme';
 import { SCHEME_NAMES } from '../../core/scale-engine';
 import { buildTokenSet } from '../../core/semantic-layer';
 import type { TokenSet } from '../../core/token-set';
+import { badgeVariants } from './badge';
 import { buttonVariants } from './button';
 
 /** WCAG 2.2 SC 1.4.3: normal text needs 4.5:1 against its surface. */
@@ -140,6 +150,13 @@ function utilityDeclaration(
  * and `aria-invalid:border-destructive/N` compile to `--tw-ring-color` and `border-color`
  * `color-mix` declarations beside these four, and matching just the property and function name is
  * enough to exclude both without hand-escaping a class name's `/` and `[...]`.
+ *
+ * This also skips, without naming it, Tailwind's unconditional `background-color: var(--destructive)`
+ * fallback — painted ahead of the `@supports (color-mix(in oklab, ...))` block for engines that
+ * predate it, since `color-mix` is Baseline 2023. Skipped because its value never matches
+ * `color-mix(...)`, and left untested on purpose: an engine old enough to need that fallback renders
+ * the state on its own solid colour rather than on a tint, which is a different failure than the one
+ * this suite gates.
  */
 function destructiveFillDeclarations(compiled: string): Declaration[] {
 	const found: Declaration[] = [];
@@ -205,11 +222,19 @@ function percentOf(declaration: Declaration): number {
 	return Number(match[1]);
 }
 
+/** The bare token name inside a `var(--token)` reference, e.g. `"foreground"` from `"var(--foreground)"`. */
+function customPropertyName(value: string): string {
+	const match = /^var\(--([a-z-]+)\)$/.exec(value);
+	if (!match) throw new Error(`"${value}" is not a var(--token) reference`);
+	return match[1]!;
+}
+
 describe('buttonVariants link', () => {
+	const compiledPromise = compile(buttonVariants({ variant: 'link' }));
+
 	it('compiles to `color: var(--foreground)`, not `var(--primary)`', async () => {
-		const compiled = await compile(buttonVariants({ variant: 'link' }));
 		const declaration = utilityDeclaration(
-			compiled,
+			await compiledPromise,
 			'color',
 			(selector) => selector === '.text-foreground',
 		);
@@ -218,17 +243,35 @@ describe('buttonVariants link', () => {
 	});
 
 	/**
+	 * Reads whichever custom property the compiled `color` declaration actually references, filtered
+	 * on the `color` property alone rather than on a selector spelling — `compile` already restricts
+	 * Tailwind to this variant's own classes (`@source inline`), so exactly one declaration sets
+	 * `color`, whatever the variant happens to be. That is what makes this loop an independent gate
+	 * rather than a restatement of the string pin above: swap the variant back to `text-primary` and
+	 * this reads `--primary` instead and measures it, the same way a browser would resolve the class
+	 * that actually shipped.
+	 *
 	 * `foreground`/`background` is already a declared, repair-protected pair
 	 * (`core/contrast/pairs.ts:46`, `core/semantic-map.ts:90-91`: worst case 9.92:1 across the
-	 * sweep), so this loop is a regression guard tying the component's actual output to that
-	 * existing guarantee, not a new proof of it. Before #68's fix this failed on 10 of 20
-	 * seed-and-scheme combinations, worst 1.01:1 for `dark-navy` in dark — the assertion above
-	 * already catches that `link` reads the wrong property before this loop's numbers matter.
+	 * sweep), so a passing `link` here is a regression guard tying the component's actual output to
+	 * that existing guarantee, not a new proof of it. Verified failing before #68: swapping the class
+	 * back to `text-primary` and rerunning this loop fails on 10 of the 20 seed-and-scheme
+	 * combinations, worst 1.01:1 for `dark-navy` in dark — matching the issue's own figures, because
+	 * this loop reads the class that actually shipped rather than assuming which token it names.
 	 */
-	it.each(SCHEME_NAMES)('clears 4.5:1 against background in every seed, %s', (scheme) => {
+	it.each(SCHEME_NAMES)('clears 4.5:1 against background in every seed, %s', async (scheme) => {
+		const declaration = utilityDeclaration(await compiledPromise, 'color', () => true);
+		const token = customPropertyName(declaration.value);
+
 		for (const { name, tokenSet } of SWEPT) {
 			const resolved = resolveScheme(tokenSet.schemes[scheme]);
-			const ratio = renderedContrast(resolved.foreground!, resolved.background!);
+			const textColor = resolved[token];
+
+			if (!textColor) {
+				throw new Error(`link's compiled "color" references unknown semantic token "${token}"`);
+			}
+
+			const ratio = renderedContrast(textColor, resolved.background!);
 
 			expect(ratio, `${name} ${scheme}`).toBeGreaterThanOrEqual(TEXT_TARGET);
 		}
@@ -250,14 +293,13 @@ describe('buttonVariants destructive', () => {
 	}
 
 	it('resolves each state to a distinct destructive color-mix fraction', async () => {
-		// Documents what the fix landed on, so a future edit to any of the four fractions shows up
-		// here rather than only in the contrast loop below.
-		expect(await fractions()).toEqual({
-			lightRest: 5,
-			lightHover: 10,
-			darkRest: 20,
-			darkHover: 30,
-		});
+		// Behaviour, not the pinned numbers: two states sharing a fraction is the same collapse the
+		// "keeps hover darker than rest" case below guards against, generalised to all four states
+		// rather than just a scheme's own pair. The fractions themselves are pinned in exactly one
+		// place, `components/ui/button.tsx`'s comment on the destructive variant.
+		const { lightRest, lightHover, darkRest, darkHover } = await fractions();
+
+		expect(new Set([lightRest, lightHover, darkRest, darkHover]).size).toBe(4);
 	});
 
 	/**
@@ -281,15 +323,10 @@ describe('buttonVariants destructive', () => {
 	 * primitive step, not the resolved semantic alias: the tint sits on the literal page surface
 	 * every button renders against, and `danger.11` is `destructive`'s own value either way.
 	 *
-	 * Before #68's fix, light hover's `/20` composited to 3.95:1 at worst (`dark-navy`), matching
-	 * `core/semantic-map.ts`'s documented figure; the other three states already cleared 4.5:1. The
-	 * search across the standard Tailwind steps below `/20` (`/15`, `/10`, `/5`) found `/15` still
-	 * short at 4.25:1 worst case and `/10` clearing with margin at 4.56:1 worst case (`blue`,
-	 * light). `/10` is also light rest's own fraction, though, and a hover that matches rest has
-	 * nothing left to deepen on interaction — so light rest moved down a further step to `/5`
-	 * (4.90:1 worst case, `dark-navy`) instead of leaving hover at `/10`, keeping hover darker than
-	 * rest the way dark already does (`/20` rest, `/30` hover). The "keeps hover darker than rest"
-	 * suite below is the regression guard for that ordering.
+	 * Which fractions landed where, and why light rest moved a step rather than leaving hover to
+	 * match it, is `components/ui/button.tsx`'s comment — this loop only proves the four fractions
+	 * that shipped clear 4.5:1, not the search that picked them. The "keeps hover darker than rest"
+	 * case above is the regression guard for the ordering that search settled on.
 	 */
 	it.each(SCHEME_NAMES)('clears 4.5:1 for every state and seed, %s', async (scheme) => {
 		const declarations = destructiveFillDeclarations(await compiledPromise);
@@ -297,6 +334,96 @@ describe('buttonVariants destructive', () => {
 		// Only this scheme's own rest/hover pair is relevant: each fill composites over that
 		// scheme's own background, so the light states gate light seeds and the dark states gate
 		// dark's.
+		const states: Array<{ label: string; hover: boolean }> = [
+			{ label: 'rest', hover: false },
+			{ label: 'hover', hover: true },
+		];
+
+		for (const state of states) {
+			const fraction = percentOf(declarationFor(declarations, state.hover, isDark)) / 100;
+
+			for (const { name, tokenSet } of SWEPT) {
+				const background: Oklch = tokenSet.schemes[scheme].primitives.neutral![0]!;
+				const destructive: Oklch = tokenSet.schemes[scheme].primitives.danger![10]!;
+				const composited = compositeOver(background, destructive, fraction);
+				const ratio = renderedContrast(destructive, composited);
+
+				expect(ratio, `${name} ${scheme} ${state.label}`).toBeGreaterThanOrEqual(TEXT_TARGET);
+			}
+		}
+	});
+});
+
+/**
+ * `badgeVariants`'s `link` and `destructive` carry the same defect as `buttonVariants`'s own
+ * (`components/ui/badge.tsx`'s comments point back at `components/ui/button.tsx` for why), so this
+ * reuses every helper defined above rather than restating docblocks that already cover what each
+ * one proves.
+ */
+describe('badgeVariants link', () => {
+	const compiledPromise = compile(badgeVariants({ variant: 'link' }));
+
+	it('compiles to `color: var(--foreground)`, not `var(--primary)`', async () => {
+		const declaration = utilityDeclaration(
+			await compiledPromise,
+			'color',
+			(selector) => selector === '.text-foreground',
+		);
+
+		expect(declaration.value).toBe('var(--foreground)');
+	});
+
+	it.each(SCHEME_NAMES)('clears 4.5:1 against background in every seed, %s', async (scheme) => {
+		const declaration = utilityDeclaration(await compiledPromise, 'color', () => true);
+		const token = customPropertyName(declaration.value);
+
+		for (const { name, tokenSet } of SWEPT) {
+			const resolved = resolveScheme(tokenSet.schemes[scheme]);
+			const textColor = resolved[token];
+
+			if (!textColor) {
+				throw new Error(
+					`badge link's compiled "color" references unknown semantic token "${token}"`,
+				);
+			}
+
+			const ratio = renderedContrast(textColor, resolved.background!);
+
+			expect(ratio, `${name} ${scheme}`).toBeGreaterThanOrEqual(TEXT_TARGET);
+		}
+	});
+});
+
+describe('badgeVariants destructive', () => {
+	const compiledPromise = compile(badgeVariants({ variant: 'destructive' }));
+
+	async function fractions() {
+		const declarations = destructiveFillDeclarations(await compiledPromise);
+
+		return {
+			lightRest: percentOf(declarationFor(declarations, false, false)),
+			lightHover: percentOf(declarationFor(declarations, true, false)),
+			darkRest: percentOf(declarationFor(declarations, false, true)),
+			darkHover: percentOf(declarationFor(declarations, true, true)),
+		};
+	}
+
+	it('resolves each state to a distinct destructive color-mix fraction', async () => {
+		const { lightRest, lightHover, darkRest, darkHover } = await fractions();
+
+		expect(new Set([lightRest, lightHover, darkRest, darkHover]).size).toBe(4);
+	});
+
+	it.each(SCHEME_NAMES)('keeps hover darker than rest, %s', async (scheme) => {
+		const { lightRest, lightHover, darkRest, darkHover } = await fractions();
+		const [rest, hover] = scheme === 'dark' ? [darkRest, darkHover] : [lightRest, lightHover];
+
+		expect(hover, `${scheme} hover (${hover}%) vs rest (${rest}%)`).toBeGreaterThan(rest);
+	});
+
+	it.each(SCHEME_NAMES)('clears 4.5:1 for every state and seed, %s', async (scheme) => {
+		const declarations = destructiveFillDeclarations(await compiledPromise);
+		const isDark = scheme === 'dark';
 		const states: Array<{ label: string; hover: boolean }> = [
 			{ label: 'rest', hover: false },
 			{ label: 'hover', hover: true },
