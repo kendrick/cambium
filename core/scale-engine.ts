@@ -82,7 +82,13 @@ export type ScaleEngineResult =
  * what lets `core/purity.test.ts` guard it and what the headless CLI in #5 depends on.
  *
  * `id` is persisted on every version as `scaleEngine`, because the same seed under a different
- * engine produces different ramps and a stored token set has to say which one made it.
+ * engine produces different ramps and a stored token set has to say which one made it. That only
+ * holds if the id actually moves when the output does: any change to what `generate` returns, for
+ * any seed and any params, obliges a new id, and the old id's digest stays put in the fixture
+ * rather than being edited to match. `core/scale-engine-digest.fixture.ts` pins each shipped id to
+ * a digest of its output over four seeds, and the "pins the engine id to a digest of its own
+ * output" case in `core/scale-engine-contract.ts` is what fails when an id and its digest fall out
+ * of step.
  */
 export type ScaleEngine = {
 	readonly id: string;

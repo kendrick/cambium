@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import { type BrandSeed, BrandSeedSchema, type OklchTriple } from './brand-seed';
 import { converter } from 'culori/fn';
 import { hueDistance, isInP3, isInSrgb, type Oklch, oklchDistance } from './oklch';
+import { ENGINE_DIGESTS } from './scale-engine-digest.fixture';
 import {
 	ANCHOR_TOLERANCE,
 	RAMP_NAMES,
@@ -108,6 +111,25 @@ function eachRamp(schemes: Schemes) {
 		RAMP_NAMES.map((name) => ({ scheme, name, ramp: schemes[scheme][name] })),
 	);
 }
+
+/**
+ * The one serialization every byte-identity check in this file measures against, so the
+ * determinism cases below and the digest pin further down can never quietly drift onto two
+ * different notions of "the same output".
+ */
+function serializeSchemes(schemes: Schemes): string {
+	return JSON.stringify(schemes);
+}
+
+/**
+ * A literal copy of every digest that has ever shipped, kept apart from `ENGINE_DIGESTS` so that
+ * editing the fixture cannot carry this pin along with it. Append only: a shipped id's entry never
+ * changes here, so the only way to ship changed output is a new id with a new fixture entry, pinned
+ * here in its own turn once it ships.
+ */
+const PINNED_DIGESTS: Readonly<Record<string, string>> = {
+	'cambium-oklch-1': 'e4d6a1874554b831892f52ab35f0e31d89e67a4f3dff7c733af77ca7b874ba4c',
+};
 
 export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 	const generate = (brand: OklchTriple, params: InterpretationParams = BALANCED) => {
@@ -272,14 +294,16 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 		// structural compare passes over negative zero and over two objects built key by key in a
 		// different order.
 		it.each(SEEDS)('produces byte-identical ramps on a repeated run for %s', (_l, brand) => {
-			expect(JSON.stringify(generate(brand).schemes)).toBe(JSON.stringify(generate(brand).schemes));
+			expect(serializeSchemes(generate(brand).schemes)).toBe(
+				serializeSchemes(generate(brand).schemes),
+			);
 		});
 
 		// The paired negative. Without it the case above passes just as well against an engine that
 		// ignores its seed and returns a constant.
 		it('produces different ramps for two seeds a hue apart', () => {
-			expect(JSON.stringify(generate(SEEDS[0]![1]).schemes)).not.toBe(
-				JSON.stringify(generate(SEEDS[3]![1]).schemes),
+			expect(serializeSchemes(generate(SEEDS[0]![1]).schemes)).not.toBe(
+				serializeSchemes(generate(SEEDS[3]![1]).schemes),
 			);
 		});
 
@@ -287,7 +311,45 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 			const balanced = generate(SEEDS[0]![1], BALANCED);
 			const spread = generate(SEEDS[0]![1], { ...BALANCED, chromaSpread: 1.6 });
 
-			expect(JSON.stringify(balanced.schemes)).not.toBe(JSON.stringify(spread.schemes));
+			expect(serializeSchemes(balanced.schemes)).not.toBe(serializeSchemes(spread.schemes));
+		});
+	});
+
+	describe('digest pin', () => {
+		// The rule this guards lives on `ScaleEngine.id` in `core/scale-engine.ts`: any change to
+		// what `generate` produces, for any seed or params, obliges a new id. Hashing all four seeds
+		// together rather than one at a time is what makes that true for every seed at once — a
+		// digest that only covered some of them could go stale while the output it left out moved.
+		it("pins the engine id to a digest of its own output, so an id survives only beside output that hasn't moved", () => {
+			const engine = createEngine();
+			const bytes = SEEDS.map(([, brand]) => serializeSchemes(generate(brand).schemes)).join('\n');
+			const digest = createHash('sha256').update(bytes).digest('hex');
+			const pinned = ENGINE_DIGESTS[engine.id];
+
+			expect(
+				pinned,
+				`no digest for engine id ${engine.id}: this id is new, so add its digest beside the old ones`,
+			).toBeDefined();
+			expect(
+				digest,
+				`output changed under engine id ${engine.id}. Either the change is unintended (revert it), or it is intended: move the engine id and add a new digest entry beside the existing one, leaving the old entry in place.`,
+			).toBe(pinned);
+		});
+
+		// The paired negative for the case above: editing `ENGINE_DIGESTS` in place to match changed
+		// output would satisfy that first case on its own. This one holds every shipped entry to a
+		// copy the contract carries independently, so the digest itself can't be the thing that moves.
+		it('keeps every pinned digest exactly as it shipped, with no two ids sharing one', () => {
+			for (const [id, digest] of Object.entries(PINNED_DIGESTS)) {
+				expect(
+					ENGINE_DIGESTS[id],
+					`pinned digest for ${id} no longer matches ENGINE_DIGESTS. Editing a shipped digest in place is not allowed: ship changed output under a new engine id and a new digest entry, then pin it here once it ships.`,
+				).toBe(digest);
+			}
+
+			const digests = Object.values(ENGINE_DIGESTS);
+
+			expect(new Set(digests).size, 'two engine ids share a digest').toBe(digests.length);
 		});
 	});
 
