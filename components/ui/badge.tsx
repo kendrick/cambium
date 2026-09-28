@@ -14,10 +14,12 @@ const badgeVariants = cva(
 				// and the same fix: constrain the tint. The fractions differ, though, because a badge's
 				// real surface is `card` (the app screen's orders table), one step closer to the text than
 				// the `background` a button sits on, and card is the surface these were chosen for. Worst
-				// case across the ten-seed sweep on card, alpha rounded to 1/255 the way Chromium paints
-				// it: light rest 4.72:1, light hover 4.54:1, dark rest 5.74:1, dark hover 4.64:1. The
-				// button's own hover fractions (/10, /30) miss on card, at 4.41:1 and 4.49:1. Hover stays
-				// more tinted than rest so a linked badge still visibly reacts.
+				// case across the ten-seed sweep on card, as `button-contrast.test.ts` measures it
+				// (`compositeOver` at alpha rounded to 1/255): light rest 4.73:1, light hover 4.54:1,
+				// dark rest 5.75:1, dark hover 4.65:1. In that measure the button's own hover fractions
+				// (/10, /30) miss on card, at 4.41:1 and 4.49:1. Painted pixels differ a little in dark,
+				// where the text colour clips, and `e2e/button-contrast.spec.ts` reads those for rest.
+				// Hover stays more tinted than rest so a linked badge still visibly reacts.
 				destructive:
 					'bg-destructive/5 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/8 dark:[a]:hover:bg-destructive/29',
 				outline: 'border-border text-foreground [a]:hover:bg-muted [a]:hover:text-muted-foreground',
