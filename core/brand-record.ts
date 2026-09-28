@@ -8,74 +8,16 @@ import { overrideKey, TokenOverrideSchema } from './token-overrides';
 import { TokenSetSchema } from './token-set';
 
 /**
- * Bumped whenever a stored record's shape changes. Parsing rejects anything else, because
- * the export archive is the only migration path and it only works if a mismatch is loud.
- *
- * 4 folded in two shape changes that landed on separate branches, each independently bumping from
- * 2 to 3: #19's `ordinal` field on `BrandVersionSchema`, and #53's `expressive` field on
- * `BrandSeedSchema`. Merging both at 3 would leave a record stamped 3 ambiguous about which shape
- * it actually holds, so that merge moved the number to 4 instead.
- *
- * 5 is #7's nine non-colour categories on `TokenSetSchema`, all required. A stored record's
- * `tokenSet` is the shape that changed, so a version-4 archive holding a colour-only token set now
- * fails eleven fields inside `BrandRecordSchema.parse`, the nine categories plus a shadow scale in
- * each of the two schemes. Without this bump that record claims a version
- * matching the current format and then dies on a Zod issue list, instead of reaching the loud
- * mismatch this number exists to trigger.
- *
- * 6 is #9's `$extensions` payload, required on every token in a `TokenSetSchema`: every ramp step,
- * every semantic entry, and every non-colour leaf. Nothing was removed, but a version-5 archive
- * carries none of it, so it fails once per token inside `BrandRecordSchema.parse` rather than
- * anywhere a reader could act on. No migration shim: the payload is computed from the seed and the
- * derivation path, and a stored set holds neither, so backfilling one would be inventing the very
- * provenance the field exists to record. `app/storage/indexed-db-record-store.ts` throws on the
- * mismatch and the export archive stays the migration path.
- *
- * 7 is #78's `revision` on `BrandRecordSchema`, required. The change is one key on the record
- * rather than a change inside every token. Without this bump a version-6 archive fails on that
- * one missing key, which reads like any malformed record; with it the archive fails on the
- * version and says why.
- *
- * No migration is written, and what the code does with a version-6 record is throw. Such a record
- * carries no `revision`, so `BrandRecordSchema.parse` rejects it, and because `get` and `list` both
- * parse on the way out it is unreadable rather than silently wrong: `components/landing/landing-route.tsx`
- * catches that rejection and reports the record as unreadable. It cannot be exported around the
- * problem either, since an export reads through the same parse. The reason no shim was written is a
- * fact about deployments rather than about this file: no deployed copy of Cambium held a saved brand
- * when this shipped, confirmed by the project owner on 2026-09-23.
- *
- * 8 is #26's `overrides` on `BrandVersionSchema`, required. A version used to hold what the model
- * said and nothing the user did after, so an override lived only in the workspace draft and was
- * gone on the next open. The overrides are stored rather than the token set they produce, because
- * the derived tokens are recomputed from the seed and storing both puts the same facts in two
- * places. Without this bump a version-7 archive fails once per version on the missing key, which
- * reads like corruption; with it the first issue names `schemaVersion`.
- *
- * No migration is written here either, for the same reason as 7: no deployed copy of Cambium held
- * a saved brand when this shipped. A shim would be trivial, since every version-7 version means
- * `overrides: []`, but a shim for records nobody holds is code nobody runs.
- *
- * 9 is three shape changes landing together so they share one bump: #77's `tag`, required on every
- * `ReferenceImageSchema`; #77's `brandUrl` on `BrandRecordSchema`, required and nullable; and #83's
- * removal of `surfacePolarity` from `BrandSeedSchema`, which nothing read. #22 already asked a
- * person for the tag and the URL, and both were lost when the page closed. Without this bump a
- * version-8 archive fails once per image on the missing tag, once on the missing URL, and once per
- * seed on a key the strict seed schema no longer declares, which reads like corruption; with it the
- * first issue names `schemaVersion`. No migration here either, for the same deployment reason as 7
- * and 8.
- *
- * 10 is #25's `pins` on `BrandVersionSchema`, required. A pinned seed field is one a preset switch
- * and a contrast repair must leave alone, and pins save and revert with the rest of the draft, so
- * like `overrides` they belong to the version rather than to the workspace. Without this bump a
- * version-9 archive fails once per version on the missing key, which reads like corruption; with it
- * the first issue names `schemaVersion`.
- *
- * No migration, for the same deployment reason as 7 through 9. It still held when this shipped:
- * `.github/` holds Dependabot's config and no deploy workflow. A shim would be one line,
- * `defaultSeedPins` on each version's seed, since that pins exactly the observed steps repair
- * protected on a version-9 record, but a shim for records nobody holds is code nobody runs.
+ * Bumped whenever a stored record's shape changes, so a stale stamp fails the parse instead of
+ * quietly wearing a shape it no longer has. `BrandRecordSchema` accepts only
+ * `z.literal(SCHEMA_VERSION)`, so an older or newer stamp fails with `schemaVersion` as the first
+ * issue, ahead of whatever per-field complaints the shape mismatch would otherwise raise. No
+ * migration is written, so a record from before a bump stays unreadable: the stores parse on the
+ * way out, and `get` and `list` refuse it by name. Pre-release builds stamped records 1 through 10
+ * in older shapes. Stamps 2 through 10 fail here the same way, but a pre-release record stamped 1
+ * reuses the live number, so it fails on the fields its shape lacks rather than on the stamp.
  */
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 1;
 
 /**
  * What storage stamps on a record's first commit. It lives here rather than in `app/storage/`

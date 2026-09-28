@@ -192,7 +192,8 @@ export const BrandSeedSchema = z.strictObject({
 	// `normal` isn't in #1's type block. It renders the same shadows as a null character, so the
 	// rail can Set this field without moving a shadow. The name matches `trackingFeel`'s middle
 	// value; "neutral" would read as the untinted black that `tintFromSurface: false` already means.
-	// Adding a value only widens what a v10 record may hold, so SCHEMA_VERSION stays at 10.
+	// Adding a value to this enum only widens what a record may hold, so it needs no `SCHEMA_VERSION`
+	// bump.
 	shadowCharacter: z
 		.strictObject({
 			spread: z.enum(['tight', 'normal', 'diffuse']),

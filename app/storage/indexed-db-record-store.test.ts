@@ -128,12 +128,12 @@ describe('createIndexedDbRecordStore persistence', () => {
 		expect(await reopened.list()).toEqual([record]);
 	});
 
-	// Reading rejects rather than skipping or repairing. The export archive is the only migration
-	// path, and a mismatch that reads as an empty list would look like lost work instead of a
-	// version the archive can carry forward.
+	// Reading rejects rather than skipping or repairing. A mismatch that read as an empty list would
+	// look like lost work, when the record is still on disk under an older stamp. 10 is the last stamp
+	// a pre-release build wrote, so it's one a real browser can still hold.
 	it('throws when a stored record no longer matches the current schema version', async () => {
 		const store = await createIndexedDbRecordStore();
-		const stale = { ...makeRecordWithImage(), schemaVersion: SCHEMA_VERSION - 1 };
+		const stale = { ...makeRecordWithImage(), schemaVersion: 10 };
 
 		// Written through a raw connection because `put` is exactly what refuses to store a record the
 		// current schema rejects, which leaves such a record no other way into the database.
