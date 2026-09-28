@@ -88,10 +88,11 @@ export type ScaleEngineResult =
  * the old id's digest stays put in the fixture rather than being edited to match.
  * `core/scale-engine-digest.fixture.ts` pins each shipped id to a digest of its complete result over
  * the four seeds and a small sample of params—Balanced plus one set that moves every other field
- * away from it. That samples the rule above rather than proving it: a change reachable only through
- * some other seed or params combination can still slip past. The "pins the engine id to a digest of
- * its own output" case in `core/scale-engine-contract.ts` is what fails when a sampled id and its
- * digest fall out of step.
+ * away from it—plus the P3 seed and the no-key-colors seed that push `anchor.deviation` off zero and
+ * exercise the failure shape an sRGB-only sample never reaches. That samples the rule above rather
+ * than proving it: a change reachable only through some other seed, params, or edge case can still
+ * slip past. The "pins the engine id to a digest of its own output" case in
+ * `core/scale-engine-contract.ts` is what fails when a sampled id and its digest fall out of step.
  */
 export type ScaleEngine = {
 	readonly id: string;

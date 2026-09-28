@@ -114,9 +114,8 @@ function eachRamp(schemes: Schemes) {
 }
 
 /**
- * The one serialization every byte-identity check in this file measures against, so the
- * determinism cases below and the digest pin further down can never quietly drift onto two
- * different notions of "the same output".
+ * The one serialization the determinism cases below share, so two byte-identity checks can never
+ * quietly drift onto two different notions of "the same output".
  */
 function serializeSchemes(schemes: Schemes): string {
 	return JSON.stringify(schemes);
@@ -158,13 +157,25 @@ const PARAM_SETS: ReadonlyArray<readonly [string, InterpretationParams]> = [
 ];
 
 /**
+ * Two fixed points the digest pin adds beside `SEEDS × PARAM_SETS`, because every one of those
+ * combinations lands on a brand seed already inside sRGB and a `keyColors` array that always
+ * resolves—so `serializeResult`'s two reasons for existing over `serializeSchemes`, `anchor` moving
+ * independently and the failure shape, never actually varied the hash. `P3_ONLY_SEED` is the same
+ * triple "pulls a P3 seed into sRGB" below proves sits outside sRGB, which is what pushes
+ * `anchor.deviation` off zero. `NO_KEY_COLORS_SEED` is the same seed "fails rather than inventing a
+ * brand" below already uses, which is what gives `serializeResult` an `ok: false` shape to hash.
+ */
+const P3_ONLY_SEED: OklchTriple = [0.6, 0.245, 0];
+const NO_KEY_COLORS_SEED: BrandSeed = seedWith([0.6, 0.15, 200], { keyColors: null });
+
+/**
  * A literal copy of every digest that has ever shipped, kept apart from `ENGINE_DIGESTS` so that
  * editing the fixture cannot carry this pin along with it. Append only: a shipped id's entry never
  * changes here, so the only way to ship changed output is a new id with a new fixture entry, pinned
  * here in its own turn once it ships.
  */
 const PINNED_DIGESTS: Readonly<Record<string, string>> = {
-	'cambium-oklch-1': 'e094831b05d498887caef00d6cd3c0000e0269dbf78b3e2a3a16b1cda2d2705b',
+	'cambium-oklch-1': '5c33f508696b0466ada2a2eefa6d7134a7053cfb9d1f429a43bcefef27833711',
 };
 
 export function testScaleEngineContract(createEngine: () => ScaleEngine) {
@@ -302,15 +313,13 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 		// reference image. Mapping has to pull it in rather than emit a colour that renders as a
 		// clipped surprise, and the anchor has to admit that step 9 is not what it was handed.
 		it('pulls a P3 seed into sRGB and reports the deviation', () => {
-			const p3Only: OklchTriple = [0.6, 0.245, 0];
-
 			// Proving the fixture before trusting the test. Raising chroma until a colour leaves sRGB
 			// usually takes it out of P3 too, so an eyeballed seed exercises clamping and says nothing
 			// about the P3 path this case is named for.
-			expect(isInP3({ l: p3Only[0], c: p3Only[1], h: p3Only[2] })).toBe(true);
-			expect(isInSrgb({ l: p3Only[0], c: p3Only[1], h: p3Only[2] })).toBe(false);
+			expect(isInP3({ l: P3_ONLY_SEED[0], c: P3_ONLY_SEED[1], h: P3_ONLY_SEED[2] })).toBe(true);
+			expect(isInSrgb({ l: P3_ONLY_SEED[0], c: P3_ONLY_SEED[1], h: P3_ONLY_SEED[2] })).toBe(false);
 
-			const result = createEngine().generate(seedWith(p3Only), BALANCED);
+			const result = createEngine().generate(seedWith(P3_ONLY_SEED), BALANCED);
 
 			expect(result.ok).toBe(true);
 			if (!result.ok) return;
@@ -355,16 +364,21 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 		// The rule this guards lives on `ScaleEngine.id` in `core/scale-engine.ts`: any change to
 		// what `generate` produces, for any seed or params, obliges a new id. This pin samples that
 		// rule rather than proving it—it covers the four seeds across PARAM_SETS (Balanced plus one
-		// set that moves every other field away from it), so a change reachable only through some
-		// seed or params combination outside that sample can still slip past. Hashing the whole
-		// result rather than `schemes` alone is what makes it a sample of the rule as written: the
-		// rule covers everything `generate` returns, and that includes `anchor` and the failure
-		// shape a params combination outside this sample could land on.
+		// set that moves every other field away from it), plus P3_ONLY_SEED and NO_KEY_COLORS_SEED,
+		// so a change reachable only through some seed, params, or edge case outside that sample can
+		// still slip past. Hashing the whole result rather than `schemes` alone is what makes this a
+		// sample of the rule as written: the rule covers everything `generate` returns, and
+		// P3_ONLY_SEED and NO_KEY_COLORS_SEED are what make `anchor` and the failure shape actually
+		// move the hash, rather than sitting in the sample unexercised.
 		it("pins the engine id to a digest of its own output, so an id survives only beside output that hasn't moved", () => {
 			const engine = createEngine();
-			const bytes = SEEDS.flatMap(([, brand]) =>
-				PARAM_SETS.map(([, params]) => serializeResult(engine.generate(seedWith(brand), params))),
-			).join('\n');
+			const bytes = [
+				...SEEDS.flatMap(([, brand]) =>
+					PARAM_SETS.map(([, params]) => serializeResult(engine.generate(seedWith(brand), params))),
+				),
+				serializeResult(engine.generate(seedWith(P3_ONLY_SEED), BALANCED)),
+				serializeResult(engine.generate(NO_KEY_COLORS_SEED, BALANCED)),
+			].join('\n');
 			const digest = createHash('sha256').update(bytes).digest('hex');
 			const pinned = ENGINE_DIGESTS[engine.id];
 
@@ -390,6 +404,12 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 		// is the other legitimate way every entry's digest moves at once: that's a single deliberate
 		// re-pin, visible in review as both literal copies—this file's and `ENGINE_DIGESTS`'s—changing
 		// together, rather than one id drifting out of step with the other.
+		//
+		// The second loop closes the gap the first one leaves open: it only ever walks
+		// `PINNED_DIGESTS`, so an id that landed in `ENGINE_DIGESTS` and was never mirrored here would
+		// pass both cases forever, with nothing left to fail once that mirroring step gets skipped.
+		// Shipping an id is two edits, not one, and this is what holds the second edit to happening at
+		// all.
 		it('keeps every pinned digest exactly as it shipped', () => {
 			for (const [id, digest] of Object.entries(PINNED_DIGESTS)) {
 				expect(
@@ -397,15 +417,19 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 					`pinned digest for ${id} no longer matches ENGINE_DIGESTS. Editing a shipped digest in place is not allowed: ship changed output under a new engine id and a new digest entry, then pin it here once it ships.`,
 				).toBe(digest);
 			}
+
+			for (const id of Object.keys(ENGINE_DIGESTS)) {
+				expect(
+					PINNED_DIGESTS[id],
+					`${id} is in ENGINE_DIGESTS but missing from PINNED_DIGESTS. Shipping an id isn't done at the ENGINE_DIGESTS edit: mirror its digest into PINNED_DIGESTS in the same change, or this id's entry stays editable in place forever.`,
+				).toBeDefined();
+			}
 		});
 	});
 
 	describe('derivation from an underspecified seed', () => {
 		it('fails rather than inventing a brand when the seed carries no key colour', () => {
-			const result = createEngine().generate(
-				seedWith([0.6, 0.15, 200], { keyColors: null }),
-				BALANCED,
-			);
+			const result = createEngine().generate(NO_KEY_COLORS_SEED, BALANCED);
 
 			expect(result.ok).toBe(false);
 			expect(result.error?.kind).toBe('no-key-colors');

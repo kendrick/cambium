@@ -1,9 +1,11 @@
 /**
  * One digest per shipped engine id, over the complete `ScaleEngineResult`—schemes, anchor, and any
- * failure shape—that engine produces for the four seeds in `core/scale-engine-contract.ts`,
- * each seed run under every params set in that file's PARAM_SETS. The digest-pin case there fails
- * an id whose output moved without a new id following it; see the docblock on `ScaleEngine.id` in
- * `core/scale-engine.ts` for the rule this fixture samples rather than proves.
+ * failure shape—that engine produces for the four seeds in `core/scale-engine-contract.ts` run under
+ * every params set in that file's PARAM_SETS, plus that file's `P3_ONLY_SEED` and
+ * `NO_KEY_COLORS_SEED`, the two fixed points that actually move `anchor.deviation` off zero and give
+ * the hash a failure shape to see. The digest-pin case there fails an id whose output moved without a
+ * new id following it; see the docblock on `ScaleEngine.id` in `core/scale-engine.ts` for the rule
+ * this fixture samples rather than proves.
  *
  * Append only. A shipped id's digest never changes in place: output moving under an id that already
  * has an entry here is exactly the failure the contract exists to catch, so the only green path is
@@ -18,9 +20,10 @@
  * update, not a collision.
  */
 export const ENGINE_DIGESTS: Readonly<Record<string, string>> = {
-	// Re-hashed for PR #162's review to cover the complete result (schemes, anchor, and any failure
-	// shape) rather than schemes alone, closing the gap where an anchor-only or failure-shaped change
-	// left the old, schemes-only digest untouched. The engine's output did not change; this replaces
-	// the schemes-only digest #99's widening wave pinned.
-	'cambium-oklch-1': 'e094831b05d498887caef00d6cd3c0000e0269dbf78b3e2a3a16b1cda2d2705b',
+	// Re-hashed again for PR #162's opencode review to add P3_ONLY_SEED and NO_KEY_COLORS_SEED to the
+	// sample: every prior seed×params combination was already inside sRGB with a resolvable
+	// keyColors array, so anchor.deviation and the failure shape never actually moved the hash the
+	// first re-hash claimed to cover. The engine's output did not change; this is the same shipped
+	// output over a sample that now exercises both.
+	'cambium-oklch-1': '5c33f508696b0466ada2a2eefa6d7134a7053cfb9d1f429a43bcefef27833711',
 };
