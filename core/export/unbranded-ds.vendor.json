@@ -102,5 +102,28 @@
 			"tooltip": "60",
 			"max": "9999"
 		}
+	},
+	"darkColorDefaults": {
+		"source": {
+			"repo": "kendrick/unbranded-ds",
+			"path": "packages/tokens/themes/color-scheme/dark.json",
+			"sha": "4b718629ed7f26c5d45cc8066a07741d53d4a686"
+		},
+		"color": {
+			"background": "oklch(0.1408 0.0044 285.82)",
+			"foreground": "oklch(0.9851 0.0000 89.88)",
+			"primary": "oklch(0.9851 0.0000 89.88)",
+			"primary-foreground": "oklch(0.2103 0.0059 285.89)",
+			"muted": "oklch(0.2739 0.0055 286.03)",
+			"muted-foreground": "oklch(0.7118 0.0129 286.07)",
+			"border": "oklch(0.2739 0.0055 286.03)",
+			"ring": "oklch(0.8711 0.0055 286.29)",
+			"destructive": "oklch(0.5771 0.2152 27.33)",
+			"destructive-foreground": "oklch(0.9851 0.0000 89.88)",
+			"destructive-subtle": "oklch(0.2700 0.0800 27.33)",
+			"destructive-subtle-foreground": "oklch(0.8600 0.0900 27.33)",
+			"popover": "oklch(0.1408 0.0044 285.82)",
+			"popover-foreground": "oklch(0.9851 0.0000 89.88)"
+		}
 	}
 }
