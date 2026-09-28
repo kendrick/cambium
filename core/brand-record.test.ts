@@ -102,54 +102,19 @@ describe('BrandRecordSchema', () => {
 		expect(result.error?.issues[0]?.path).toEqual(['schemaVersion']);
 	});
 
-	// The archive the bump to 8 exists for: stamped 7 and shaped like 7, so it carries no
-	// `overrides`. The missing key fails too, but the first issue has to be the version, or the
-	// reader is left to guess from a list of per-version complaints.
-	it('rejects a record from before overrides were stored, naming schemaVersion first', () => {
-		const { overrides: _dropped, ...versionSeven } = version;
-
-		const result = BrandRecordSchema.safeParse({
-			...record,
-			schemaVersion: 7,
-			versions: [versionSeven],
-		});
+	// 10 is the last dev-era number, the one a stale browser store would still carry after the
+	// reset, so it has to keep failing even though nothing above it is real shape history anymore.
+	it('rejects a record stamped 10, the dev-era number a stale browser store would carry', () => {
+		const result = BrandRecordSchema.safeParse({ ...record, schemaVersion: 10 });
 
 		expect(result.success).toBe(false);
 		expect(result.error?.issues[0]?.path).toEqual(['schemaVersion']);
 	});
 
-	// The archive the bump to 9 exists for: stamped 8 and shaped like 8, so its images carry no
-	// tag, it has no `brandUrl`, and its seed still states `surfacePolarity`. Each of those fails on
-	// its own, and the version has to be what the reader hears about first.
-	it('rejects a record from before tags and the brand URL were stored, naming schemaVersion first', () => {
-		const { brandUrl: _url, ...recordEight } = record;
-		const untagged = record.images.map(({ tag: _tag, ...image }) => image);
-		const versionEight = { ...version, seed: { ...seed, surfacePolarity: 'light-first' } };
+	it('parses the same record stamped 1', () => {
+		const result = BrandRecordSchema.safeParse({ ...record, schemaVersion: 1 });
 
-		const result = BrandRecordSchema.safeParse({
-			...recordEight,
-			schemaVersion: 8,
-			images: untagged,
-			versions: [versionEight],
-		});
-
-		expect(result.success).toBe(false);
-		expect(result.error?.issues[0]?.path).toEqual(['schemaVersion']);
-	});
-
-	// The archive the bump to 10 exists for: stamped 9 and shaped like 9, so its versions carry no
-	// `pins`. The missing key fails too, and the version has to be what the reader hears first.
-	it('rejects a record from before pins were stored, naming schemaVersion first', () => {
-		const { pins: _dropped, ...versionNine } = version;
-
-		const result = BrandRecordSchema.safeParse({
-			...record,
-			schemaVersion: 9,
-			versions: [versionNine],
-		});
-
-		expect(result.success).toBe(false);
-		expect(result.error?.issues[0]?.path).toEqual(['schemaVersion']);
+		expect(result.success).toBe(true);
 	});
 
 	it('rejects an id that is not a UUID', () => {
