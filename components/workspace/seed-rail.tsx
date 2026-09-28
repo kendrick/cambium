@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import type { StoreApi } from 'zustand/vanilla';
 
@@ -171,6 +171,10 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 	const [saving, setSaving] = useState(false);
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const [advancedOpen, setAdvancedOpen] = useState(false);
+	// The reset-to-preset button below only exists while `tuned`, so it unmounts the instant
+	// its own click clears tuning. Without moving focus somewhere else on that same click, focus
+	// falls to <body> instead of following the interaction back to the control that caused it.
+	const presetSelectRef = useRef<HTMLSelectElement>(null);
 
 	const tuned = tunedParams !== null;
 	const activeParams = resolveActiveParams({ preset, tunedParams });
@@ -244,7 +248,19 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 						</div>
 						{tuned ? (
 							<p id="tuned-save-note" className="text-muted-foreground text-xs">
-								Tuned parameters can't be saved under a preset name. Pick a preset to save.
+								Tuned parameters can't be saved under a preset name.{' '}
+								<Button
+									variant="link"
+									size="xs"
+									className="text-muted-foreground hover:text-foreground h-auto px-0 font-normal underline"
+									onClick={() => {
+										selectPreset(preset);
+										presetSelectRef.current?.focus();
+									}}
+								>
+									Reset to {preset}
+								</Button>{' '}
+								or pick another preset to save.
 							</p>
 						) : null}
 					</div>
@@ -267,6 +283,7 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 						</span>
 					) : null}
 					<select
+						ref={presetSelectRef}
 						value={preset}
 						onChange={(event) => selectPreset(event.target.value as Interpretation)}
 						className="bg-background rounded border px-1 py-0.5 text-sm"

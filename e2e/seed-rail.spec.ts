@@ -417,6 +417,96 @@ test('moving a slider tunes the derived tokens live with no network call, marks 
 	await expect.poll(() => neutralFill.textContent()).toBe(beforeTuning);
 });
 
+test('the tuned save note\'s "Reset to <preset>" button clears tuning on a Balanced record with no other edit present', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed({ ...SEED, neutralTemperature: null });
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const neutralFillLow = page.locator('[data-token="primitive.neutral.1"] [data-swatch-value]');
+	const neutralFillHigh = page.locator('[data-token="primitive.neutral.9"] [data-swatch-value]');
+	await expect(neutralFillHigh).toBeVisible();
+	const lowBeforeTuning = await neutralFillLow.textContent();
+	const highBeforeTuning = await neutralFillHigh.textContent();
+
+	const tunedMarker = page.locator('[data-tuned-marker]');
+	const save = page.getByRole('button', { name: 'Save', exact: true });
+	const interpretation = page.getByLabel('Interpretation');
+
+	await expect(interpretation).toHaveValue('balanced');
+
+	await page.getByRole('button', { name: 'Advanced parameters' }).click();
+	const neutralTinting = page.getByLabel('Neutral tinting', { exact: true });
+	await neutralTinting.fill('0.9');
+
+	await expect.poll(() => neutralFillHigh.textContent()).not.toBe(highBeforeTuning);
+	await expect(tunedMarker).toBeVisible();
+
+	// This is the reset ruling from #165's substitute review: a native `<select>` doesn't fire
+	// `change` when the chosen option is already selected, so re-picking "balanced" from the
+	// Interpretation dropdown can't be what clears a Balanced session's own tuning. This button is
+	// the only way to reset onto the preset that's already active.
+	const resetButton = page.getByRole('button', { name: 'Reset to balanced', exact: true });
+	await expect(resetButton).toBeVisible();
+
+	await resetButton.click();
+
+	await expect(tunedMarker).toHaveCount(0);
+	await expect(page.locator('#tuned-save-note')).toHaveCount(0);
+	await expect.poll(() => neutralFillLow.textContent()).toBe(lowBeforeTuning);
+	await expect.poll(() => neutralFillHigh.textContent()).toBe(highBeforeTuning);
+	await expect(interpretation).toBeFocused();
+	await expect(save).toBeDisabled();
+	await expect(page.getByText('Unsaved edits')).toHaveCount(0);
+});
+
+test('the reset button leaves a prior seed edit in place and Save enabled', async ({ page }) => {
+	const record = buildRecordWithSeed({ ...SEED, neutralTemperature: null });
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	// The primary action's paint is step 9 of the brand ramp, which is exactly the step a key
+	// colour's own OKLCH values land on (the sibling lightness-edit test above uses the same
+	// reasoning), so it stands in here for "the seed edit is still there" without reopening the
+	// popover and racing the token list's own layout.
+	const primaryAction = page.locator('[data-preview-part="primary-action"]');
+	await expect(primaryAction).toBeVisible();
+	const beforeEdit = await paintedCentre(primaryAction);
+
+	const save = page.getByRole('button', { name: 'Save', exact: true });
+
+	await page.getByRole('button', { name: 'Edit brand key colour' }).click();
+	const lightness = page.getByLabel('brand key colour lightness value', { exact: true });
+	await lightness.fill('0.25');
+	await lightness.blur();
+	await page.keyboard.press('Escape');
+
+	await expect(save).toBeEnabled();
+	await expect
+		.poll(async () => paintDistance(await paintedCentre(primaryAction), beforeEdit))
+		.toBeGreaterThan(1);
+	const afterEdit = await paintedCentre(primaryAction);
+
+	await page.getByRole('button', { name: 'Advanced parameters' }).click();
+	const neutralTinting = page.getByLabel('Neutral tinting', { exact: true });
+	await neutralTinting.fill('0.9');
+
+	const tunedMarker = page.locator('[data-tuned-marker]');
+	await expect(tunedMarker).toBeVisible();
+	await expect(save).toBeDisabled();
+
+	await page.getByRole('button', { name: 'Reset to balanced', exact: true }).click();
+
+	await expect(tunedMarker).toHaveCount(0);
+	// `selectPreset` keeps draft state (`app/state/workspace-store.ts`), so the reset only ever
+	// touches `tunedParams`; the hand-edited seed is untouched and still makes Save worth pressing.
+	await expect(save).toBeEnabled();
+	expect(paintDistance(await paintedCentre(primaryAction), afterEdit)).toBeLessThanOrEqual(1);
+});
+
 test("showing a key colour's source draws the region box at the stored fraction, and a colour with no region shows the whole image", async ({
 	page,
 }) => {
