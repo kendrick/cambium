@@ -27,6 +27,7 @@ export function TokenRow({
 	overridden,
 	onReset,
 	issues,
+	contrastFailures,
 	children,
 }: {
 	id: string;
@@ -37,6 +38,7 @@ export function TokenRow({
 	overridden: boolean;
 	onReset?: () => void;
 	issues?: OverrideIssue[];
+	contrastFailures?: { label: string; wcag: number; target: number }[];
 	children: ReactNode;
 }) {
 	const [expanded, setExpanded] = useState(false);
@@ -111,6 +113,25 @@ export function TokenRow({
 					</button>
 				) : null}
 			</div>
+
+			{contrastFailures && contrastFailures.length > 0 && onReset ? (
+				<div className="flex flex-col gap-1">
+					<ul data-contrast-verdict className="text-destructive text-xs">
+						{contrastFailures.map((failure) => (
+							<li key={failure.label}>
+								{failure.label}: {failure.wcag.toFixed(2)}:1, needs {failure.target}
+							</li>
+						))}
+					</ul>
+					<button
+						type="button"
+						onClick={onReset}
+						className="text-destructive self-start text-xs underline"
+					>
+						Revert
+					</button>
+				</div>
+			) : null}
 
 			{listed.size > 0 ? (
 				<ul data-issues className="text-destructive text-xs">
