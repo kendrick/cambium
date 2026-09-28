@@ -1,6 +1,6 @@
 {
-	"id": "7a44f060-b270-4858-9031-880bc1b24804",
-	"schemaVersion": 10,
+	"id": "2a882110-2227-4c26-be9e-0beccbc48bed",
+	"schemaVersion": 1,
 	"revision": 1,
 	"brandUrl": null,
 	"images": [
@@ -13,7 +13,7 @@
 	],
 	"versions": [
 		{
-			"createdAt": "2026-09-26T19:34:51.525Z",
+			"createdAt": "2026-09-28T02:23:02.741Z",
 			"ordinal": 1,
 			"seed": {
 				"keyColors": [
