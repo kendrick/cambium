@@ -27,14 +27,20 @@ type TokenEntry = { path: string; extensions: TokenProvenance; scheme?: SchemeNa
 type ColourEntry = TokenEntry & { value: string };
 
 /**
- * Two characters would otherwise break a table row: an unescaped `|` reopens it mid-cell, and a raw
- * newline turns the rest of a cell into a line with no leading `|`, which a table parser reads as
- * broken structure rather than as part of the row. Both go to their two-character backslash form.
+ * Three things would otherwise break a table row or mangle it silently: an unescaped `|` reopens it
+ * mid-cell, a raw newline turns the rest of a cell into a line with no leading `|`, and a raw `\`
+ * left untouched pairs up with the backslash this function inserts ahead of a `|`, so a rationale
+ * already containing `\|` came out as `\\|` — which a markdown reader consumes as an escaped
+ * backslash followed by a live, cell-splitting pipe rather than an escaped one. Escaping `\` first
+ * doubles a pre-existing one before `|`'s own escape goes in, so the two can never combine that way.
  * `RationaleSchema` bounds a rationale to one sentence, so a raw `\n` reaching here would itself be a
  * data bug worth surfacing as literal `\n` text rather than silently reformatting.
  */
 function escapeCell(text: string): string {
-	return text.replace(/\|/g, '\\|').replace(/\r\n|\r|\n/g, '\\n');
+	return text
+		.replace(/\\/g, '\\\\')
+		.replace(/\|/g, '\\|')
+		.replace(/\r\n|\r|\n/g, '\\n');
 }
 
 function row(cells: readonly string[]): string {
@@ -58,13 +64,14 @@ function entryPath(entry: TokenEntry): string {
 
 /**
  * Whether two payloads make the same claim: same provenance, same seed field, same rationale. Never
- * the raw colour value, because a light and a dark ramp step curve to genuinely different lightness
- * at every step but for one (`oklch-scale-engine.ts`'s `buildRamp` runs `BRAND_STEP` through
- * `fitToSrgbGamut(anchor)` alone, with no scheme-dependent term, so an *observed* step's value is
- * provably identical across schemes whenever its claim is) — and the claim, not the byte, is what a
- * reader of this doc is being told. Comparing on the claim means a curved step whose wording doesn't
- * mention the scheme collapses to one row, while a semantic alias that resolves to a different step
- * per scheme (this fixture's `primary-foreground`, `sidebar-primary-foreground`) still splits.
+ * the raw colour value on its own — a derived or invented ramp step curves to genuinely different
+ * lightness in every scheme (`oklch-scale-engine.ts`'s `buildRamp` fits each scheme's own background),
+ * so requiring value equality here would split nearly every row in "What the interpretation produced"
+ * and "Invented tokens", neither of which even prints a value a reader could compare. A caller that
+ * does print a value — `keyColourSection`, the one section with a Value column — checks it separately
+ * against its own value-aware merge, so an edit that changes a value without touching `$extensions`
+ * (`token-overrides.ts`'s `write` never does) still surfaces there instead of hiding behind a claim
+ * this function alone can't tell has stopped being the whole story.
  */
 function sameClaim(a: TokenProvenance, b: TokenProvenance): boolean {
 	return (
@@ -73,25 +80,45 @@ function sameClaim(a: TokenProvenance, b: TokenProvenance): boolean {
 }
 
 /**
- * One list, in light's own order: each of light's entries either matches its counterpart at the same
- * path in dark, in which case it prints once, or the two rows print separately, each tagged with its
- * scheme. A path dark doesn't carry is dropped instead of printed unpaired, since `TokenSetSchema`
- * requires both schemes to declare the same primitive, semantic and shadow keys.
+ * One list, in light's own order, light-exclusive paths trailed by any dark-exclusive ones in dark's
+ * order: each of light's entries either matches its counterpart at the same path in dark, in which
+ * case it prints once, or the two rows print separately, each tagged with its scheme. Neither
+ * scheme's exclusive paths are dropped: `PrimitiveLayerSchema` and `SemanticLayerSchema` are plain
+ * records (`token-set.ts`) with no cross-scheme key check, so a path only one scheme declares — a
+ * dark-only semantic token, say — is real data, and it prints under that scheme's own label rather
+ * than vanishing because the other scheme has nothing to pair it with.
+ *
+ * `sameValue`, when a caller supplies one, adds a second bar to clearing as one row: same claim AND
+ * the same printed value. Every caller but `keyColourSection`'s leaves it unset, because `sameClaim`
+ * alone is already the right bar for a section with no Value column to disagree over.
  */
-function mergeSchemes<T extends TokenEntry>(light: readonly T[], dark: readonly T[]): T[] {
+function mergeSchemes<T extends TokenEntry>(
+	light: readonly T[],
+	dark: readonly T[],
+	sameValue?: (a: T, b: T) => boolean,
+): T[] {
+	const lightPaths = new Set(light.map((entry) => entry.path));
 	const darkByPath = new Map(dark.map((entry) => [entry.path, entry]));
 	const merged: T[] = [];
 
 	for (const entry of light) {
 		const counterpart = darkByPath.get(entry.path);
+		const collapses =
+			counterpart &&
+			sameClaim(entry.extensions, counterpart.extensions) &&
+			(!sameValue || sameValue(entry, counterpart));
 
-		if (counterpart && sameClaim(entry.extensions, counterpart.extensions)) {
+		if (collapses) {
 			merged.push(entry);
 			continue;
 		}
 
 		merged.push({ ...entry, scheme: 'light' });
 		if (counterpart) merged.push({ ...counterpart, scheme: 'dark' });
+	}
+
+	for (const entry of dark) {
+		if (!lightPaths.has(entry.path)) merged.push({ ...entry, scheme: 'dark' });
 	}
 
 	return merged;
@@ -116,6 +143,11 @@ function colourEntriesFor(primitives: ColorScheme['primitives']): ColourEntry[] 
 	}
 
 	return entries;
+}
+
+/** The Value cell `keyColourSection` prints, so a per-scheme edit that misses `$extensions` still splits there. */
+function sameColourValue(a: ColourEntry, b: ColourEntry): boolean {
+	return a.value === b.value;
 }
 
 function colourEntries(tokens: TokenSet): ColourEntry[] {
@@ -248,27 +280,43 @@ function seedFieldOf(extensions: TokenProvenance): string {
 	return extensions.seedField!;
 }
 
-function keyColourSection(
-	colours: readonly ColourEntry[],
-	semantic: readonly ColourEntry[],
-): string[] {
-	const toRow = (entry: ColourEntry) => [
-		entryPath(entry),
-		entry.value,
-		seedFieldOf(entry.extensions),
-		entry.extensions.rationale,
-	];
+/** Only the observed half of `entries`, so a caller merging for this table never sees a claim it can't print here. */
+function observedOnly(entries: readonly ColourEntry[]): ColourEntry[] {
+	return entries.filter((entry) => entry.extensions.provenance === 'observed');
+}
 
-	const rampRows = colours.filter((entry) => entry.extensions.provenance === 'observed').map(toRow);
+/** A Key colours row: the one section with a Value column, alongside every other section's Seed field and Rationale. */
+function toColourRow(entry: ColourEntry): string[] {
+	return [entryPath(entry), entry.value, seedFieldOf(entry.extensions), entry.extensions.rationale];
+}
+
+/**
+ * The one section with a Value column, so it's the one place a merge has to agree on the value as
+ * well as the claim (`mergeSchemes`'s `sameValue`). Filtering each scheme's own entries to `observed`
+ * before merging, rather than merging everything once and filtering after, keeps this section's
+ * pairing decision from being made by a row it will never print: a derived or invented step's value
+ * is expected to differ by scheme (see `sameClaim`), and letting that decide whether an *observed*
+ * counterpart pairs up would be answering this table's question with another table's data.
+ */
+function keyColourSection(tokens: TokenSet): string[] {
+	const rampRows = mergeSchemes(
+		observedOnly(colourEntriesFor(tokens.schemes.light.primitives)),
+		observedOnly(colourEntriesFor(tokens.schemes.dark.primitives)),
+		sameColourValue,
+	).map(toColourRow);
 
 	// An observed semantic alias (this fixture's `primary`, `sidebar-primary`) inherits its
 	// provenance straight from the ramp step it names (`semantic-layer.ts`'s `inherit`), so it is as
 	// much an observed key colour as that step is — the alias itself is the "value" a reader checks
 	// against the seed, the way a ramp step's own OKLCH channels are.
 	const aliasRows = sortedByKeys(
-		semantic.filter((entry) => entry.extensions.provenance === 'observed'),
+		mergeSchemes(
+			observedOnly(semanticEntriesFor(tokens.schemes.light.semantic)),
+			observedOnly(semanticEntriesFor(tokens.schemes.dark.semantic)),
+			sameColourValue,
+		),
 		(entry) => [entryPath(entry)],
-	).map(toRow);
+	).map(toColourRow);
 
 	return [
 		'## Key colours',
@@ -387,7 +435,7 @@ export function designDoc({ tokens, seed, repairs }: DesignDocInput): string {
 		[
 			'# Design doc',
 			'',
-			...keyColourSection(colours, semantic),
+			...keyColourSection(tokens),
 			'',
 			...interpretationSection(entries),
 			'',

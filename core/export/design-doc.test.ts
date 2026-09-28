@@ -6,9 +6,10 @@ import { toOklchCss } from '../css/oklch-css';
 import { BALANCED } from '../interpretation';
 import { createOklchScaleEngine } from '../oklch-scale-engine';
 import { CAMBIUM_NAMESPACE, type TokenProvenance } from '../provenance';
-import { SCHEME_NAMES } from '../scale-engine';
+import { SCHEME_NAMES, type SchemeName } from '../scale-engine';
 import { buildTokenSet } from '../semantic-layer';
-import type { TokenSet } from '../token-set';
+import { applyOverrides } from '../token-overrides';
+import { TokenSetSchema, type TokenSet } from '../token-set';
 import { designDoc, extensionsOf } from './design-doc';
 
 /**
@@ -99,15 +100,18 @@ const docLines = doc.split('\n');
 type ParsedTable = { headers: string[]; rows: string[][] };
 
 function splitRow(line: string): string[] {
-	// Strips the leading/trailing pipe rather than splitting on `|`, so an escaped `\|` inside a
-	// cell survives the split; unescaped after, once each cell is on its own.
+	// Strips the leading/trailing pipe rather than splitting on `|`, so an escaped `\|` or `\\` inside
+	// a cell survives the split; unescaped after, once each cell is on its own. Both escapes consume
+	// exactly the backslash and the character after it, the same two-at-a-time rule a markdown reader
+	// applies, so a `\\|` from `escapeCell`'s own backslash-then-pipe escaping resolves to one literal
+	// `\` followed by one live `|` — never to a lone survivor from the wrong pairing.
 	const inner = line.slice(1, -1);
 	const cells: string[] = [];
 	let current = '';
 
 	for (let i = 0; i < inner.length; i += 1) {
-		if (inner[i] === '\\' && inner[i + 1] === '|') {
-			current += '|';
+		if (inner[i] === '\\' && (inner[i + 1] === '|' || inner[i + 1] === '\\')) {
+			current += inner[i + 1];
 			i += 1;
 		} else if (inner[i] === '|') {
 			cells.push(current.trim());
@@ -384,6 +388,93 @@ describe('designDoc scheme handling', () => {
 		expect(ringRow, 'ring, which agrees across schemes, printed unnecessarily split').toBeDefined();
 		expect(ringRow![2]).toBe(lightRing.rationale);
 	});
+
+	/**
+	 * `brand.9` is the one ramp step `oklch-scale-engine.ts`'s `observed()` call marks straight from
+	 * the seed, so a `primitive` override on dark alone (`token-overrides.ts`'s `write`, which sets
+	 * l/c/h and never touches `$extensions`) leaves both schemes' claims identical while their printed
+	 * values diverge. A merge keyed on the claim alone would still collapse this to one row showing
+	 * only light's value, silently hiding the override this table exists to surface.
+	 */
+	it('splits an observed ramp step into light:/dark: rows when a per-scheme override edits its value without touching its claim', () => {
+		const overridden = applyOverrides(tokens, [
+			{ kind: 'primitive', scheme: 'dark', ramp: 'brand', step: 9, l: 0.7, c: 0.2, h: 330 },
+		]);
+
+		if (!overridden.ok) throw new Error(`applyOverrides rejected the repro: ${overridden.key}`);
+
+		const overriddenDoc = designDoc({ tokens: overridden.tokenSet, seed, repairs });
+		const overriddenTables = parseTables(overriddenDoc.split('\n'));
+		const keyColours = overriddenTables.find(
+			(t) => t.headers[0] === 'Token' && t.headers[1] === 'Value',
+		)!;
+
+		const lightRow = keyColours.rows.find((r) => r[0] === 'light:brand.9');
+		const darkRow = keyColours.rows.find((r) => r[0] === 'dark:brand.9');
+		const mergedRow = keyColours.rows.find((r) => r[0] === 'brand.9');
+
+		expect(lightRow, 'no light: row for the overridden step').toBeDefined();
+		expect(darkRow, 'no dark: row for the overridden step').toBeDefined();
+		expect(
+			mergedRow,
+			'an overridden step must not collapse into one unlabeled row',
+		).toBeUndefined();
+
+		const lightStep = tokens.schemes.light.primitives.brand!.find((s) => s.step === 9)!;
+
+		expect(lightRow![1]).toBe(toOklchCss({ l: lightStep.l, c: lightStep.c, h: lightStep.h }));
+		expect(darkRow![1]).toBe(toOklchCss({ l: 0.7, c: 0.2, h: 330 }));
+	});
+
+	/**
+	 * `SemanticLayerSchema` and `PrimitiveLayerSchema` are plain records (`token-set.ts`) with no
+	 * cross-scheme key check, so a token only one scheme declares is schema-valid. `TokenSetSchema
+	 * .safeParse` accepting this set proves that, rather than assuming it.
+	 */
+	it('prints a dark-only semantic token as a dark: row instead of dropping it', () => {
+		const darkOnlyExtensions: TokenProvenance = {
+			provenance: 'observed',
+			rationale: 'Present in dark only, to prove an unpaired path still prints',
+			seedField: 'keyColors',
+		};
+
+		const withDarkOnly: TokenSet = {
+			...tokens,
+			schemes: {
+				...tokens.schemes,
+				dark: {
+					...tokens.schemes.dark,
+					semantic: {
+						...tokens.schemes.dark.semantic,
+						'dark-only-token': {
+							alias: 'brand.9',
+							$extensions: { [CAMBIUM_NAMESPACE]: darkOnlyExtensions },
+						},
+					},
+				},
+			},
+		};
+
+		expect(TokenSetSchema.safeParse(withDarkOnly).success).toBe(true);
+
+		const withDarkOnlyDoc = designDoc({ tokens: withDarkOnly, seed, repairs });
+		const withDarkOnlyTables = parseTables(withDarkOnlyDoc.split('\n'));
+		const keyColours = withDarkOnlyTables.find(
+			(t) => t.headers[0] === 'Token' && t.headers[1] === 'Value',
+		)!;
+
+		const darkRow = keyColours.rows.find((r) => r[0] === 'dark:semantic.dark-only-token');
+		const unlabeledRow = keyColours.rows.find((r) => r[0] === 'semantic.dark-only-token');
+
+		expect(darkRow, 'no dark: row for the dark-only semantic token').toBeDefined();
+		expect(darkRow![1]).toBe('brand.9');
+		expect(darkRow![2]).toBe('keyColors');
+		expect(darkRow![3]).toBe(darkOnlyExtensions.rationale);
+		expect(
+			unlabeledRow,
+			'an unpaired dark token must not print without its scheme label',
+		).toBeUndefined();
+	});
 });
 
 describe('designDoc repairs', () => {
@@ -526,6 +617,83 @@ describe('designDoc traceability', () => {
 		}
 
 		// A traceability pass that checked nothing would pass vacuously.
+		expect(checked).toBeGreaterThan(0);
+	});
+
+	/**
+	 * Every path in one scheme, walked straight off that scheme rather than off `walked` — `walked`
+	 * skips `schemes` entirely (see `walkGeneric`'s own docblock) and only ever holds the top-level
+	 * mirror, which is light's copy, so it has no entry for a dark-only path or for dark's own value
+	 * where light and dark disagree. Resolving each row against its actual scheme, instead of against
+	 * whichever token in the whole set happens to carry a matching string, is what makes a wrong-row
+	 * mutation ((a) hard-coding a cell, (b) copying one row's field onto every row) fail here instead
+	 * of passing under `allowedAtoms`'s set-membership check above.
+	 */
+	function schemeWalk(scheme: TokenSet['schemes']['light']): Observed[] {
+		const out: Observed[] = [];
+
+		walkGeneric(scheme, '', out);
+
+		return out;
+	}
+
+	const byPathPerScheme: Record<SchemeName, Map<string, Observed>> = {
+		light: new Map(schemeWalk(tokens.schemes.light).map((entry) => [entry.path, entry])),
+		dark: new Map(schemeWalk(tokens.schemes.dark).map((entry) => [entry.path, entry])),
+	};
+	const plainByPath = new Map(walked.map((entry) => [entry.path, entry]));
+
+	function rowToken(cell: string): Observed {
+		const schemeMatch = SCHEME_PREFIX.exec(cell);
+		const scheme = schemeMatch ? (schemeMatch[1] as SchemeName) : undefined;
+		const path = schemeMatch ? schemeMatch[2]! : cell;
+		const entry = (scheme ? byPathPerScheme[scheme] : plainByPath).get(path);
+
+		if (!entry) {
+			throw new Error(`traceability: no token at path "${path}" (scheme ${scheme ?? 'plain'})`);
+		}
+
+		return entry;
+	}
+
+	it("ties every provenance-derived cell to its own row's token, not to any token in the set", () => {
+		// Key colours, Interpretation and Invented tokens are the three sections whose first column is
+		// a token path; Type and Contrast repairs key their rows on something else (a role, a scheme)
+		// and carry no per-token seed field, provenance or rationale cell to check this way.
+		const tokenTables = tables.filter(
+			(t) =>
+				t.headers[0] === 'Token' &&
+				(t.headers.includes('Seed field') || t.headers.includes('Provenance')),
+		);
+
+		expect(tokenTables.length).toBeGreaterThan(0);
+
+		let checked = 0;
+
+		for (const t of tokenTables) {
+			// Built once per table rather than branched on per row, so every `expect` below runs
+			// unconditionally over a column list already known to apply to this table.
+			const columns = (
+				[
+					['Seed field', (e: Observed) => e.extensions.seedField],
+					['Provenance', (e: Observed) => e.extensions.provenance],
+					['Rationale', (e: Observed) => e.extensions.rationale],
+				] as const
+			)
+				.map(([name, expected]) => ({ index: t.headers.indexOf(name), name, expected }))
+				.filter((column) => column.index !== -1);
+
+			for (const r of t.rows) {
+				const entry = rowToken(r[0]!);
+
+				for (const column of columns) {
+					expect(r[column.index], `row "${r[0]}" ${column.name}`).toBe(column.expected(entry));
+					checked += 1;
+				}
+			}
+		}
+
+		// A per-row pass that checked nothing would pass vacuously, same as the set-membership pass above.
 		expect(checked).toBeGreaterThan(0);
 	});
 });
@@ -694,5 +862,39 @@ describe('designDoc edge cases', () => {
 
 		expect(row).toBeDefined();
 		expect(row).toHaveLength(keyColours.headers.length);
+	});
+
+	/**
+	 * CodeQL js/incomplete-sanitization on #167: `escapeCell` escaped `|` without first escaping a
+	 * pre-existing `\`, so a rationale already containing `\|` printed as `\\|` — an escaped backslash
+	 * (consumed as one unit) followed by a live, unescaped pipe. Built by concatenation rather than as
+	 * one string literal, so the real backslash sits immediately before the real pipe with nothing
+	 * between them for a human transcribing the literal to lose.
+	 */
+	it('escapes a backslash-then-pipe pair and round-trips it back through the table parser unchanged', () => {
+		const rationale = [
+			'Has a backslash',
+			'\\',
+			'| pair right next to each other, to check escaping',
+		].join('');
+		const pipeAndBackslashDoc = designDoc({
+			tokens: withRationale(tokens, 'brand', 9, rationale),
+			seed,
+			repairs,
+		});
+
+		const tablesWithPipeAndBackslash = parseTables(pipeAndBackslashDoc.split('\n'));
+		const keyColours = tablesWithPipeAndBackslash.find(
+			(t) => t.headers[0] === 'Token' && t.headers[1] === 'Value',
+		)!;
+		const row = keyColours.rows.find((r) => r[0] === 'brand.9')!;
+
+		expect(row).toBeDefined();
+		// The header column count staying put is the direct evidence: a live, unescaped pipe from the
+		// old bug would have reopened the row and pushed every later cell one column further along.
+		expect(row).toHaveLength(keyColours.headers.length);
+		// The table parser is this test's stand-in for a markdown reader; what it recovers from the
+		// row is what a real one would render, not what escapeCell happened to write to the string.
+		expect(row[3]).toBe(rationale);
 	});
 });
