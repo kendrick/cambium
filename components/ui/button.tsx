@@ -14,12 +14,14 @@ const buttonVariants = cva(
 					'bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground',
 				ghost:
 					'hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50',
-				// Light hover was /20, composited to 3.95:1 against `text-destructive` at worst (#68).
-				// /10 clears 4.5:1 with margin (4.56:1 worst case), but that's light rest's own fraction,
-				// and a hover that matches rest loses the hover affordance. Light rest moved down to /5
-				// (4.90:1 worst case) instead, so hover (/10) stays darker than rest in both schemes, the
-				// same ordering dark already had (/20 rest, /30 hover). See core/semantic-map.ts's
-				// destructive paragraph.
+				// Light hover was /20, composited to 3.95:1 against `text-destructive` at worst
+				// (#68). /10 clears 4.5:1, only just: Chromium rounds the 10% alpha to 26/255 and
+				// paints 4.53:1 at worst, though `renderedContrast` over the unrounded blend reads
+				// 4.56:1. It's light rest's own fraction, and a hover that matches rest loses the
+				// hover affordance. Light rest moved down to /5 (4.90:1 worst case) instead, so
+				// hover (/10) stays darker than rest in both schemes, the same ordering dark
+				// already had (/20 rest, /30 hover). See core/semantic-map.ts's destructive
+				// paragraph.
 				destructive:
 					'bg-destructive/5 text-destructive hover:bg-destructive/10 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40',
 				link: 'text-foreground underline-offset-4 hover:underline',

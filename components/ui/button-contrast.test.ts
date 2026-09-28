@@ -8,7 +8,10 @@
  * `CONTRAST_PAIRS` entry declares (#68): `link` is body text straight on `background`, and
  * `destructive` is body text over a translucent tint of itself. Neither is checkable through
  * `checkContrast`, which only measures declared pairs, so this suite reads the component's actual
- * compiled classes and measures what a browser would composite and paint.
+ * compiled classes and measures the composite with `compositeOver`. Chromium rounds alpha to 1/255
+ * before it blends, so on light destructive hover this suite reads about 0.03 above what the
+ * browser paints (4.56:1 against 4.53:1). A ratio inside that gap needs
+ * `e2e/button-contrast.spec.ts`, which reads the painted pixels.
  *
  * The compile half follows `core/css/stylesheet.test.ts`'s hermetic technique: `source(none)` plus
  * `@source inline(...)` so the only candidates Tailwind sees are `buttonVariants`'s own output, fed

@@ -124,15 +124,16 @@ import type { RampName } from './scale-engine';
  * All four destructive states clear AA now, and not because this table moved a step.
  * `components/ui/button.tsx` paints the label over a tint of the same token, so the surface moves
  * toward the text as the tint deepens. Step 11 already beat stock shadcn's own hand-picked
- * `--destructive` in every state — shadcn clears none of the same four, at 4.05:1 and 3.31:1 in
- * light and 4.38:1 on dark hover — so compositing a colour with itself was always the defect, not
- * the step chosen. Step 12 would have cleared the state step 11 still missed, but it would equally
- * turn `--destructive` into a dark maroon and paint `aria-invalid:border-destructive` in it, which
- * stops the token doing the one job its name describes. #68 clears that last state a different way:
- * narrowing the light scheme's tints in the component rather than moving the step (fractions and
- * per-state figures in `components/ui/button.tsx`'s comment), worst case 4.56:1, measured via
- * `renderedContrast` against the composited surface in `components/ui/button-contrast.test.ts`. This
- * table's step stays at 11.
+ * `--destructive` in every state — as Chromium paints them, shadcn misses three of the same four,
+ * at 3.97:1 and 3.31:1 in light and 4.35:1 on dark hover — so compositing a colour with itself was
+ * always the defect, not the step chosen. Step 12 would have cleared the state step 11 still
+ * missed, but it would equally turn `--destructive` into a dark maroon and paint
+ * `aria-invalid:border-destructive` in it, which stops the token doing the one job its name
+ * describes. #68 clears that last state a different way: narrowing the light scheme's tints in the
+ * component rather than moving the step (fractions and per-state figures in
+ * `components/ui/button.tsx`'s comment), worst case 4.53:1 as Chromium paints it
+ * (`e2e/button-contrast.spec.ts`). `components/ui/button-contrast.test.ts` reads 4.56:1 for the
+ * same state, because it blends at unrounded alpha. This table's step stays at 11.
  *
  * `muted-foreground` on `muted` measures 4.40 to 4.44:1 in light for every seed, a fixed shortfall
  * in the neutral ramp's step 3 to step 11 spacing rather than a mapping choice. That one belongs to
