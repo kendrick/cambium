@@ -13,8 +13,9 @@ import { TokenSetSchema } from './token-set';
  * `z.literal(SCHEMA_VERSION)`, so an older or newer stamp fails with `schemaVersion` as the first
  * issue, ahead of whatever per-field complaints the shape mismatch would otherwise raise. No
  * migration is written, so a record from before a bump stays unreadable: the stores parse on the
- * way out, and `get` and `list` refuse it by name. Pre-release builds stamped records 4 through 10,
- * and a browser still holding one of those fails here the same way.
+ * way out, and `get` and `list` refuse it by name. Pre-release builds stamped records 1 through 10
+ * in older shapes. Stamps 2 through 10 fail here the same way, but a pre-release record stamped 1
+ * reuses the live number, so it fails on the fields its shape lacks rather than on the stamp.
  */
 export const SCHEMA_VERSION = 1;
 
