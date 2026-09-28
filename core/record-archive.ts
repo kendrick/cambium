@@ -26,7 +26,11 @@ export type DeserializeResult =
 
 const RECORD_ENTRY = 'record.json';
 
-/** The three types `lib/image-intake.ts` accepts, which is every type a stored image can be. */
+/**
+ * Mirrors `AcceptedImageType` in `lib/image-intake.ts`, which is every type intake can store. Core
+ * never imports from `lib/`, so a type added there has to be added here too, or an archive of a
+ * record holding it fails in `serializeRecord`.
+ */
 const EXTENSION_FOR: Record<string, string> = {
 	'image/webp': 'webp',
 	'image/png': 'png',
@@ -248,6 +252,7 @@ function sortKeys(value: unknown): unknown {
 	if (!isObject(value)) return value;
 
 	const sorted: Record<string, unknown> = {};
+	// `toSorted` is ES2023 and tsconfig targets ES2022. The array is fresh.
 	// oxlint-disable-next-line unicorn/no-array-sort
 	for (const key of Object.keys(value).sort()) sorted[key] = sortKeys(value[key]);
 

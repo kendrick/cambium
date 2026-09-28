@@ -156,6 +156,21 @@ function dataOffset(archive: Uint8Array, name: string): number {
 	throw new Error(`no local header for ${name}`);
 }
 
+/** Rewrites every occurrence of one name's bytes, in local and central headers alike. */
+function renameEverywhere(archive: Uint8Array, from: string, to: string): Uint8Array {
+	const source = strToU8(from);
+	const target = strToU8(to);
+	const copy = archive.slice();
+
+	if (source.length !== target.length) throw new Error('names must be the same length');
+
+	for (let i = 0; i + source.length <= copy.length; i += 1) {
+		if (source.every((byte, j) => copy[i + j] === byte)) copy.set(target, i);
+	}
+
+	return copy;
+}
+
 function flipByte(archive: Uint8Array, offset: number): Uint8Array {
 	const copy = archive.slice();
 	copy[offset] = copy[offset]! ^ 0xff;
@@ -348,6 +363,40 @@ describe('deserializeRecord', () => {
 			expect(error.message).toContain('images/img-1.webp');
 		});
 
+		// fflate reads both of these without complaint: a duplicate name keeps whichever entry came
+		// last, and it scans back past trailing bytes to find the end record.
+		it('an archive listing record.json twice as not-an-archive', () => {
+			const withTwin = rezip(serializeRecord(record), (entries) => {
+				entries['record.jsoX'] = strToU8('{}');
+			});
+			const error = refusal(renameEverywhere(withTwin, 'record.jsoX', 'record.json'));
+
+			expect(error.kind).toBe('not-an-archive');
+			expect(error.message).toContain('table of contents');
+		});
+
+		it('an archive with bytes after its end record as not-an-archive', () => {
+			const bytes = serializeRecord(record);
+			const padded = new Uint8Array(bytes.length + 3);
+			padded.set(bytes);
+			padded.set([1, 2, 3], bytes.length);
+			const error = refusal(padded);
+
+			expect(error.kind).toBe('not-an-archive');
+			expect(error.message).toContain('table of contents');
+		});
+
+		// 0xffffffff is the zip64 marker for "offset lives in the zip64 record". fflate reads past it
+		// without throwing when no zip64 locator is present.
+		it('an archive whose end record carries the zip64 offset marker as not-an-archive', () => {
+			const bytes = serializeRecord(record).slice();
+			bytes.fill(0xff, bytes.length - 22 + 16, bytes.length - 22 + 20);
+			const error = refusal(bytes);
+
+			expect(error.kind).toBe('not-an-archive');
+			expect(error.message).toContain('table of contents');
+		});
+
 		it('something that is not a zip as not-an-archive', () => {
 			expect(refusal(strToU8('this is a brand, honest')).kind).toBe('not-an-archive');
 		});
@@ -360,7 +409,7 @@ describe('deserializeRecord', () => {
 			expect(refusal(bytes).kind).toBe('missing-record');
 		});
 
-		it.each(['../x', '/etc/x', 'images\\x.webp', 'images/../../x.webp'])(
+		it.each(['../x', '/etc/x', 'images\\x.webp', 'images/../../x.webp', 'C:x', 'images//x', './x'])(
 			'an entry named %s as unsafe-path',
 			(name) => {
 				const bytes = rezip(serializeRecord(record), (entries) => {
@@ -391,6 +440,22 @@ describe('deserializeRecord', () => {
 			});
 
 			expect(refusal(bytes).kind).toBe('unsafe-path');
+		});
+
+		it('an image stored under an extension it cannot be restored from as invalid-record', () => {
+			const bytes = editRecordJson(
+				rezip(serializeRecord(record), (entries) => {
+					entries['images/img-1.gif'] = entries['images/img-1.webp']!;
+					delete entries['images/img-1.webp'];
+				}),
+				(json) => {
+					(json.images as { downscaled: string }[])[0]!.downscaled = 'images/img-1.gif';
+				},
+			);
+			const error = refusal(bytes);
+
+			expect(error.kind).toBe('invalid-record');
+			expect(error.message).toContain('images/img-1.gif');
 		});
 
 		it('a record naming an image the archive lacks as missing-image', () => {
@@ -426,8 +491,8 @@ describe('deserializeRecord', () => {
 });
 
 /**
- * `core/purity.test.ts` guards the modules in its table and discovers nothing new, and this wave
- * leaves that file alone, so this module's guard lives here.
+ * `core/purity.test.ts` guards only the modules in its table. This module's row there lands in a
+ * follow-up PR, so until then this is its guard, with the same three checks the central suite runs.
  */
 describe('record-archive purity', () => {
 	afterEach(() => {
@@ -437,6 +502,7 @@ describe('record-archive purity', () => {
 	it('round-trips with no browser global and fetch stubbed to throw', () => {
 		expect(typeof document).toBe('undefined');
 		expect(typeof window).toBe('undefined');
+		expect(typeof localStorage).toBe('undefined');
 
 		vi.stubGlobal('fetch', () => {
 			throw new Error('record-archive reached for the network');

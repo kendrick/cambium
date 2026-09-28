@@ -94,7 +94,12 @@ const FAILURE_ARCHIVES: Record<ArchiveErrorKind, Uint8Array> = {
 describe('importRecordArchive', () => {
 	it('writes one record under a fresh id at FIRST_REVISION and leaves the original id untouched', async () => {
 		const { store, put } = spyStore();
-		const original = await store.put(makeRecord());
+		const inserted = await store.put(makeRecord());
+		// A second commit moves the source past FIRST_REVISION, so the archive carries a revision
+		// that import has to reset.
+		const original = await store.put({ ...inserted, brandUrl: 'acme.org' });
+
+		expect(original.revision).toBeGreaterThan(FIRST_REVISION);
 
 		put.mockClear();
 
@@ -110,12 +115,15 @@ describe('importRecordArchive', () => {
 		expect(result.id).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
 		expect(result.id).not.toBe(original.id);
 		expect(put).toHaveBeenCalledTimes(1);
+		// Asserted on what `put` received, because `nextCommit` stamps FIRST_REVISION over any insert
+		// anyway, so the stored record alone can't show whether import reset the revision.
+		expect(put.mock.calls[0]![0].revision).toBe(FIRST_REVISION);
 
 		expect(await store.get(original.id)).toEqual(original);
 
 		const imported = await store.get(result.id);
-		const { id: _droppedId, ...importedRest } = imported!;
-		const { id: _droppedOriginalId, ...originalRest } = original;
+		const { id: _droppedId, revision: _importedRevision, ...importedRest } = imported!;
+		const { id: _droppedOriginalId, revision: _originalRevision, ...originalRest } = original;
 
 		expect(imported!.revision).toBe(FIRST_REVISION);
 		expect(importedRest).toEqual(originalRest);
@@ -155,7 +163,8 @@ describe('importRecordArchive', () => {
 		expect(first.id).not.toBe(second.id);
 
 		const all = await store.list();
-		// `list` makes no ordering promise, so the ids are compared as a set.
+		// `list` makes no ordering promise, so the ids are compared as a set. `toSorted` is ES2023 and
+		// tsconfig targets ES2022, and both arrays are fresh.
 		// oxlint-disable-next-line unicorn/no-array-sort
 		expect(all.map((record) => record.id).sort()).toEqual([first.id, second.id].sort());
 	});
