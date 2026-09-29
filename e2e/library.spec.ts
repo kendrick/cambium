@@ -21,15 +21,8 @@ function stored(
 const library = (page: Page) => page.getByRole('region', { name: 'Your brands' });
 const row = (page: Page, id: string) => page.locator(`[data-library-row="${id}"]`);
 
-/**
- * Seeds rows through raw IndexedDB, after the library has opened the database, so the app's own
- * upgrade creates the store rather than this file. Raw because a palette needs a version with a
- * seed, and producing one through the interface means a mocked generation per scenario.
- */
-async function seedRows(page: Page, rows: unknown[]): Promise<void> {
-	await page.goto('/');
-	await expect(library(page)).toBeVisible();
-
+/** Writes rows through raw IndexedDB, over whatever the store already holds under their ids. */
+async function writeRows(page: Page, rows: unknown[]): Promise<void> {
 	await page.evaluate(
 		async ([databaseName, storeName, values]) => {
 			const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -51,10 +44,46 @@ async function seedRows(page: Page, rows: unknown[]): Promise<void> {
 		},
 		[DATABASE_NAME, RECORD_STORE_NAME, rows] as const,
 	);
+}
 
+/**
+ * Seeds rows through raw IndexedDB, after the library has opened the database, so the app's own
+ * upgrade creates the store rather than this file. Raw because a palette needs a version with a
+ * seed, and producing one through the interface means a mocked generation per scenario.
+ */
+async function seedRows(page: Page, rows: unknown[]): Promise<void> {
+	await page.goto('/');
+	await expect(library(page)).toBeVisible();
+	await writeRows(page, rows);
 	await page.reload();
 	await expect(library(page)).toBeVisible();
 }
+
+/** Every row IndexedDB holds, read without the app's own store module. */
+async function readRows(page: Page): Promise<Row[]> {
+	return page.evaluate(
+		async ([databaseName, storeName]) => {
+			const db = await new Promise<IDBDatabase>((resolve, reject) => {
+				const request = indexedDB.open(databaseName);
+				request.addEventListener('success', () => resolve(request.result));
+				request.addEventListener('error', () => reject(request.error));
+			});
+
+			try {
+				return await new Promise<Row[]>((resolve, reject) => {
+					const request = db.transaction(storeName, 'readonly').objectStore(storeName).getAll();
+					request.addEventListener('success', () => resolve(request.result as Row[]));
+					request.addEventListener('error', () => reject(request.error));
+				});
+			} finally {
+				db.close();
+			}
+		},
+		[DATABASE_NAME, RECORD_STORE_NAME] as const,
+	);
+}
+
+const bytesHeld = (rows: Row[]) => rows.reduce((sum, held) => sum + JSON.stringify(held).length, 0);
 
 /** The composited pixel at a swatch's centre, which is what a person sees. */
 async function centrePixel(target: Locator): Promise<[number, number, number]> {
@@ -154,4 +183,112 @@ test('the library shows the storage figure the browser reports', async ({ page }
 	const reported = Number(await usage.getAttribute('data-storage-usage'));
 	const measured = await page.evaluate(async () => (await navigator.storage.estimate()).usage);
 	expect(reported).toBe(measured);
+});
+
+test('a record can be named and renamed', async ({ page }) => {
+	const record = stored(uiWikipedia, { brandUrl: 'wikipedia.org' });
+	await seedRows(page, [record]);
+	const item = row(page, record.id);
+
+	await item.getByRole('button', { name: 'Rename wikipedia.org' }).click();
+	await item.getByRole('textbox', { name: 'Name for wikipedia.org' }).fill('  Encyclopedia  ');
+	await item.getByRole('button', { name: 'Save name' }).click();
+	await expect(item.locator('[data-library-name]')).toHaveText('Encyclopedia');
+
+	// Checked in storage, as written. The seeded row carried no incarnation, so this write is also
+	// the one that gives it one.
+	const [named] = await readRows(page);
+	expect(named).toMatchObject({ name: 'Encyclopedia', schemaVersion: 1, revision: 2 });
+	expect(named!.incarnation).toMatch(/^[0-9a-f-]{36}$/);
+
+	await item.getByRole('button', { name: 'Rename Encyclopedia' }).click();
+	await item.getByRole('textbox', { name: 'Name for Encyclopedia' }).fill('Free Knowledge');
+	await item.getByRole('button', { name: 'Save name' }).click();
+	await expect(item.locator('[data-library-name]')).toHaveText('Free Knowledge');
+	await page.reload();
+	await expect(row(page, record.id).locator('[data-library-name]')).toHaveText('Free Knowledge');
+
+	// Blanking the field clears the name, so the key goes and the label falls back to the brand site.
+	// The field gets spaces, because an empty one clears even with no trim in `rename`, and the schema
+	// refuses a name of spaces.
+	await row(page, record.id).getByRole('button', { name: 'Rename Free Knowledge' }).click();
+	await row(page, record.id).getByRole('textbox', { name: 'Name for Free Knowledge' }).fill('   ');
+	await row(page, record.id).getByRole('button', { name: 'Save name' }).click();
+	await expect(row(page, record.id).locator('[data-library-name]')).toHaveText('wikipedia.org');
+	expect((await readRows(page))[0]).not.toHaveProperty('name');
+});
+
+test('a rename built on a copy another tab overtook is refused and the list refreshed', async ({
+	page,
+}) => {
+	const record = stored(uiWikipedia, { name: 'Listed' });
+	await seedRows(page, [record]);
+	const item = row(page, record.id);
+
+	// Another writer lands after this page listed the record, at the next revision.
+	const [held] = await readRows(page);
+	await writeRows(page, [{ ...held, name: 'Elsewhere', revision: 2 }]);
+
+	await item.getByRole('button', { name: 'Rename Listed' }).click();
+	await item.getByRole('textbox', { name: 'Name for Listed' }).fill('Mine');
+	await item.getByRole('button', { name: 'Save name' }).click();
+
+	// The form stays open over the refreshed copy, so the person can save again from what is stored.
+	await expect(item.getByRole('alert')).toContainText('changed in another tab');
+	await expect(item.getByRole('textbox', { name: 'Name for Elsewhere' })).toBeVisible();
+	await item.getByRole('button', { name: 'Cancel' }).click();
+	await expect(item.locator('[data-library-name]')).toHaveText('Elsewhere');
+	expect((await readRows(page))[0]).toMatchObject({ name: 'Elsewhere', revision: 2 });
+});
+
+test('deleting a record removes it from the library and frees what it held', async ({ page }) => {
+	const kept = stored(uiWikipedia, { name: 'Kept' });
+	const removed = stored(photoWindow, { name: 'Removed' });
+	await seedRows(page, [kept, removed]);
+	const before = await readRows(page);
+	const removedBytes = JSON.stringify(before.find((held) => held.id === removed.id)).length;
+
+	// Cancelling deletes nothing.
+	await page.getByRole('button', { name: 'Delete Removed' }).click();
+	await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+	await expect(page.getByRole('dialog')).toHaveCount(0);
+	expect(await readRows(page)).toHaveLength(2);
+
+	await page.getByRole('button', { name: 'Delete Removed' }).click();
+	await page.getByRole('dialog').getByRole('button', { name: 'Delete brand' }).click();
+
+	await expect(row(page, removed.id)).toHaveCount(0);
+	await expect(library(page).getByRole('heading', { name: 'Your brands' })).toBeFocused();
+
+	const after = await readRows(page);
+	expect(after.map((held) => held.id)).toEqual([kept.id]);
+	expect(bytesHeld(after)).toBe(bytesHeld(before) - removedBytes);
+
+	// Nothing writes between the refresh the delete triggered and this read, so the two agree.
+	const usage = library(page).locator('[data-storage-usage]');
+	const measured = await page.evaluate(async () => (await navigator.storage.estimate()).usage);
+	await expect(usage).toHaveAttribute('data-storage-usage', String(measured));
+});
+
+test('deleting the last record brings back the first-run state', async ({ page }) => {
+	const only = stored(photoWindow, { name: 'Only' });
+	await seedRows(page, [only]);
+
+	await page.getByRole('button', { name: 'Delete Only' }).click();
+	await page.getByRole('dialog').getByRole('button', { name: 'Delete brand' }).click();
+
+	await expect(library(page).locator('[data-library-first-run]')).toBeVisible();
+	expect(await readRows(page)).toEqual([]);
+});
+
+test('an unreadable record can be deleted too', async ({ page }) => {
+	const unreadable = { ...stored(photoWindow), schemaVersion: 10 };
+	await seedRows(page, [unreadable]);
+
+	await row(page, unreadable.id).getByRole('button', { name: 'Delete unreadable brand' }).click();
+	await expect(page.getByRole('dialog')).toContainText("can't open");
+	await page.getByRole('dialog').getByRole('button', { name: 'Delete brand' }).click();
+
+	await expect(library(page).locator('[data-library-first-run]')).toBeVisible();
+	expect(await readRows(page)).toEqual([]);
 });

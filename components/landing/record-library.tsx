@@ -5,14 +5,30 @@ import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 
 import { formatBytes } from '@/lib/format-bytes';
 
 import { tokenSetForVersion } from '../../app/state/workspace-store';
-import { listStoredRows, type StoredRow } from '../../app/storage/indexed-db-record-store';
+import {
+	closeIndexedDbRecordStore,
+	createIndexedDbRecordStore,
+	listStoredRows,
+	type StoredRow,
+} from '../../app/storage/indexed-db-record-store';
+import { createPerOperationRecordStore } from '../../app/storage/per-operation-record-store';
+import { StaleRecordWriteError } from '../../app/storage/record-store';
 import { estimateStorageUsage, type StorageUsage } from '../../app/storage/storage-estimate';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
+import type { BrandRecord } from '../../core/brand-record';
 import type { ScaleEngine } from '../../core/scale-engine';
 
 import { libraryOrder, recordLabel } from './library/library-order';
 import { type LibraryItem, LibraryRow } from './library/library-row';
 import { paletteSwatches } from './library/palette';
+import type { RenameOutcome } from './library/rename-form';
+
+// A connection per call, as the workspace does. One held while this page sits idle would block a
+// later tab's upgrade and the e2e wipe.
+const records = createPerOperationRecordStore(
+	createIndexedDbRecordStore,
+	closeIndexedDbRecordStore,
+);
 
 type Listing =
 	| { kind: 'loading' }
@@ -45,6 +61,7 @@ export function RecordLibrary({ firstRun }: { firstRun?: ReactNode }) {
 	const headingId = useId();
 	const [listing, setListing] = useState<Listing>({ kind: 'loading' });
 	const live = useRef(true);
+	const headingRef = useRef<HTMLHeadingElement>(null);
 
 	const refresh = useCallback(async () => {
 		let next: Listing;
@@ -64,6 +81,47 @@ export function RecordLibrary({ firstRun }: { firstRun?: ReactNode }) {
 		if (live.current) setListing(next);
 	}, []);
 
+	// Built on the copy the list read, so `put` refuses it if another tab wrote since.
+	const rename = useCallback(
+		async (record: BrandRecord, typed: string): Promise<RenameOutcome> => {
+			const name = typed.trim();
+			const { name: _previous, ...unnamed } = record;
+
+			try {
+				await records.put(name ? { ...unnamed, name } : unnamed);
+			} catch (error) {
+				await refresh();
+				return {
+					ok: false,
+					message:
+						error instanceof StaleRecordWriteError
+							? "This brand changed in another tab. The list now shows what's saved, so try again."
+							: "The new name couldn't be saved. Try again.",
+				};
+			}
+
+			await refresh();
+			return { ok: true };
+		},
+		[refresh],
+	);
+
+	const remove = useCallback(
+		async (id: string) => {
+			try {
+				await records.delete(id);
+			} catch (error) {
+				await refresh();
+				throw error;
+			}
+
+			await refresh();
+			// The deleted row held focus. Moving it to the heading keeps a keyboard user off <body>.
+			headingRef.current?.focus();
+		},
+		[refresh],
+	);
+
 	useEffect(() => {
 		live.current = true;
 		void refresh();
@@ -81,7 +139,7 @@ export function RecordLibrary({ firstRun }: { firstRun?: ReactNode }) {
 			className="flex w-full flex-col gap-3"
 			data-library={listing.kind}
 		>
-			<h2 className="text-lg font-semibold" id={headingId} tabIndex={-1}>
+			<h2 className="text-lg font-semibold" id={headingId} ref={headingRef} tabIndex={-1}>
 				Your brands
 			</h2>
 			{listing.kind === 'unavailable' ? (
@@ -100,7 +158,7 @@ export function RecordLibrary({ firstRun }: { firstRun?: ReactNode }) {
 			) : (
 				<ul className="flex flex-col gap-2">
 					{listing.items.map((item) => (
-						<LibraryRow item={item} key={item.id} />
+						<LibraryRow item={item} key={item.id} onDelete={remove} onRename={rename} />
 					))}
 				</ul>
 			)}
