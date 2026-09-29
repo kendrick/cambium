@@ -51,7 +51,7 @@ const redPrimary = version([
 ]);
 
 describe('tokenSetForVersion', () => {
-	// The library's strip and the workspace are two consumers of one version. They must agree.
+	// The library's strip and the workspace both read one version, so they must show the same tokens.
 	it('returns the token set the workspace shows on opening that version', () => {
 		const engine = createOklchScaleEngine();
 		const record: BrandRecord = {

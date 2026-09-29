@@ -16,7 +16,7 @@ A required field would give up the only benefit of staying at 1. Every stored re
 
 ### A Sidecar Name Store
 
-A second IndexedDB object store, or `localStorage` keyed by id, avoids the schema change but creates a second source of truth. A delete isn't atomic across the two, and names don't travel in the archive. Ruling A2 rejected it on 2026-09-29.
+A second IndexedDB object store, or `localStorage` keyed by id, avoids the schema change but creates a second source of truth. A delete isn't atomic across the two, and names don't travel in the archive. A rename there wouldn't move the record's revision, though, so it wouldn't fail an open workspace tab's next commit the way a rename on the record does. Ruling A2 rejected it on 2026-09-29.
 
 ### A Per-Id Revision Floor Instead of an Incarnation
 

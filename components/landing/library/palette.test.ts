@@ -51,8 +51,8 @@ describe('paletteSwatches', () => {
 		expect(paletteSwatches(tokenSet).map((swatch) => swatch.token)).toEqual([...PALETTE_TOKENS]);
 	});
 
-	// Read back through culori's parser rather than compared as a string, so the check is on the
-	// colour a CSS consumer would get, not on how this module happens to print it.
+	// Parsed back through culori's `readOklch`, so the assertion checks the colour a CSS parser reads
+	// rather than the exact string `toOklchCss` prints.
 	it('carries the version’s current primary, override included, as a colour CSS parses', () => {
 		const primary = paletteSwatches(tokenSet).find((swatch) => swatch.token === 'primary');
 		const parsed = readOklch(primary!.css);

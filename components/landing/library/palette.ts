@@ -3,9 +3,9 @@ import { resolveScheme } from '../../../core/resolve-scheme';
 import type { TokenSet } from '../../../core/token-set';
 
 /**
- * Surface to ink, with the brand's own colour in the middle where the eye lands. Semantic tokens
- * rather than ramp steps, because a person recognises a brand by what its colours are used for.
- * Seven is what fits in a library row at phone width.
+ * Ordered surface to ink, with `primary` in the middle. Semantic tokens rather than ramp steps,
+ * because a person recognises a brand by what its colours are used for. Seven leaves each swatch
+ * 2rem wide at the strip's `max-w-56` cap.
  */
 export const PALETTE_TOKENS = [
 	'background',
@@ -19,7 +19,9 @@ export const PALETTE_TOKENS = [
 
 export type PaletteSwatch = { token: (typeof PALETTE_TOKENS)[number]; css: string };
 
-/** The light scheme, since that's the one the workspace and every export open on. */
+/**
+ * Reads the light scheme, which the workspace opens on and the exported stylesheet puts on `:root`.
+ */
 export function paletteSwatches(tokenSet: TokenSet): PaletteSwatch[] {
 	const resolved = resolveScheme(tokenSet.schemes.light);
 

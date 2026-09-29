@@ -390,6 +390,25 @@ const ROWS: Row[] = [
 		},
 	},
 	{
+		name: 'a write refused because another tab deleted the brand offers nothing to save onto',
+		failure: storageFailure(
+			new StaleRecordWriteError('3f2504e0-4f89-41d3-9a0c-0305e82c3301', {
+				storedVersions: 0,
+				incomingVersions: 1,
+				storedRevision: 0,
+				incomingRevision: 1,
+				incarnation: 'deleted',
+			}),
+		),
+		repairUsed: false,
+		expected: {
+			kind: 'stale-record-write',
+			message:
+				"The new version is ready, but this brand was deleted in another tab or window, so there's no saved copy to add it to.",
+			recovery: 'none',
+		},
+	},
+	{
 		name: 'a clock behind the record offers to save again',
 		failure: storageFailure(new RecordStampedAheadError('2999-01-01T00:00:00.000Z')),
 		repairUsed: false,
