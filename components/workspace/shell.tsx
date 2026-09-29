@@ -58,6 +58,9 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	// moves one, so skipping the repair pass costs nothing in accuracy.
 	const contrastByOverride = useMemo(() => {
 		if (!tokenSet || !derived?.ok || !draftSeed) return {};
+		// Only alias overrides get a verdict, and rebuilding the baseline is a second full derivation,
+		// so skip it on the common keystroke where no alias is overridden.
+		if (!Object.values(overrides).some((override) => override.kind === 'alias')) return {};
 		return attributeContrastFailures(
 			tokenSet,
 			Object.values(overrides),

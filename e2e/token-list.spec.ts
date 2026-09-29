@@ -1206,7 +1206,7 @@ function parseVerdictLine(text: string): { label: string; wcag: number; target: 
 }
 
 function verdictOf(row: Locator): Locator {
-	return row.locator('[data-contrast-verdict] li');
+	return row.locator('[data-contrast-verdict] [data-contrast-line]');
 }
 
 /**
@@ -1233,7 +1233,7 @@ test('setting semantic.background to brand.9 shows the AA fails it causes, agree
 
 	const row = page.locator('[data-token="semantic.background"]');
 	const alias = page.getByLabel('background alias', { exact: true });
-	const verdict = row.locator('[data-contrast-verdict] li');
+	const verdict = row.locator('[data-contrast-verdict] [data-contrast-line]');
 	const revert = row.getByRole('button', { name: 'Revert background override', exact: true });
 
 	await expect(alias).toHaveValue('neutral.1');

@@ -126,15 +126,17 @@ export function TokenRow({
 			</div>
 
 			{contrastFailures ? (
+				// <output> is the live region (its implicit role is status), and it admits only phrasing
+				// content, so each failing pair is a block-level span rather than a list item.
 				<output aria-live="polite" className="text-destructive block text-xs">
 					{contrastFailures.length > 0 ? (
-						<ul data-contrast-verdict>
+						<span data-contrast-verdict className="block">
 							{contrastFailures.map((failure) => (
-								<li key={failure.label}>
+								<span key={failure.label} data-contrast-line className="block">
 									{failure.label}: {failure.wcag.toFixed(2)}:1, needs {failure.target}
-								</li>
+								</span>
 							))}
-						</ul>
+						</span>
 					) : null}
 				</output>
 			) : null}
