@@ -275,10 +275,6 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 				</Alert>
 			) : null}
 
-			{record ? (
-				<ReferenceStrip images={record.images} keyColors={seed?.keyColors ?? null} />
-			) : null}
-
 			<label className="flex items-center justify-between gap-2 text-sm">
 				Interpretation
 				<span className="flex items-center gap-2">
@@ -353,11 +349,19 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 			</div>
 
 			{seed === null || record === null ? (
-				<p className="text-muted-foreground text-sm">
-					This record has no versions yet, so there is no seed to show.
-				</p>
+				<>
+					{record ? <ReferenceStrip images={record.images} keyColors={null} /> : null}
+					<p className="text-muted-foreground text-sm">
+						This record has no versions yet, so there is no seed to show.
+					</p>
+				</>
 			) : (
 				<ul className="min-h-0 overflow-y-auto rounded border px-2">
+					{/* Inside the scroller rather than pinned above it: the rail is capped at half the
+					    viewport, and a pinned strip left a 768×500 window 11px of fields (#170). */}
+					<li className="border-b py-2">
+						<ReferenceStrip images={record.images} keyColors={seed.keyColors} />
+					</li>
 					<KeyColorRows
 						record={record}
 						keyColors={seed.keyColors}

@@ -16,9 +16,9 @@ function outlinesFor(imageId: string, keyColors: readonly KeyColor[] | null): Re
 }
 
 /**
- * Pinned above the scrolling field list so the brand stays on screen while a colour is tuned
- * (#155). The alt names position and tag because a stored record keeps no filename, and storing
- * one is a schema change #36's boundary rules out.
+ * The record's reference images, so a colour is tuned with the brand in view (#155). The alt names
+ * position and tag because a stored record keeps no filename, and storing one is a schema change
+ * #36's boundary rules out.
  */
 export function ReferenceStrip({
 	images,

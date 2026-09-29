@@ -670,6 +670,37 @@ test('each key colour with a region outlines it on its own thumbnail, at the sto
 	).toHaveCount(1);
 });
 
+/**
+ * `main`'s field-list heights before the strip existed, as rendered boxes, measured at 294d462 with
+ * this spec's own fixture. The rail is capped at half the viewport, so anything pinned above the list comes out of
+ * these; at 768×500 a pinned strip left the fields 11px (#170's review).
+ */
+const FIELD_LIST_FLOOR = [
+	{ width: 768, height: 400, minHeight: 37 },
+	{ width: 1280, height: 720, minHeight: 197 },
+] as const;
+
+test('the reference strip costs the seed field list none of its height on a short window', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed();
+	await seedWorkspaceRecord(page, record);
+
+	for (const { width, height, minHeight } of FIELD_LIST_FLOOR) {
+		await page.setViewportSize({ width, height });
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+		const firstField = page.locator('[data-seed-field]').first();
+		await expect(firstField).toBeAttached();
+		await expect(page.locator('[data-reference-strip] img')).toHaveCount(2);
+		// The scroller the fields live in, found from a field rather than by class name. Its rendered
+		// box, border included, is the unit the floors above were measured in.
+		const fieldList = firstField.locator('xpath=ancestor::ul[1]');
+		const { height: listHeight } = await requireBox(fieldList);
+		expect(listHeight, `${width}×${height} field list`).toBeGreaterThanOrEqual(minHeight);
+	}
+});
+
 test('a key colour with no region draws no outline, and a record with no versions still shows its images', async ({
 	page,
 }) => {
