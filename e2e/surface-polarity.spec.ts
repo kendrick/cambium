@@ -18,10 +18,11 @@ import { expect, test } from './fixtures';
  * `images[].downscaled` is a base64 data URL: PNG or JPEG when intake passed the file through, WebP
  * when it re-encoded. Node ships no image decoder, and a Node-side one wouldn't match a browser's,
  * so the pixels `deriveSurfacePolarity` sees for a stored image only exist here. Each fixture is
- * painted, encoded as a stored type at intake's own quality, turned into a data URL, and decoded
- * the way `decodeInBrowser` in `app/readers/local-reader.ts` does. Chromium's pixels then go to the
- * core in Node. The assertions read those pixels, never the painted bands, so codec noise is part
- * of what's measured.
+ * painted and encoded as one stored type: WebP at intake's `WEBP_QUALITY`, or PNG or JPEG from
+ * Chromium's own encoder, standing in for an uploader's file that intake passes through. The bytes
+ * become a data URL, decoded the way `decodeInBrowser` in `app/readers/local-reader.ts` does.
+ * Chromium's pixels then go to the core in Node. The assertions read those pixels, never the
+ * painted bands, so codec noise is part of what's measured.
  *
  * No route uses the module yet, so this runs on a `setContent` page, as `stylesheet-dark.spec.ts`
  * does. Like every spec here it needs `pnpm build` first.

@@ -41,8 +41,10 @@ const BUCKET_SHIFT = 4;
 
 /**
  * Two grids, the second shifted half a bucket. A flat colour with codec noise near a bucket edge
- * splits across two buckets on one grid and sits whole on the other. Intake's lossy WebP re-encode
- * adds exactly that noise.
+ * splits across two buckets on one grid and sits whole on the other, provided each channel's values
+ * stay within 8 of each other and every channel that crosses an edge crosses one on the same grid.
+ * Wider noise, or channels crossing edges on different grids, splits it on both. Intake's lossy WebP
+ * re-encode adds this kind of noise.
  */
 const GRID_OFFSETS = [0, 1 << (BUCKET_SHIFT - 1)] as const;
 
