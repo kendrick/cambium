@@ -6,7 +6,12 @@ import { type BrandRecord, type BrandVersion, SCHEMA_VERSION } from '../../core/
 import type { BrandSeed } from '../../core/brand-seed';
 import { checkContrast } from '../../core/contrast/check';
 import { withContrastRepairs } from '../../core/contrast/repair';
-import { BALANCED } from '../../core/interpretation';
+import {
+	BALANCED,
+	EXPRESSIVE,
+	FAITHFUL,
+	type InterpretationParams,
+} from '../../core/interpretation';
 import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
 import type { RampSet, ScaleEngine, ScaleEngineResult } from '../../core/scale-engine';
 import { defaultSeedPins, repairPinsFor } from '../../core/seed-pins';
@@ -21,7 +26,9 @@ import {
 	CommitAbandonedError,
 	type CommitProvenance,
 	createWorkspaceStore,
+	type Interpretation,
 	OverrideRejectedError,
+	ParamsTunedError,
 	RecordStampedAheadError,
 	StaleWorkspaceError,
 } from './workspace-store';
@@ -176,6 +183,21 @@ function brandHue(result: ScaleEngineResult | null): number {
 	}
 
 	return result.schemes.light.brand[8]!.h;
+}
+
+/**
+ * Reads the one number `core/interpretation.test.ts` already proved moves between Faithful and
+ * Expressive. `surfaceTinting` differs across all three presets too, but it only ever reaches a
+ * shadow's chroma (`core/interpretation.ts`'s own docblock), not a token this helper can read as
+ * directly as neutral step 9—so `neutralTinting` is the plainest number to check, not the only
+ * field a preset switch has to move.
+ */
+function neutralChroma(result: ScaleEngineResult | null): number {
+	if (!result?.ok) {
+		throw new Error(`expected a derived ramp set, got ${result?.error.kind ?? 'nothing'}`);
+	}
+
+	return result.schemes.light.neutral[8]!.c;
 }
 
 /** Counts writes so a test can assert that an edit made none. */
@@ -1856,14 +1878,15 @@ describe('a pinned key colour and contrast repair (#25)', () => {
 	});
 });
 
-describe('a pinned field and a preset switch (#25)', () => {
+describe('a pinned field and a preset switch (#25, #37)', () => {
 	/**
-	 * Holds structurally for now: `PRESET_PARAMS` maps every preset to `BALANCED`
-	 * (`workspace-store.ts`'s own docblock), and `selectPreset` never touches `draftSeed` for any
-	 * field, pinned or not. Both a pinned and an unpinned key colour run, so #25's guarantee is
-	 * checked directly rather than inferred from a mechanism that would hold either way. Once #37
-	 * gives a preset the power to move a seed value, the pinned case is what catches a preset that
-	 * ignores the pin.
+	 * `PRESET_PARAMS` now maps each name to its own preset (#37), so this holds for the reason #25
+	 * actually asks for rather than because every preset happened to agree: `selectPreset` never
+	 * touches `draftSeed`, and step 9's anchor placement (`ScaleEngine.generate`'s own contract, see
+	 * `core/scale-engine.ts`) is arithmetic on the seed's own key colour, not on `InterpretationParams`.
+	 * Both a pinned and an unpinned key colour run, so the guarantee is checked directly rather than
+	 * inferred from a mechanism that would hold either way. The sibling test below is the other half
+	 * of #37's own claim: a preset switch does move a token value now that the three presets differ.
 	 */
 	it.each([
 		['pinned', true],
@@ -1884,6 +1907,19 @@ describe('a pinned field and a preset switch (#25)', () => {
 			expect(store.getState().draftSeed).toEqual(before.seed);
 			expect(brandHue(store.getState().derived)).toBe(before.hue);
 		}
+	});
+
+	it('moves a neutral chroma value on a Faithful to Expressive switch while the pinned hue holds', () => {
+		const { store } = openWorkspace(makeRecord([makeVersion({ interpretation: 'faithful' })]));
+		const before = {
+			hue: brandHue(store.getState().derived),
+			chroma: neutralChroma(store.getState().derived),
+		};
+
+		store.getState().selectPreset('expressive');
+
+		expect(brandHue(store.getState().derived)).toBe(before.hue);
+		expect(neutralChroma(store.getState().derived)).toBeGreaterThan(before.chroma);
 	});
 });
 
@@ -1908,4 +1944,157 @@ describe('editing re-derives with no network call (#25)', () => {
 
 		expect(store.getState().draftPins).toEqual(['keyColors.0']);
 	});
+});
+
+describe('tuning a parameter live (#37)', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('starts null, and once tuned holds the active preset’s params with the moved field replaced', () => {
+		const { store } = openWorkspace(makeRecord([makeVersion({ interpretation: 'faithful' })]));
+
+		expect(store.getState().tunedParams).toBeNull();
+
+		store.getState().tuneParam('accentRotation', 90);
+
+		// `FAITHFUL` rather than `BALANCED`, because the active version's preset is Faithful: a tuned
+		// session starts from whichever preset is actually selected, not from a fixed default.
+		expect(store.getState().tunedParams).toEqual({ ...FAITHFUL, accentRotation: 90 });
+	});
+
+	it('layers a second tuned field onto the first rather than reverting it to the preset', () => {
+		const { store } = openWorkspace();
+
+		store.getState().tuneParam('neutralTinting', 0.9);
+		store.getState().tuneParam('chromaSpread', 1.5);
+
+		expect(store.getState().tunedParams).toMatchObject({
+			neutralTinting: 0.9,
+			chromaSpread: 1.5,
+		});
+	});
+
+	it('returns to null once a slider lands back on the active preset’s own value', () => {
+		const { store } = openWorkspace();
+
+		store.getState().tuneParam('neutralTinting', 0.9);
+		expect(store.getState().tunedParams).not.toBeNull();
+
+		// The default record's preset is Balanced, whose `neutralTinting` is 0.25: moving the same
+		// field back to that value leaves nothing tuned. The Tuned marker and the Save lock both key
+		// on `tunedParams !== null` (`components/workspace/seed-rail.tsx`), so a slider dragged back
+		// to its starting point has to un-tune the session rather than hold an object that happens to
+		// equal `BALANCED`.
+		store.getState().tuneParam('neutralTinting', BALANCED.neutralTinting);
+
+		expect(store.getState().tunedParams).toBeNull();
+	});
+
+	it('changes a token value, leaves the pinned key colour’s hue unchanged, and reaches no network', () => {
+		vi.stubGlobal('fetch', () => {
+			throw new Error('the workspace store must not reach the network');
+		});
+
+		const { store } = openWorkspace();
+		const before = {
+			hue: brandHue(store.getState().derived),
+			chroma: neutralChroma(store.getState().derived),
+		};
+
+		store.getState().tuneParam('neutralTinting', 0.9);
+
+		expect(brandHue(store.getState().derived)).toBe(before.hue);
+		expect(neutralChroma(store.getState().derived)).not.toBeCloseTo(before.chroma, 3);
+	});
+
+	it('is cleared by selecting a preset', () => {
+		const { store } = openWorkspace();
+
+		store.getState().tuneParam('neutralTinting', 0.9);
+		expect(store.getState().tunedParams).not.toBeNull();
+
+		store.getState().selectPreset('expressive');
+
+		expect(store.getState().tunedParams).toBeNull();
+	});
+
+	it('is cleared by loading a different version', () => {
+		const record = makeRecord([
+			makeVersion(),
+			makeVersion({ ordinal: 2, createdAt: '2026-02-01T00:00:00.000Z' }),
+		]);
+		const { store } = openWorkspace(record);
+
+		store.getState().tuneParam('neutralTinting', 0.9);
+		expect(store.getState().tunedParams).not.toBeNull();
+
+		store.getState().selectVersion(2);
+
+		expect(store.getState().tunedParams).toBeNull();
+	});
+});
+
+describe('commit refuses while params are tuned (#37)', () => {
+	it('throws ParamsTunedError and writes nothing', async () => {
+		const { store, recordStore } = openWorkspace();
+
+		store.getState().tuneParam('neutralTinting', 0.9);
+
+		// Typed rather than message-matched, for the same reason as the other commit guards: the rail
+		// has to tell this apart from a network or storage failure to show the tuned-specific text.
+		await expect(store.getState().commit()).rejects.toBeInstanceOf(ParamsTunedError);
+		await expect(store.getState().commit()).rejects.toMatchObject({ kind: 'params-tuned' });
+		expect(recordStore.puts).toHaveLength(0);
+	});
+
+	it('lets a commit through again once a preset clears the tuning', async () => {
+		const { store } = openWorkspace();
+
+		store.getState().tuneParam('neutralTinting', 0.9);
+		store.getState().selectPreset('balanced');
+
+		const next = await store.getState().commit();
+
+		expect(next.versions).toHaveLength(2);
+	});
+});
+
+describe('selecting a preset reaches no network (#37)', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	const NAMED_PARAMS: Record<Interpretation, InterpretationParams> = {
+		faithful: FAITHFUL,
+		balanced: BALANCED,
+		expressive: EXPRESSIVE,
+	};
+
+	// `not.toThrow` and `preset === name` both hold even if the store's own `PRESET_PARAMS` map has
+	// an entry pointing at the wrong constant—say, `faithful` still routed to `BALANCED`—since
+	// neither assertion looks at what got derived. A second, independent engine run on the preset's
+	// own named export (`FAITHFUL`, `BALANCED`, `EXPRESSIVE`) is what a swapped entry would actually
+	// fail: the store's derived neutral chroma has to match what that constant produces on its own.
+	it.each(['faithful', 'balanced', 'expressive'] as const)(
+		'runs %s with fetch stubbed to throw, deriving that preset’s own named params',
+		(preset) => {
+			vi.stubGlobal('fetch', () => {
+				throw new Error('the workspace store must not reach the network');
+			});
+
+			const { store } = openWorkspace();
+
+			expect(() => store.getState().selectPreset(preset)).not.toThrow();
+			expect(store.getState().preset).toBe(preset);
+
+			const expected = createOklchScaleEngine().generate(seedWith(259.8), NAMED_PARAMS[preset]);
+
+			if (!expected.ok) {
+				throw new Error(`expected generation failed: ${expected.error.kind}`);
+			}
+
+			expect(neutralChroma(store.getState().derived)).toBe(expected.schemes.light.neutral[8]!.c);
+		},
+	);
 });

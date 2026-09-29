@@ -5,7 +5,12 @@ import type { BrandSeed } from '../../core/brand-seed';
 import { checkContrast, type ContrastEntry } from '../../core/contrast/check';
 import { type UnrepairedEntry, withContrastRepairs } from '../../core/contrast/repair';
 import { type ScaleEngine, type ScaleEngineResult } from '../../core/scale-engine';
-import { BALANCED, type InterpretationParams } from '../../core/interpretation';
+import {
+	BALANCED,
+	EXPRESSIVE,
+	FAITHFUL,
+	type InterpretationParams,
+} from '../../core/interpretation';
 import { repairPinsFor, type SeedPinPath } from '../../core/seed-pins';
 import { buildTokenSet } from '../../core/semantic-layer';
 import {
@@ -20,17 +25,31 @@ import type { RecordStore } from '../storage/record-store';
 export type Interpretation = BrandVersion['interpretation'];
 
 /**
- * Faithful and Expressive have no numbers yet—`core/interpretation.ts` ships Balanced alone and
- * says so, because #37 is where the other two get their meaning. Pointing all three at Balanced
- * keeps the selection real where it matters (a committed version records which preset produced
- * it) without inventing a preset's definition out here, a long way from the engine that has to
- * honour it. When #37 lands, the two placeholder rows are what it replaces.
+ * Keyed by name rather than holding the params directly, because `BrandVersion.interpretation`
+ * stores a name, not a value: a version citing "faithful" means whatever `core/interpretation.ts`
+ * currently defines for it, so retuning a preset there reaches every version that named it with no
+ * migration. `activeParams` is what a workspace actually derives from; this map is the preset half
+ * of that answer, and a tuned session is the other.
  */
 const PRESET_PARAMS: Record<Interpretation, InterpretationParams> = {
-	faithful: BALANCED,
+	faithful: FAITHFUL,
 	balanced: BALANCED,
-	expressive: BALANCED,
+	expressive: EXPRESSIVE,
 };
+
+/**
+ * The params a workspace actually derives from right now: whatever a slider has tuned, or the
+ * active preset's own where nothing has. Every call site that needs live params reads through this
+ * instead of repeating `tunedParams ?? PRESET_PARAMS[preset]`, which is the same three-way
+ * agreement (store, rail, and the six other derivation sites) that `activeParams` exists to hold in
+ * one place. `seed-rail.tsx` imports it too, to seed a slider at the right value before anything is
+ * tuned, rather than keeping its own copy of `PRESET_PARAMS` to go stale against this one.
+ */
+export function activeParams(
+	state: Pick<WorkspaceState, 'preset' | 'tunedParams'>,
+): InterpretationParams {
+	return state.tunedParams ?? PRESET_PARAMS[state.preset];
+}
 
 /**
  * What a new version cannot derive from the workspace: who generated the seed and against what.
@@ -158,6 +177,28 @@ export class OverrideRejectedError extends Error {
 }
 
 /**
+ * Thrown when `commit` runs while `tunedParams` holds a value, so nothing is written.
+ *
+ * `BrandVersion.interpretation` is an enum (`core/brand-record.ts`), and storing arbitrary params
+ * beside it is the schema change #36 forbids. A tuned session has no preset name that still
+ * describes it, so it has nothing truthful to commit under—the user has to pick a preset (which
+ * clears `tunedParams`) before Save can write anything. Typed for the same reason as the other
+ * commit guards: the rail needs to tell this apart from a network or storage failure so it can
+ * show the tuned-specific explanation rather than a generic error.
+ */
+export class ParamsTunedError extends Error {
+	readonly kind = 'params-tuned';
+
+	constructor(options?: { cause?: unknown }) {
+		super(
+			'tuned parameters cannot be committed under a preset name; pick a preset to save',
+			options,
+		);
+		this.name = 'ParamsTunedError';
+	}
+}
+
+/**
  * A commit frozen at the moment it was requested: what the new version holds, plus the two counters
  * that decide afterwards whether the finished write still belongs to the workspace on screen.
  * `session` and `selection` are bookkeeping and reach no stored field.
@@ -172,6 +213,7 @@ type CommitRequest = {
 	activeOrdinal: number | null;
 	draftSeed: BrandSeed | null;
 	preset: Interpretation;
+	tunedParams: InterpretationParams | null;
 	overrides: Record<string, TokenOverride>;
 	draftPins: SeedPinPath[];
 };
@@ -218,6 +260,15 @@ export type WorkspaceState = {
 	 */
 	draftPins: SeedPinPath[];
 	preset: Interpretation;
+	/**
+	 * The live params a slider has moved to, layered on top of the active preset's own. `null` means
+	 * nothing is tuned, and derivation reads `PRESET_PARAMS[preset]` unmodified; a value here means
+	 * derivation reads this instead, at both call sites that need params (`derive`, `repairedBase`).
+	 * Never persisted for the reason `ParamsTunedError`'s docblock gives, and reset to `null` by
+	 * `selectPreset` and by every path that loads a version (`open`, `selectVersion`, `discardEdits`,
+	 * `close`), the same moments that reset `overrides` to the version's own.
+	 */
+	tunedParams: InterpretationParams | null;
 	/**
 	 * Recomputed from the draft seed and the preset on every change, and never persisted. Derivation
 	 * is pure arithmetic, so caching it in a record would only create a second thing to keep true.
@@ -266,6 +317,13 @@ export type WorkspaceState = {
 	 */
 	setDraftPins(pins: SeedPinPath[]): void;
 	selectPreset(preset: Interpretation): void;
+	/**
+	 * Starts from whatever is already tuned, and from the active preset's own params where nothing
+	 * is yet, so a second slider move layers onto the first instead of snapping every other field
+	 * back to the preset. Re-derives synchronously off the params already in hand—no store read
+	 * inside `derive` or `tokensFor`, and nothing here reaches the network.
+	 */
+	tuneParam(field: keyof InterpretationParams, value: number): void;
 	discardEdits(): void;
 	commit(provenance?: CommitProvenance): Promise<BrandRecord>;
 	/**
@@ -339,9 +397,9 @@ const EMPTY_SEED: BrandSeed = {
 function derive(
 	engine: ScaleEngine,
 	seed: BrandSeed | null,
-	preset: Interpretation,
+	params: InterpretationParams,
 ): ScaleEngineResult | null {
-	return seed ? engine.generate(seed, PRESET_PARAMS[preset]) : null;
+	return seed ? engine.generate(seed, params) : null;
 }
 
 /**
@@ -408,19 +466,21 @@ function withOverrides(
  * `ScaleEngine.generate`'s contract never promises a fresh object per call, and `buildTokenSet`
  * also reads `seed` directly for the non-colour categories. An engine that memoizes, or a test fake
  * that hands back the same `derived` for two different seeds, would otherwise serve a stale
- * repaired set for the second one. So each cache entry also carries the seed, preset and pins that
+ * repaired set for the second one. So each cache entry also carries the seed, params and pins that
  * produced it, and a lookup that doesn't match all three recomputes instead of trusting `derived`'s
- * identity alone.
+ * identity alone. `params` rather than `preset`, because a tuned session can change what
+ * `buildTokenSet` sees without the preset name moving at all—keying on the name alone would serve a
+ * stale repair to the first tuned slider move.
  *
  * Pins are in the key too. A toggled pin changes what `repairPinsFor` protects without touching
- * `seed`, `preset`, or `derived`'s identity, so leaving pins out would serve a repair computed for
+ * `seed`, `params`, or `derived`'s identity, so leaving pins out would serve a repair computed for
  * the wrong pinned set the moment someone toggled one.
  */
 const repairCache = new WeakMap<
 	Extract<ScaleEngineResult, { ok: true }>,
 	{
 		seed: BrandSeed;
-		preset: Interpretation;
+		params: InterpretationParams;
 		pins: SeedPinPath[];
 		repaired: TokenSet;
 		unrepaired: UnrepairedEntry[];
@@ -430,24 +490,24 @@ const repairCache = new WeakMap<
 function repairedBase(
 	derived: Extract<ScaleEngineResult, { ok: true }>,
 	seed: BrandSeed,
-	preset: Interpretation,
+	params: InterpretationParams,
 	pins: SeedPinPath[],
 ): { repaired: TokenSet; unrepaired: UnrepairedEntry[] } {
 	const cached = repairCache.get(derived);
 
 	if (
 		cached &&
-		cached.preset === preset &&
+		sameJson(cached.params, params) &&
 		sameSeed(cached.seed, seed) &&
 		samePins(cached.pins, pins)
 	) {
 		return cached;
 	}
 
-	const base = buildTokenSet(derived.schemes, seed, PRESET_PARAMS[preset]);
+	const base = buildTokenSet(derived.schemes, seed, params);
 	const pinned = repairPinsFor(seed, pins);
 	const { tokenSet, unrepaired } = withContrastRepairs(base, { pinned });
-	const result = { seed, preset, pins, repaired: tokenSet, unrepaired };
+	const result = { seed, params, pins, repaired: tokenSet, unrepaired };
 
 	repairCache.set(derived, result);
 
@@ -466,7 +526,7 @@ function repairedBase(
 function tokensFor(
 	derived: ScaleEngineResult | null,
 	seed: BrandSeed | null,
-	preset: Interpretation,
+	params: InterpretationParams,
 	overrides: Record<string, TokenOverride>,
 	pins: SeedPinPath[],
 ): Pick<WorkspaceState, 'tokenSet' | 'overrideIssues' | 'contrast'> {
@@ -474,7 +534,7 @@ function tokensFor(
 		return { tokenSet: null, overrideIssues: {}, contrast: null };
 	}
 
-	const { repaired, unrepaired } = repairedBase(derived, seed, preset, pins);
+	const { repaired, unrepaired } = repairedBase(derived, seed, params, pins);
 	const { tokenSet, overrideIssues } =
 		Object.keys(overrides).length === 0
 			? { tokenSet: repaired, overrideIssues: {} }
@@ -483,17 +543,21 @@ function tokensFor(
 	return { tokenSet, overrideIssues, contrast: { report: checkContrast(tokenSet), unrepaired } };
 }
 
-/** Every place that re-derives goes through here, so `tokenSet` cannot fall behind `derived`. */
+/**
+ * Every place that re-derives goes through here, so `tokenSet` cannot fall behind `derived`. Takes
+ * the resolved params rather than a preset name, so a caller decides once whether tuned or preset
+ * values apply and nothing downstream re-reads store state to work that out for itself.
+ */
 function derivation(
 	engine: ScaleEngine,
 	seed: BrandSeed | null,
-	preset: Interpretation,
+	params: InterpretationParams,
 	overrides: Record<string, TokenOverride>,
 	pins: SeedPinPath[],
 ): Derivation {
-	const derived = derive(engine, seed, preset);
+	const derived = derive(engine, seed, params);
 
-	return { derived, ...tokensFor(derived, seed, preset, overrides, pins) };
+	return { derived, ...tokensFor(derived, seed, params, overrides, pins) };
 }
 
 /**
@@ -506,7 +570,8 @@ function derivation(
 function workspaceFor(
 	engine: ScaleEngine,
 	version: BrandVersion | null,
-): Pick<WorkspaceState, 'draftSeed' | 'preset' | 'overrides' | 'draftPins'> & Derivation {
+): Pick<WorkspaceState, 'draftSeed' | 'preset' | 'tunedParams' | 'overrides' | 'draftPins'> &
+	Derivation {
 	const draftSeed = version?.seed ?? null;
 	const preset = version?.interpretation ?? 'balanced';
 	// Landing on a version takes its stored overrides and drops the draft's, the same as the seed.
@@ -524,9 +589,13 @@ function workspaceFor(
 	return {
 		draftSeed,
 		preset,
+		// A stored version names one preset (`interpretation`), never tuned values, so landing on it
+		// has nothing to restore tuning from. Clearing it here is what makes "reset on version load"
+		// true for every caller of this function: `open`, `close`, `selectVersion`, `discardEdits`.
+		tunedParams: null,
 		overrides,
 		draftPins: pins,
-		...derivation(engine, draftSeed, preset, overrides, pins),
+		...derivation(engine, draftSeed, PRESET_PARAMS[preset], overrides, pins),
 	};
 }
 
@@ -633,7 +702,15 @@ export function createWorkspaceStore({
 }: WorkspaceStoreOptions): StoreApi<WorkspaceState> {
 	return createStore<WorkspaceState>()((set, get) => {
 		async function appendVersion(request: CommitRequest): Promise<BrandRecord> {
-			const { provenance, activeOrdinal, draftSeed, preset, overrides, draftPins } = request;
+			const { provenance, activeOrdinal, draftSeed, preset, tunedParams, overrides, draftPins } =
+				request;
+
+			// Checked before anything session- or record-related, because it doesn't depend on either:
+			// a tuned set has no preset name to be saved under, whichever workspace or record it belongs
+			// to. `ParamsTunedError`'s docblock carries the reasoning.
+			if (tunedParams !== null) {
+				throw new ParamsTunedError();
+			}
 
 			// A queued commit belongs to the workspace that asked for it. `commit` captures the request
 			// synchronously and this body runs a turn later at the earliest, so by now the workspace can
@@ -785,7 +862,13 @@ export function createWorkspaceStore({
 						...(adopted
 							? {
 									draftSeed: adopted,
-									...derivation(engine, adopted, get().preset, get().overrides, get().draftPins),
+									...derivation(
+										engine,
+										adopted,
+										activeParams(get()),
+										get().overrides,
+										get().draftPins,
+									),
 								}
 							: {}),
 					});
@@ -856,6 +939,7 @@ export function createWorkspaceStore({
 			draftSeed: null,
 			draftPins: [],
 			preset: 'balanced',
+			tunedParams: null,
 			derived: null,
 			overrides: {},
 			tokenSet: null,
@@ -889,8 +973,9 @@ export function createWorkspaceStore({
 			},
 
 			editSeed(patch) {
-				const { draftSeed, preset, overrides, draftPins } = get();
+				const { draftSeed, preset, tunedParams, overrides, draftPins } = get();
 				const next = { ...(draftSeed ?? EMPTY_SEED), ...patch };
+				const params = activeParams({ preset, tunedParams });
 
 				// Pins ride along unchanged. A pin names a field, not a value, so editing the value under
 				// a pinned field—recolouring a key colour, say—leaves the pin exactly where it was. A key
@@ -900,42 +985,69 @@ export function createWorkspaceStore({
 				// step 9 protected instead of the old one.
 				// No storage write either way. An edit is uncommitted by definition, and derivation is
 				// cheap enough to run on every keystroke, which is the whole reason tokens are not stored.
-				set({ draftSeed: next, ...derivation(engine, next, preset, overrides, draftPins) });
+				set({ draftSeed: next, ...derivation(engine, next, params, overrides, draftPins) });
 			},
 
 			togglePin(path) {
-				const { draftSeed, preset, overrides, draftPins } = get();
+				const { draftSeed, preset, tunedParams, overrides, draftPins } = get();
 				const next = draftPins.includes(path)
 					? draftPins.filter((pin) => pin !== path)
 					: canonicalPins([...draftPins, path]);
+				const params = activeParams({ preset, tunedParams });
 
-				set({ draftPins: next, ...derivation(engine, draftSeed, preset, overrides, next) });
+				set({ draftPins: next, ...derivation(engine, draftSeed, params, overrides, next) });
 			},
 
 			setDraftPins(pins) {
-				const { draftSeed, preset, overrides } = get();
+				const { draftSeed, preset, tunedParams, overrides } = get();
 				const next = canonicalPins(pins);
+				const params = activeParams({ preset, tunedParams });
 
-				set({ draftPins: next, ...derivation(engine, draftSeed, preset, overrides, next) });
+				set({ draftPins: next, ...derivation(engine, draftSeed, params, overrides, next) });
 			},
 
 			selectPreset(preset) {
 				const { draftSeed, overrides, draftPins } = get();
-				set({ preset, ...derivation(engine, draftSeed, preset, overrides, draftPins) });
+
+				// Switching presets abandons whatever was tuned, the same as landing on a stored version
+				// does in `workspaceFor`: a preset name and a tuned session are two different ways of
+				// answering "what params?", and picking one clears the other.
+				set({
+					preset,
+					tunedParams: null,
+					...derivation(engine, draftSeed, PRESET_PARAMS[preset], overrides, draftPins),
+				});
+			},
+
+			tuneParam(field, value) {
+				const { draftSeed, preset, tunedParams, overrides, draftPins } = get();
+				const next = { ...activeParams({ preset, tunedParams }), [field]: value };
+				// A slider dragged back to exactly the active preset's own value un-tunes the session
+				// outright, rather than leaving `tunedParams` holding an object that happens to equal
+				// `PRESET_PARAMS[preset]`. The Tuned marker and the Save lock both key on
+				// `tunedParams !== null` (seed-rail.tsx), so treating "equal to the preset" as still
+				// tuned would leave both showing for a slider that landed right back where it started.
+				const resolved = sameJson(next, PRESET_PARAMS[preset]) ? null : next;
+
+				set({
+					tunedParams: resolved,
+					...derivation(engine, draftSeed, next, overrides, draftPins),
+				});
 			},
 
 			setOverride(override) {
-				const { draftSeed, preset, derived, overrides, draftPins } = get();
+				const { draftSeed, preset, tunedParams, derived, overrides, draftPins } = get();
 
 				if (!draftSeed || !derived?.ok) {
 					throw new Error('nothing is derived to override');
 				}
 
+				const params = activeParams({ preset, tunedParams });
 				const key = overrideKey(override);
 				const next = { ...overrides, [key]: override };
 				// The ramps don't depend on overrides, so the derivation already held is reused rather than
 				// running the engine again for an edit that cannot change it.
-				const result = tokensFor(derived, draftSeed, preset, next, draftPins);
+				const result = tokensFor(derived, draftSeed, params, next, draftPins);
 				const issues = result.overrideIssues[key];
 
 				// Only the new override's own failure refuses the call. One already held and already
@@ -949,16 +1061,17 @@ export function createWorkspaceStore({
 			},
 
 			clearOverride(key) {
-				const { draftSeed, preset, derived, overrides, draftPins } = get();
+				const { draftSeed, preset, tunedParams, derived, overrides, draftPins } = get();
 
 				if (!Object.hasOwn(overrides, key)) {
 					return;
 				}
 
+				const params = activeParams({ preset, tunedParams });
 				const next = { ...overrides };
 				delete next[key];
 
-				set({ overrides: next, ...tokensFor(derived, draftSeed, preset, next, draftPins) });
+				set({ overrides: next, ...tokensFor(derived, draftSeed, params, next, draftPins) });
 			},
 
 			discardEdits() {
@@ -978,7 +1091,7 @@ export function createWorkspaceStore({
 				// version or keep typing while this waits behind an earlier write, and a commit that read
 				// the workspace then would persist that instead, under provenance describing a seed it
 				// never saw.
-				const { activeOrdinal, draftSeed, preset, overrides, draftPins } = get();
+				const { activeOrdinal, draftSeed, preset, tunedParams, overrides, draftPins } = get();
 				const request: CommitRequest = {
 					provenance,
 					session,
@@ -986,6 +1099,7 @@ export function createWorkspaceStore({
 					activeOrdinal,
 					draftSeed,
 					preset,
+					tunedParams,
 					overrides,
 					draftPins,
 				};

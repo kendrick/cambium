@@ -59,8 +59,8 @@ export type InterpretationParams = {
 };
 
 /**
- * The one named value #10 asks for. Faithful and Expressive are #37's work and deliberately absent:
- * shipping two more constants now would mean guessing what they mean before anyone can see a ramp.
+ * The one named value #10 asks for. Faithful and Expressive sit beside it below, #37's work, now
+ * that a ramp exists to judge each one against.
  *
  * `harmonization` sits at 0 because a danger color that has drifted toward the brand hue stops
  * reading as danger, and that is the whole job of a status color. Issue #1 reserves strong tinting
@@ -76,4 +76,47 @@ export const BALANCED: InterpretationParams = {
 	harmonization: 0,
 	accentRotation: 120,
 	surfaceTinting: 0.02,
+};
+
+/**
+ * The preset that trusts the seed over any opinion of Cambium's. `chromaSpread` and `harmonization`
+ * hold Balanced's values rather than moving toward some more neutral setting, because damping the
+ * chroma curve or pulling status hues toward the brand would already be a stance, and Faithful's
+ * whole job is not taking one. `accentRotation` stays at Balanced's third-of-circle too: rotation
+ * only ever fires where the seed offers no second key color, so a narrower angle there would be
+ * inventing a preference this preset exists to avoid having.
+ *
+ * `neutralTinting` and `surfaceTinting` still sit above zero, at 0.05 and 0.01, rather than at
+ * nothing. A neutral ramp with no trace of the brand hue and a shadow with no chroma at all read as
+ * a broken renderer rather than as a deliberate choice, and "faithful" means reproducing what a
+ * designed interface actually looks like, not stripping every trace of the color that made it.
+ */
+export const FAITHFUL: InterpretationParams = {
+	neutralTinting: 0.05,
+	chromaSpread: 1,
+	harmonization: 0,
+	accentRotation: 120,
+	surfaceTinting: 0.01,
+};
+
+/**
+ * The preset that leans into interpretation instead of staying out of its way. `neutralTinting` at
+ * 0.6 pulls the neutral ramp noticeably toward the brand hue, since a preset named "expressive"
+ * that still ships a dead-grey scale would not have earned the name. `chromaSpread` above 1 widens
+ * the chroma curve at every step but the anchor itself: step 9 is `fitToSrgbGamut(anchor)` outright
+ * in `buildRamp` (`core/oklch-scale-engine.ts`) and never reads this field, so a wider spread makes
+ * the ramp around the brand and accent colours bolder without moving either colour. `harmonization`
+ * is the one field every other preset holds at 0: letting status hues drift toward the brand is the
+ * move `BALANCED`'s docblock reserves for this preset, on the understanding that a brand-tinted
+ * danger color is a choice here rather than the defect it would be anywhere else. `accentRotation`
+ * opens past Balanced's third-of-circle, still short of the 180-degree complement that reads as a
+ * second brand rather than an accent of the first. `surfaceTinting` raises the shadow's chroma
+ * ceiling to 0.03, since a livelier interface reads a flat, chromaless shadow as a rendering miss.
+ */
+export const EXPRESSIVE: InterpretationParams = {
+	neutralTinting: 0.6,
+	chromaSpread: 1.3,
+	harmonization: 0.15,
+	accentRotation: 150,
+	surfaceTinting: 0.03,
 };
