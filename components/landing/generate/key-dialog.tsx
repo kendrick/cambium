@@ -79,7 +79,7 @@ export default function KeyDialog({ open, onOpenChange, onSubmit, notice }: KeyD
 							autoCapitalize="off"
 							autoComplete="off"
 							autoCorrect="off"
-							className="border-border bg-background focus-visible:border-ring focus-visible:ring-ring/50 h-9 rounded-md border px-3 font-mono text-sm outline-none [-webkit-text-security:disc] focus-visible:ring-3"
+							className="border-border bg-background h-9 rounded-md border px-3 font-mono text-sm [-webkit-text-security:disc]"
 							data-1p-ignore=""
 							data-bwignore=""
 							data-form-type="other"

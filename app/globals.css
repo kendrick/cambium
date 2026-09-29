@@ -168,7 +168,19 @@
 
 @layer base {
 	* {
-		@apply border-border outline-ring/50;
+		@apply border-border;
+	}
+	/*
+	 * One focus indicator for the tool's own chrome (#152). The shadcn ring this replaces was --ring at
+	 * half opacity, which composites to about 1.5:1 on white, under WCAG 1.4.11's 3:1. --foreground
+	 * sits at the far end from --background in both schemes, so it clears 3:1 on the page.
+	 *
+	 * The preview is left out on purpose: its components draw the generated `ring` token, which is
+	 * output the user is judging, not chrome. `in-data-preview:` in components/ui draws that ring.
+	 */
+	:focus-visible:not([data-preview] *) {
+		outline: 2px solid var(--foreground);
+		outline-offset: 2px;
 	}
 	body {
 		@apply bg-background text-foreground;

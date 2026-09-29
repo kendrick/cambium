@@ -463,7 +463,7 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 					Brand site <span className="text-muted-foreground font-normal">(optional)</span>
 				</label>
 				<input
-					className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+					className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm placeholder:text-muted-foreground"
 					// Frozen while a save runs, like the image controls: `save` closes over the value from
 					// the submit render, so an edit made mid-save would be dropped without a word.
 					disabled={busy}

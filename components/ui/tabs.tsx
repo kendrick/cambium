@@ -29,7 +29,8 @@ function TabsTab({ className, ...props }: TabsPrimitive.Tab.Props) {
 		<TabsPrimitive.Tab
 			data-slot="tabs-tab"
 			className={cn(
-				'focus-visible:border-ring focus-visible:ring-ring/50 data-[active]:bg-background data-[active]:text-foreground inline-flex h-8 items-center justify-center rounded-md border border-transparent px-3 text-sm font-medium whitespace-nowrap transition-colors outline-none focus-visible:ring-3 disabled:pointer-events-none disabled:opacity-50 data-[active]:shadow-xs',
+				// Focus ring gated to the preview, as in ./button.tsx (#152).
+				'focus-visible:border-ring focus-visible:ring-ring/50 data-[active]:bg-background data-[active]:text-foreground inline-flex h-8 items-center justify-center rounded-md border border-transparent px-3 text-sm font-medium whitespace-nowrap transition-colors in-data-preview:outline-none in-data-preview:focus-visible:ring-3 disabled:pointer-events-none disabled:opacity-50 data-[active]:shadow-xs',
 				className,
 			)}
 			{...props}

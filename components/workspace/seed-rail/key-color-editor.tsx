@@ -43,7 +43,7 @@ export function KeyColorEditor({
 		<Popover>
 			<PopoverTrigger
 				aria-label={`Edit ${label}`}
-				className="focus-visible:ring-ring/50 size-7 shrink-0 rounded-md border shadow-xs outline-none focus-visible:ring-3"
+				className="size-7 shrink-0 rounded-md border shadow-xs"
 				style={{ backgroundColor: swatchFor(color.oklch) }}
 			/>
 			<PopoverContent align="start" className="w-80">

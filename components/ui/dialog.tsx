@@ -18,7 +18,8 @@ function DialogClose({ className, ...props }: DialogPrimitive.Close.Props) {
 		<DialogPrimitive.Close
 			data-slot="dialog-close"
 			className={cn(
-				'focus-visible:border-ring focus-visible:ring-ring/50 rounded-md outline-none focus-visible:ring-3',
+				// Focus ring gated to the preview, as in ./button.tsx (#152).
+				'focus-visible:border-ring focus-visible:ring-ring/50 rounded-md in-data-preview:outline-none in-data-preview:focus-visible:ring-3',
 				className,
 			)}
 			{...props}
