@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { AxeBuilder } from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
+import { PNG } from 'pngjs';
 
 import { DATABASE_NAME, RECORD_STORE_NAME } from '../app/storage/indexed-db-record-store';
 import {
@@ -382,16 +383,70 @@ async function openPreview(page: Page): Promise<Locator> {
 }
 
 async function switchScheme(page: Page, preview: Locator, scheme: SchemeName): Promise<void> {
-	const toggle = page.getByRole('button', { name: 'Dark scheme' });
-	if ((await preview.getAttribute('data-preview-scheme')) !== scheme) await toggle.click();
+	const button = page
+		.getByRole('group', { name: 'Colour scheme' })
+		.getByRole('button', { name: SCHEME_LABELS[scheme], exact: true });
+	await button.click();
 
 	await expect(preview).toHaveAttribute('data-preview-scheme', scheme);
-	await expect(toggle).toHaveAttribute('aria-pressed', String(scheme === 'dark'));
+	await expect(button).toHaveAttribute('aria-pressed', 'true');
 }
 
 /** A colour literal written straight from its channels, independent of how the app prints one. */
 function oklchFromFields({ l, c, h }: { l: number; c: number; h: number }): string {
 	return `oklch(${l} ${c} ${h})`;
+}
+
+/** The control's visible names. Spelled out so a renamed button fails here. */
+const SCHEME_LABELS = { light: 'Light', dark: 'Dark' } as const satisfies Record<
+	SchemeName,
+	string
+>;
+
+type Rgb = readonly [number, number, number];
+
+/**
+ * `token-list.spec.ts`'s `paintedCentre`, copied for the reason `SEED` is. The centre pixel of what
+ * `target` covers, decoded from a real screenshot: the compositor's output, not the declared colour.
+ */
+async function paintedCentre(target: Locator): Promise<Rgb> {
+	const png = PNG.sync.read(await target.screenshot({ animations: 'disabled' }));
+	const offset = (Math.floor(png.height / 2) * png.width + Math.floor(png.width / 2)) * 4;
+
+	return [png.data[offset]!, png.data[offset + 1]!, png.data[offset + 2]!];
+}
+
+/** The largest per-channel gap between two paints. Two renders of one colour can land a unit apart. */
+function paintDistance(actual: Rgb, expected: Rgb): number {
+	return Math.max(...actual.map((channel, index) => Math.abs(channel - expected[index]!)));
+}
+
+/**
+ * A pixel of the preview's own page background. The sample app's content column has `p-4` and no
+ * background (`app-screen.tsx`), so 8px above its header only the `[data-preview]` container's
+ * `bg-background` paints, whether the sidebar sits beside the column or stacks above it.
+ */
+async function previewPagePixel(page: Page, preview: Locator): Promise<Rgb> {
+	const box = await preview.locator('[data-preview-part="header"]').boundingBox();
+	if (!box) throw new Error('the sample app header has no box');
+
+	const png = PNG.sync.read(
+		await page.screenshot({
+			clip: { x: box.x + 2, y: box.y - 10, width: 4, height: 4 },
+			animations: 'disabled',
+		}),
+	);
+	const offset = (2 * png.width + 2) * 4;
+
+	return [png.data[offset]!, png.data[offset + 1]!, png.data[offset + 2]!];
+}
+
+/**
+ * The chrome outline (#152) draws around whatever is `:focus-visible`. Neither sample sits near the
+ * control today, but dropping focus keeps the reading clear of it wherever the control moves.
+ */
+async function dropFocus(page: Page): Promise<void> {
+	await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 }
 
 test('every colour, radius, font size, font weight and letter spacing in the preview resolves to a declared token, in both schemes', async ({
@@ -455,7 +510,7 @@ test('the composed app screen has its nav, sidebar, header, table and primary ac
 	await expect(screen.locator('[data-preview-part="primary-action"]')).toHaveText('New order');
 });
 
-test('the scheme toggle flips the primary action from the light tokens to the dark ones', async ({
+test('the scheme control flips the primary action from the light tokens to the dark ones', async ({
 	page,
 }) => {
 	const preview = await openPreview(page);
@@ -495,6 +550,66 @@ test('the scheme toggle flips the primary action from the light tokens to the da
 	await settle(page);
 	expect(await computed()).toEqual({ background: darkPrimary, color: darkForeground });
 	expect(await preview.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe(darkPage);
+});
+
+test('the workspace renders exactly one scheme control, and it reports its state through aria-pressed', async ({
+	page,
+}) => {
+	const preview = await openPreview(page);
+	const group = page.getByRole('group', { name: 'Colour scheme' });
+
+	await expect(group).toHaveCount(1);
+	// In the Output header, beside its h2.
+	await expect(
+		page.getByRole('region', { name: 'Output' }).getByRole('group', { name: 'Colour scheme' }),
+	).toHaveCount(1);
+
+	// Page-wide, every button whose name mentions a scheme. The two controls this replaces answered
+	// to `light`, `dark` and `Dark scheme`, so either one left behind is counted here.
+	await expect(page.getByRole('button', { name: /\b(light|dark)\b/i })).toHaveCount(2);
+
+	const light = group.getByRole('button', { name: 'Light', exact: true });
+	const dark = group.getByRole('button', { name: 'Dark', exact: true });
+	await expect(light).toHaveAttribute('aria-pressed', 'true');
+	await expect(dark).toHaveAttribute('aria-pressed', 'false');
+	await expect(preview).toHaveAttribute('data-preview-scheme', 'light');
+
+	await dark.click();
+
+	await expect(light).toHaveAttribute('aria-pressed', 'false');
+	await expect(dark).toHaveAttribute('aria-pressed', 'true');
+	await expect(preview).toHaveAttribute('data-preview-scheme', 'dark');
+});
+
+test("switching the scheme control to Dark and back, the preview's page background matches the token list's background swatch within 1 per channel", async ({
+	page,
+}) => {
+	const preview = await openPreview(page);
+	const swatch = page.locator('[data-token="semantic.background"] [data-swatch]');
+	await expect(swatch).toBeVisible();
+
+	const painted: Partial<Record<SchemeName, { page: Rgb; swatch: Rgb }>> = {};
+
+	// Dark first, then back to Light: the issue's two criteria, in its order.
+	for (const scheme of ['dark', 'light'] as const) {
+		await switchScheme(page, preview, scheme);
+		await dropFocus(page);
+		await settle(page);
+
+		const pagePixel = await previewPagePixel(page, preview);
+		const swatchPixel = await paintedCentre(swatch);
+
+		expect(
+			paintDistance(pagePixel, swatchPixel),
+			`${scheme}: page ${pagePixel.join(',')} vs swatch ${swatchPixel.join(',')}`,
+		).toBeLessThanOrEqual(1);
+		painted[scheme] = { page: pagePixel, swatch: swatchPixel };
+	}
+
+	// The two schemes paint different backgrounds for this seed. Without this, a preview and a list
+	// both stuck on light would pass the Dark round.
+	expect(paintDistance(painted.dark!.page, painted.light!.page)).toBeGreaterThan(1);
+	expect(paintDistance(painted.dark!.swatch, painted.light!.swatch)).toBeGreaterThan(1);
 });
 
 test('overriding primary in the token list repaints the preview without a reload', async ({

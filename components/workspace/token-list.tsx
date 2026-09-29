@@ -26,8 +26,8 @@ import { walkCategoryTokens } from './token-list/walk-category';
 /**
  * `primitives`, `semantic` and `shadow` are the three categories `core/token-set.ts`'s
  * `SCHEME_SHAPE` holds once per scheme; every other category holds still across light and dark. So
- * one scheme toggle serves the colour groups and shadow together, and the remaining eight read the
- * same values whichever side of the toggle is showing.
+ * the workspace's one scheme control serves the colour groups and shadow together, and the
+ * remaining eight read the same values whichever scheme it shows.
  */
 const NON_COLOUR_CATEGORIES: readonly (ValueCategory | 'shadow')[] = [
 	'radius',
@@ -84,6 +84,8 @@ export type TokenListProps = {
 	overrideIssues: Record<string, OverrideIssue[]>;
 	setOverride: (override: TokenOverride) => void;
 	clearOverride: (key: string) => void;
+	/** Which scheme the list shows, and so which scheme an alias, primitive or shadow edit lands in. */
+	scheme: SchemeName;
 };
 
 /**
@@ -101,8 +103,8 @@ export function TokenList({
 	overrideIssues,
 	setOverride,
 	clearOverride,
+	scheme,
 }: TokenListProps) {
-	const [scheme, setScheme] = useState<SchemeName>('light');
 	// A number field keeps its own refused edits (`useFieldIssues`), since only the field knows when
 	// its text has gone back to the shown value. An alias `<select>` is controlled and snaps back to
 	// the committed alias the moment the store refuses, so its refusal is held here, by key, until a
@@ -192,7 +194,7 @@ export function TokenList({
 	const valueCategories = NON_COLOUR_CATEGORIES.map((category) => {
 		const topEntry = tokenSet[category];
 		// The top-level `shadow` mirrors only the light scheme (`checkMirroredLayers`), so the
-		// toggle has to reach into the scheme itself to show dark's own shadow values. `source`
+		// list has to reach into the scheme itself to show dark's own shadow values. `source`
 		// is a schema-fixed literal on this category, so the top-level copy still answers that.
 		const values = category === 'shadow' ? colorScheme.shadow.values : topEntry.values;
 		const tokens = walkCategoryTokens(values);
@@ -210,140 +212,119 @@ export function TokenList({
 		semantic.length === 0 && ramps.length === 0 && valueCategories.length === 0;
 
 	return (
-		<div className="flex min-h-0 flex-1 flex-col gap-2">
-			{/* Outside the region: it picks which scheme the list shows rather than being a token,
-			    and #154 replaces it with one control for the whole workspace. */}
-			<fieldset className="m-0 flex gap-2 border-0 p-0">
-				<legend className="sr-only">Colour scheme</legend>
-				{(['light', 'dark'] as const).map((option) => (
-					<button
-						key={option}
-						type="button"
-						aria-pressed={scheme === option}
-						onClick={() => setScheme(option)}
-						className="aria-pressed:bg-muted aria-pressed:font-medium rounded border px-2 py-1 text-xs capitalize"
-					>
-						{option}
-					</button>
-				))}
-			</fieldset>
+		<TokensRegion headingId={headingId}>
+			<label className="bg-background sticky top-0 z-10 flex flex-col gap-1 pb-2 text-xs">
+				Filter by name
+				<input
+					type="search"
+					value={query}
+					onChange={(event) => setQuery(event.target.value)}
+					className="rounded border px-2 py-1 text-sm"
+				/>
+			</label>
 
-			<TokensRegion headingId={headingId}>
-				<label className="bg-background sticky top-0 z-10 flex flex-col gap-1 pb-2 text-xs">
-					Filter by name
-					<input
-						type="search"
-						value={query}
-						onChange={(event) => setQuery(event.target.value)}
-						className="rounded border px-2 py-1 text-sm"
-					/>
-				</label>
+			<div className="flex flex-col gap-4">
+				{semantic.length > 0 ? (
+					// Keyed on `filtering` so starting or clearing a filter remounts every group at
+					// its default. That's how a filter opens a collapsed category it matched.
+					<CategoryGroup key={`semantic:${filtering}`} name="semantic" defaultOpen>
+						<ul className="flex flex-col">
+							{semantic.map(([token, entry]) => {
+								const key = overrideKey({ kind: 'alias', scheme, token, alias: entry.alias });
+								const overridden = Object.hasOwn(overrides, key);
+								// An empty list still mounts the row's live region, which has to exist before
+								// the first verdict for a screen reader to announce it.
+								const contrastFailures = (contrastByOverride[key] ?? []).map((candidate) => ({
+									label: `${candidate.foreground} on ${candidate.background}`,
+									wcag: candidate.wcag,
+									target: candidate.target,
+								}));
 
-				<div className="flex flex-col gap-4">
-					{semantic.length > 0 ? (
-						// Keyed on `filtering` so starting or clearing a filter remounts every group at
-						// its default. That's how a filter opens a collapsed category it matched.
-						<CategoryGroup key={`semantic:${filtering}`} name="semantic" defaultOpen>
-							<ul className="flex flex-col">
-								{semantic.map(([token, entry]) => {
-									const key = overrideKey({ kind: 'alias', scheme, token, alias: entry.alias });
-									const overridden = Object.hasOwn(overrides, key);
-									// An empty list still mounts the row's live region, which has to exist before
-									// the first verdict for a screen reader to announce it.
-									const contrastFailures = (contrastByOverride[key] ?? []).map((candidate) => ({
-										label: `${candidate.foreground} on ${candidate.background}`,
-										wcag: candidate.wcag,
-										target: candidate.target,
-									}));
-
-									return (
-										<SemanticRow
-											key={token}
-											token={token}
-											entry={entry}
-											swatch={toOklchCss(resolved[token]!)}
-											rampOptions={rampOptions}
-											overridden={overridden}
-											issues={issuesFor(key)}
-											contrastFailures={contrastFailures}
-											onAliasChange={(alias) =>
-												holdAliasAttempt(key, tryOverride({ kind: 'alias', scheme, token, alias }))
-											}
-											onReset={
-												overridden
-													? () => {
-															holdAliasAttempt(key, null);
-															clearOverride(key);
-														}
-													: undefined
-											}
-										/>
-									);
-								})}
-							</ul>
-						</CategoryGroup>
-					) : null}
-
-					{ramps.length > 0 ? (
-						// One disclosure for all seven ramps: `core/token-set.ts` treats primitives as one
-						// category, and seven disclosures would cost seven Tab stops where this costs one.
-						<CategoryGroup key={`primitives:${filtering}`} name="primitives" defaultOpen>
-							<div className="flex flex-col gap-2">
-								{ramps.map(([ramp, steps]) => (
-									<div key={ramp} className="flex flex-col gap-1">
-										<span className="font-mono text-xs">{ramp}</span>
-										<RampStrip
-											ramp={ramp}
-											scheme={scheme}
-											steps={steps}
-											overrides={overrides}
-											issuesFor={issuesFor}
-											onOverride={tryOverride}
-											onReset={clearOverride}
-										/>
-									</div>
-								))}
-							</div>
-						</CategoryGroup>
-					) : null}
-
-					{/* Collapsed until asked for: the issue's Tab-stop bound makes no allowance for value
-					    rows, so on load they mount nothing. */}
-					{valueCategories.map(({ category, source, hasOverride, shown }) => (
-						<CategoryGroup
-							key={`${category}:${filtering}`}
-							name={category}
-							source={source}
-							hasOverride={hasOverride}
-							defaultOpen={filtering}
-						>
-							<ul className="flex flex-col">
-								{shown.map((token) => (
-									<ValueRow
-										// Shadow is the one category here that differs by scheme; see `RampStrip`'s
-										// chip key for why that has to remount on a toggle.
-										key={`${category === 'shadow' ? scheme : ''}:${token.path.join('.')}`}
-										category={category}
-										scheme={scheme}
+								return (
+									<SemanticRow
+										key={token}
 										token={token}
+										entry={entry}
+										swatch={toOklchCss(resolved[token]!)}
+										rampOptions={rampOptions}
+										overridden={overridden}
+										issues={issuesFor(key)}
+										contrastFailures={contrastFailures}
+										onAliasChange={(alias) =>
+											holdAliasAttempt(key, tryOverride({ kind: 'alias', scheme, token, alias }))
+										}
+										onReset={
+											overridden
+												? () => {
+														holdAliasAttempt(key, null);
+														clearOverride(key);
+													}
+												: undefined
+										}
+									/>
+								);
+							})}
+						</ul>
+					</CategoryGroup>
+				) : null}
+
+				{ramps.length > 0 ? (
+					// One disclosure for all seven ramps: `core/token-set.ts` treats primitives as one
+					// category, and seven disclosures would cost seven Tab stops where this costs one.
+					<CategoryGroup key={`primitives:${filtering}`} name="primitives" defaultOpen>
+						<div className="flex flex-col gap-2">
+							{ramps.map(([ramp, steps]) => (
+								<div key={ramp} className="flex flex-col gap-1">
+									<span className="font-mono text-xs">{ramp}</span>
+									<RampStrip
+										ramp={ramp}
+										scheme={scheme}
+										steps={steps}
 										overrides={overrides}
 										issuesFor={issuesFor}
 										onOverride={tryOverride}
 										onReset={clearOverride}
 									/>
-								))}
-							</ul>
-						</CategoryGroup>
-					))}
+								</div>
+							))}
+						</div>
+					</CategoryGroup>
+				) : null}
 
-					{nothingMatches ? (
-						<p className="text-muted-foreground text-sm">
-							No token name contains “{query.trim()}”.
-						</p>
-					) : null}
-				</div>
-			</TokensRegion>
-		</div>
+				{/* Collapsed until asked for: the issue's Tab-stop bound makes no allowance for value
+				    rows, so on load they mount nothing. */}
+				{valueCategories.map(({ category, source, hasOverride, shown }) => (
+					<CategoryGroup
+						key={`${category}:${filtering}`}
+						name={category}
+						source={source}
+						hasOverride={hasOverride}
+						defaultOpen={filtering}
+					>
+						<ul className="flex flex-col">
+							{shown.map((token) => (
+								<ValueRow
+									// Shadow is the one category here that differs by scheme; see `RampStrip`'s
+									// chip key for why that has to remount on a toggle.
+									key={`${category === 'shadow' ? scheme : ''}:${token.path.join('.')}`}
+									category={category}
+									scheme={scheme}
+									token={token}
+									overrides={overrides}
+									issuesFor={issuesFor}
+									onOverride={tryOverride}
+									onReset={clearOverride}
+								/>
+							))}
+						</ul>
+					</CategoryGroup>
+				))}
+
+				{nothingMatches ? (
+					<p className="text-muted-foreground text-sm">No token name contains “{query.trim()}”.</p>
+				) : null}
+			</div>
+		</TokensRegion>
 	);
 }
 

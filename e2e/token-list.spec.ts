@@ -19,7 +19,7 @@ import { CAMBIUM_NAMESPACE } from '../core/provenance';
 import { defaultSeedPins } from '../core/seed-pins';
 import { buildTokenSet } from '../core/semantic-layer';
 import { STEP_ROLES } from '../core/step-roles';
-import { applyOverrides, type TokenOverride } from '../core/token-overrides';
+import { applyOverrides, type SchemeName, type TokenOverride } from '../core/token-overrides';
 import { stepForAlias, type TokenSet } from '../core/token-set';
 
 import { expect, test } from './fixtures';
@@ -417,6 +417,20 @@ function paintDistance(actual: Rgb, expected: Rgb): number {
 	return Math.max(...actual.map((channel, index) => Math.abs(channel - expected[index]!)));
 }
 
+const SCHEME_LABELS = { light: 'Light', dark: 'Dark' } as const satisfies Record<
+	SchemeName,
+	string
+>;
+
+/** The workspace's one scheme control, in the Output header since #154. */
+async function chooseScheme(page: Page, scheme: SchemeName): Promise<void> {
+	const button = page
+		.getByRole('group', { name: 'Colour scheme' })
+		.getByRole('button', { name: SCHEME_LABELS[scheme], exact: true });
+	await button.click();
+	await expect(button).toHaveAttribute('aria-pressed', 'true');
+}
+
 /**
  * A token's edit trigger, found by accessible name. The `(has issues)` suffix is the trigger
  * announcing a held issue, so a scenario that raised one can still find it.
@@ -480,8 +494,10 @@ test('the token list is one Tab stop per ramp, semantic row and category, plus t
 
 	const tokens = page.getByRole('region', { name: 'Tokens' });
 	await expect(tokens.locator('[data-token]').first()).toBeVisible();
-	// The scheme toggle sits just above the region, so Tab from it walks the region from its top.
-	const start = page.getByRole('button', { name: 'dark', exact: true });
+	// The filter is the region's first stop, so counting from it and adding one for the filter walks
+	// the whole region. Nothing above the region is a fixed starting point since the scheme control
+	// moved to the Output header (#154).
+	const start = tokens.getByRole('searchbox', { name: 'Filter by name' });
 
 	// A row whose override breaks a pair adds a stop, #153's Revert, and the issue's bound has no
 	// allowance for it. None exists at load: `buildRecordWithSeed` loads no override and this seed
@@ -491,7 +507,7 @@ test('the token list is one Tab stop per ramp, semantic row and category, plus t
 
 	// From the issue: one per ramp, per semantic row, per category disclosure, plus the filter.
 	const bound = RAMP_NAMES.length + SEMANTIC_TOKENS.length + CATEGORY_DISCLOSURES.length + 1;
-	const onLoad = await tabStopsInside(page, tokens, start);
+	const onLoad = 1 + (await tabStopsInside(page, tokens, start));
 
 	expect(onLoad).toBeGreaterThan(0);
 	expect(onLoad).toBeLessThanOrEqual(bound);
@@ -500,7 +516,7 @@ test('the token list is one Tab stop per ramp, semantic row and category, plus t
 	for (const category of NON_COLOUR_CATEGORIES) await expandCategory(page, category);
 	const valueRows = Object.values(EXPECTED_ROWS).reduce((total, count) => total + count, 0);
 
-	expect(await tabStopsInside(page, tokens, start)).toBeLessThanOrEqual(bound + valueRows);
+	expect(1 + (await tabStopsInside(page, tokens, start))).toBeLessThanOrEqual(bound + valueRows);
 });
 
 test('typing a token name into the filter hides every row whose name does not contain it', async ({
@@ -825,7 +841,7 @@ test("a dark-scheme shadow swatch paints that scheme's own shadow colour, alpha 
 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
-	await page.getByRole('button', { name: 'dark', exact: true }).click();
+	await chooseScheme(page, 'dark');
 	await expandCategory(page, 'shadow');
 
 	// Dark's shadow colour differs from light's in lightness and alpha for this seed, so a swatch
@@ -1269,11 +1285,11 @@ test("a field issue raised in the light scheme doesn't follow the row into dark"
 	await expect(issueItems(lightEditor)).toHaveText(['Enter a number.']);
 
 	// An outside press closes the popover, and the scheme-keyed remount drops the row's field state.
-	// The press lands on the Output heading because the scheme toggle sits outside the Tokens
-	// scroller now, and at this viewport a popover flipped above brand.1 covers it.
+	// The press lands on the Output heading: it's inert and outside the Tokens column, which a
+	// popover flipped above brand.1 can cover at this viewport.
 	await page.getByRole('heading', { name: 'Output', exact: true }).click();
 	await expect(lightEditor).toHaveCount(0);
-	await page.getByRole('button', { name: 'dark', exact: true }).click();
+	await chooseScheme(page, 'dark');
 
 	const darkEditor = await openEditor(page, 'primitive.brand.1');
 	const darkStep = TOKEN_SET.schemes.dark.primitives.brand!.find((step) => step.step === 1)!;

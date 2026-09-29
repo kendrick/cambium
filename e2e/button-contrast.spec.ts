@@ -68,12 +68,21 @@ async function openPopulatedGallery(page: Page): Promise<Locator> {
 	return preview;
 }
 
-/** `e2e/preview.spec.ts`'s own `switchScheme`, reused in shape: click only if the scheme differs. */
+/** The control's visible names, spelled out as `e2e/preview.spec.ts` spells them. */
+const SCHEME_LABELS = { light: 'Light', dark: 'Dark' } as const satisfies Record<
+	(typeof SCHEMES)[number],
+	string
+>;
+
+/** `e2e/preview.spec.ts`'s own `switchScheme`, copied: the workspace's one scheme control (#154). */
 async function switchScheme(page: Page, preview: Locator, scheme: (typeof SCHEMES)[number]) {
-	const toggle = page.getByRole('button', { name: 'Dark scheme' });
-	if ((await preview.getAttribute('data-preview-scheme')) !== scheme) await toggle.click();
+	const button = page
+		.getByRole('group', { name: 'Colour scheme' })
+		.getByRole('button', { name: SCHEME_LABELS[scheme], exact: true });
+	await button.click();
 
 	await expect(preview).toHaveAttribute('data-preview-scheme', scheme);
+	await expect(button).toHaveAttribute('aria-pressed', 'true');
 }
 
 /**
