@@ -1113,3 +1113,36 @@ describe('record-archive purity', () => {
 		expect(result.ok).toBe(true);
 	});
 });
+
+describe('name and incarnation', () => {
+	const named: BrandRecord = {
+		...record,
+		name: 'Acme Coffee',
+		incarnation: '0b6f3f7e-5f0a-4c1e-9a53-2f6d1c1e8a41',
+	};
+
+	// Read out of record.json directly, since a later version opening this archive reads the JSON,
+	// not the schema that wrote it.
+	it('writes both into record.json', () => {
+		const json = JSON.parse(strFromU8(unzipSync(serializeRecord(named))['record.json']!));
+
+		expect(json.name).toBe('Acme Coffee');
+		expect(json.incarnation).toBe(named.incarnation);
+	});
+
+	it('reads both back', () => {
+		const result = deserializeRecord(serializeRecord(named));
+		if (!result.ok) throw new Error(result.error.message);
+
+		expect(result.record).toEqual(named);
+	});
+
+	// Archives exported before #39 carry neither key. They have to keep opening.
+	it('leaves both out of an archive of a record that has neither, and reads it back', () => {
+		const json = JSON.parse(strFromU8(unzipSync(serializeRecord(record))['record.json']!));
+
+		expect(json).not.toHaveProperty('name');
+		expect(json).not.toHaveProperty('incarnation');
+		expect(deserializeRecord(serializeRecord(record))).toEqual({ ok: true, record });
+	});
+});

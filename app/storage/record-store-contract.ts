@@ -134,6 +134,26 @@ function withAddedImage(record: BrandRecord, image: ReferenceImage): BrandRecord
 	};
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** #122's criterion asks for every version count, zero included. */
+const VERSION_COUNTS = [0, 1, 2];
+
+function historyOf(count: number): BrandVersion[] {
+	return Array.from({ length: count }, (_, index) =>
+		makeVersion({ ordinal: index + 1, createdAt: `2026-01-0${index + 1}T00:00:00.000Z` }),
+	);
+}
+
+function imageNamed(id: string): ReferenceImage {
+	return {
+		id,
+		downscaled: 'data:image/png;base64,AA==',
+		originalHash: `sha256:${id}`,
+		tag: 'auto',
+	};
+}
+
 /**
  * Runs against any `RecordStore`. This file imports nothing but the interface and the schema it
  * moves, so a future IndexedDB or HTTP implementation passes it unchanged; if it doesn't, the
@@ -178,9 +198,9 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 
 		it('resolves the record most recently put under that id', async () => {
 			const record = makeRecord();
-			await store.put(record);
+			const stored = await store.put(record);
 
-			expect(await store.get(record.id)).toEqual(record);
+			expect(await store.get(record.id)).toEqual({ ...record, incarnation: stored.incarnation });
 		});
 
 		// #77: a person tags each image and, optionally, names the brand's site at upload. Both used
@@ -211,7 +231,8 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 
 			expect(reread.brandUrl).toBe('acme.com');
 			expect(reread.images.map((image) => image.tag)).toEqual(['logo', 'photo']);
-			expect(reread).toEqual(record);
+			expect(reread).toEqual({ ...record, incarnation: reread.incarnation });
+			expect(reread.incarnation).toMatch(UUID);
 		});
 	});
 
@@ -390,8 +411,10 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		 *
 		 * The self-computed revision above is the same limit reached by a caller that increments;
 		 * this one needs no increment at all. It stays dormant while every insert mints a fresh id,
-		 * which `components/landing/upload-form.tsx` does. Delete this test if `put` gains a way to
-		 * tell an insert from a commit, and assert the refusal in its place.
+		 * which `components/landing/upload-form.tsx` does. The incarnation doesn't close this. A
+		 * caller's own inserted object carries none, and a write carrying none is allowed through to
+		 * the revision check, so an insert under a taken id still reads as a commit. Delete this test
+		 * if `put` gains a way to tell an insert from a commit, and assert the refusal in its place.
 		 */
 		it('takes a second insert under an id stored at the first revision as a commit', async () => {
 			const id = crypto.randomUUID();
@@ -445,7 +468,8 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		 * differently, and 'does not tell a retried commit that another write landed in between'
 		 * covers it.
 		 *
-		 * Delete this test with the one above if `put` gains a way to tell an insert from a commit.
+		 * The incarnation doesn't close this, for the reason the test above gives. Delete this test
+		 * with the one above if `put` gains a way to tell an insert from a commit.
 		 */
 		it('takes an identical resend of an insert as a commit, which is a known limit', async () => {
 			const record = makeRecord();
@@ -851,124 +875,132 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 					makeVersion({ ordinal: 3, createdAt: '2026-01-03T00:00:00.000Z' }),
 				],
 			});
-			await store.put(original);
+			const first = await store.put(original);
 			await store.delete(original.id);
 
 			const recreated = makeRecord({ id: original.id });
+			const stored = await store.put(recreated);
 
-			await expect(store.put(recreated)).resolves.toEqual(recreated);
+			// Everything the caller sent comes back unchanged. The incarnation is storage's, and it has
+			// to be a new one, or a copy of the deleted record would read as a copy of this one.
+			expect(stored).toEqual({ ...recreated, incarnation: stored.incarnation });
+			expect(stored.incarnation).not.toBe(first.incarnation);
 			expect((await read(store, original.id)).versions).toHaveLength(1);
 		});
 
-		/**
-		 * A known hole, pinned here so it cannot move without someone noticing. This test asserts
-		 * what the seam does today, not what it should do.
-		 *
-		 * The cause is that `revision` restarts when a record is deleted and recreated under the same
-		 * id. `wasBuiltOnStored` compares an incoming write against the record storage holds now,
-		 * and nothing in either record says which incarnation the write came from, so a copy of the
-		 * deleted one whose revision has drawn level with the live record writes as a current copy.
-		 *
-		 * No condition is stated for when that lines up. Four attempts to bound it were each wrong
-		 * against cases their author had not thought of, and #78's red-team measured sixteen. Two
-		 * tests stand here instead of a rule: an ordinary sequence that reaches it, and a verbatim
-		 * replica. They are instances, not a boundary, and the gap between them is exactly the thing
-		 * four bounds got wrong.
-		 *
-		 * #78 opened it. Before #78 an image-only write was refused whatever incarnation it came
-		 * from, because `put` demanded a strictly longer history, and accepting metadata-only writes
-		 * took that side effect away.
-		 *
-		 * Nothing in the product reaches it: `delete` has no caller outside the test suites, and every
-		 * record is created under a fresh uuid, so no id is recreated. #20, which owns archive import,
-		 * restores as a copy under a fresh uuid rather than in place, so it does not recreate one
-		 * either. That is why this is dormant, and dormant is not closed: `delete` is still on the
-		 * interface, and the two tests above still pass, so whatever recreates an id first turns it
-		 * on. A stale write after a `delete` recreates the id by itself, so a caller of `delete` is
-		 * enough; 'brings a deleted record back from a copy read before the delete' pins that route.
-		 *
-		 * When the fix lands, delete both tests. Their inverse is the assertion to write instead.
-		 */
-		it('accepts a write from an incarnation that was deleted and recreated, which is a known hole', async () => {
-			const original = makeRecord();
-			await store.put(original);
-			const copyOfTheOriginal = await read(store, original.id);
+		// Storage mints the incarnation, and nothing a caller sends can choose it.
+		it('stamps a fresh incarnation on every insert and carries it through each commit', async () => {
+			const inserted = await store.put(makeRecord());
+			const other = await store.put(makeRecord());
 
-			// One instance of the cause: the recreate happens to sit at the revision the copy above was
-			// read at, so that copy's write carries the base storage holds.
-			await store.delete(original.id);
-			const recreated = makeRecord({ id: original.id, versions: original.versions });
-			await store.put(recreated);
+			expect(inserted.incarnation).toMatch(UUID);
+			expect(other.incarnation).not.toBe(inserted.incarnation);
 
-			const fromTheDeadIncarnation = withAddedImage(copyOfTheOriginal, {
-				id: 'img-from-a-deleted-incarnation',
-				downscaled: 'data:image/png;base64,AA==',
-				originalHash: 'sha256:ghost',
-				tag: 'auto',
-			});
-
-			await expect(store.put(fromTheDeadIncarnation)).resolves.toMatchObject({
-				images: fromTheDeadIncarnation.images,
-			});
-			// Read back rather than trusting what `put` resolved with: the image is on the record
-			// storage actually holds, which is the record the second brand's owner reads.
-			expect((await read(store, original.id)).images.map((image) => image.id)).toEqual([
-				'img-from-a-deleted-incarnation',
-			]);
+			const committed = await store.put(appended(inserted));
+			expect(committed.incarnation).toBe(inserted.incarnation);
 		});
 
-		// The same cause reached by an ordinary sequence, with nothing arranged to meet a shape. The
-		// first brand is created and given an image, so its holder's copy sits at revision 2. A
-		// second brand takes the id, starts at revision 1 as any new record does, and its owner adds
-		// one image, which brings it level at revision 2. The dead copy's write then carries the base
-		// storage holds, and it overwrites the live owner's image.
-		//
-		// This is the sequence that broke the fourth attempt to bound the gap: every earlier bound was
-		// drawn around the replica above, and this one sits outside all four. It is why the gap is
-		// described by its cause rather than by a region.
-		it('accepts a stale write once the recreated record has caught up to the copy revision', async () => {
+		// The insert exception `record-store.ts` documents: a caller that kept its own object after an
+		// insert holds no incarnation, and its next write still lands and keeps the stamped one.
+		it('keeps the stored incarnation when a write built on the inserted object carries none', async () => {
+			const record = makeRecord();
+			const inserted = await store.put(record);
+
+			const committed = await store.put(appended(record));
+
+			expect(committed.incarnation).toBe(inserted.incarnation);
+		});
+
+		// #122's verbatim replica, now refused. The recreate sits at the revision the copy was read at,
+		// so without an incarnation the copy's write would carry the base storage holds.
+		it.each(VERSION_COUNTS)(
+			'refuses a write from an incarnation that was deleted and recreated (%i versions)',
+			async (count) => {
+				const versions = historyOf(count);
+				const original = makeRecord({ versions });
+				await store.put(original);
+				const copyOfTheOriginal = await read(store, original.id);
+
+				await store.delete(original.id);
+				const recreated = await store.put(makeRecord({ id: original.id, versions }));
+
+				await expect(
+					store.put(
+						withAddedImage(copyOfTheOriginal, imageNamed('img-from-a-deleted-incarnation')),
+					),
+				).rejects.toMatchObject({ kind: 'stale-record-write', incarnation: 'replaced' });
+
+				// Both halves, because refusing every write would pass the first alone. The recreated
+				// incarnation's own first write still lands.
+				await expect(
+					store.put(withAddedImage(recreated, imageNamed('img-the-owner-added'))),
+				).resolves.toMatchObject({ revision: FIRST_REVISION + 1 });
+				expect((await read(store, original.id)).images.map((held) => held.id)).toEqual([
+					'img-the-owner-added',
+				]);
+			},
+		);
+
+		// Case P, the ordinary sequence that broke the fourth attempt to bound the gap. The second
+		// brand's owner writes from their own inserted object, which is the insert exception above,
+		// and that write is what brings the revisions level.
+		it.each(VERSION_COUNTS)(
+			'refuses a stale write once the recreated record has caught up to the copy revision (%i versions)',
+			async (count) => {
+				const versions = historyOf(count);
+				const original = makeRecord({ versions });
+				await store.put(original);
+				await store.put(withAddedImage(original, imageNamed('img-the-first-brand-had')));
+				const staleCopy = await read(store, original.id);
+				expect(staleCopy.revision).toBe(FIRST_REVISION + 1);
+
+				await store.delete(original.id);
+				const recreated = makeRecord({ id: original.id, versions });
+				await store.put(recreated);
+				await store.put(withAddedImage(recreated, imageNamed('img-the-owner-added')));
+				expect((await read(store, original.id)).revision).toBe(staleCopy.revision);
+
+				await expect(
+					store.put(withAddedImage(staleCopy, imageNamed('img-from-a-deleted-incarnation'))),
+				).rejects.toMatchObject({ kind: 'stale-record-write', incarnation: 'replaced' });
+				expect((await read(store, original.id)).images.map((held) => held.id)).toEqual([
+					'img-the-owner-added',
+				]);
+			},
+		);
+
+		// The shorter route: no recreate, only a delete. The copy carries the incarnation storage handed
+		// out, and nothing stored holds it now.
+		it.each(VERSION_COUNTS)(
+			'refuses to bring a deleted record back from a copy read before the delete (%i versions)',
+			async (count) => {
+				const original = makeRecord({ versions: historyOf(count) });
+				await store.put(original);
+				const copyReadBeforeTheDelete = await read(store, original.id);
+
+				await store.delete(original.id);
+
+				await expect(
+					store.put(
+						withAddedImage(copyReadBeforeTheDelete, imageNamed('img-from-a-deleted-record')),
+					),
+				).rejects.toMatchObject({
+					kind: 'stale-record-write',
+					incarnation: 'deleted',
+					storedRevision: 0,
+					storedVersions: 0,
+				});
+				expect(await store.get(original.id)).toBeNull();
+			},
+		);
+
+		it('says the record was deleted when it refuses a copy of one', async () => {
 			const original = makeRecord();
 			await store.put(original);
-			const firstBrandWithImage = withAddedImage(original, {
-				id: 'img-the-first-brand-had',
-				downscaled: 'data:image/png;base64,AA==',
-				originalHash: 'sha256:first',
-				tag: 'auto',
-			});
-			await store.put(firstBrandWithImage);
-			const staleCopy = await read(store, original.id);
-			expect(staleCopy.revision).toBe(2);
-
+			const copy = await read(store, original.id);
 			await store.delete(original.id);
-			const recreated = makeRecord({ id: original.id, versions: original.versions });
-			await store.put(recreated);
 
-			// Ordinary use by the second brand's owner, which is what brings the revisions level.
-			const ownersImage = withAddedImage(recreated, {
-				id: 'img-the-owner-added',
-				downscaled: 'data:image/png;base64,BB==',
-				originalHash: 'sha256:owner',
-				tag: 'auto',
-			});
-			await store.put(ownersImage);
-			expect((await read(store, original.id)).revision).toBe(staleCopy.revision);
-
-			const fromTheDeadIncarnation = withAddedImage(staleCopy, {
-				id: 'img-from-a-deleted-incarnation',
-				downscaled: 'data:image/png;base64,CC==',
-				originalHash: 'sha256:ghost',
-				tag: 'auto',
-			});
-			await expect(store.put(fromTheDeadIncarnation)).resolves.toMatchObject({
-				images: fromTheDeadIncarnation.images,
-			});
-
-			// Read back rather than trusting what `put` resolved with. Storage now holds the dead
-			// incarnation's images, because the stale write carried that copy's whole record, and
-			// the second brand owner's image is gone from it. Nothing errored.
-			const held = (await read(store, original.id)).images.map((image) => image.id);
-			expect(held).toEqual(['img-the-first-brand-had', 'img-from-a-deleted-incarnation']);
-			expect(held).not.toContain('img-the-owner-added');
+			await expect(store.put(copy)).rejects.toThrow(/no longer stored/);
 		});
 
 		// One sequence where the stale write is refused, asserted as that sequence and not as a rule
@@ -977,7 +1009,8 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		// recreate carries the same single version at a different instant and the stale write appends
 		// nothing, so the histories never agree and the write is refused. Both halves are asserted,
 		// because refusing every write would satisfy the first on its own and would be a different
-		// defect: the live record's own next image still lands.
+		// defect: the live record's own next image still lands. Since #122 the incarnation refuses this
+		// write before the histories are compared.
 		it("refuses this stale write, where the recreated history never agrees with the copy's", async () => {
 			const original = makeRecord();
 			await store.put(original);
@@ -1013,54 +1046,6 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 
 			expect((await read(store, recreated.id)).images.map((image) => image.id)).toEqual([
 				'img-the-live-record-added',
-			]);
-		});
-
-		/**
-		 * A known hole, pinned so it cannot move unnoticed. This asserts what the seam does today, not
-		 * what it should do.
-		 *
-		 * The delete-and-recreate hole above needs somebody to recreate the id. This one needs only a
-		 * `delete`. A copy read before the delete writes afterwards, finds nothing stored, and is taken
-		 * as an insert at `FIRST_REVISION`. The deleted record comes back under its old id with no
-		 * error. It is dormant for the same reason, since `delete` has no caller outside the test
-		 * suites.
-		 *
-		 * Neither known fix for a recreated id closes this route alone, because the write has no live
-		 * record to disagree with. Delete this test when `put` refuses it, and assert the refusal.
-		 */
-		it('brings a deleted record back from a copy read before the delete, which is a known hole', async () => {
-			const original = makeRecord();
-			await store.put(original);
-			await store.put(
-				withAddedImage(original, {
-					id: 'img-the-record-had',
-					downscaled: 'data:image/png;base64,BB==',
-					originalHash: 'sha256:had',
-					tag: 'auto',
-				}),
-			);
-			// Read past `FIRST_REVISION`, so the assertion below shows the copy's revision discarded
-			// rather than matched.
-			const copyReadBeforeTheDelete = await read(store, original.id);
-			expect(copyReadBeforeTheDelete.revision).toBe(FIRST_REVISION + 1);
-
-			await store.delete(original.id);
-
-			const fromTheDeletedRecord = withAddedImage(copyReadBeforeTheDelete, {
-				id: 'img-from-a-deleted-record',
-				downscaled: 'data:image/png;base64,AA==',
-				originalHash: 'sha256:ghost',
-				tag: 'auto',
-			});
-
-			await expect(store.put(fromTheDeletedRecord)).resolves.toMatchObject({
-				revision: FIRST_REVISION,
-				images: fromTheDeletedRecord.images,
-			});
-			expect((await read(store, original.id)).images.map((image) => image.id)).toEqual([
-				'img-the-record-had',
-				'img-from-a-deleted-record',
 			]);
 		});
 
@@ -1126,11 +1111,15 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		it('is not affected by a caller mutating the object passed to put afterward', async () => {
 			const record = makeRecord();
 			const versionsAtPutTime = [...record.versions];
-			await store.put(record);
+			const stored = await store.put(record);
 
 			record.versions.push(makeVersion({ ordinal: 2, interpretation: 'faithful' }));
 
-			expect(await store.get(record.id)).toEqual({ ...record, versions: versionsAtPutTime });
+			expect(await store.get(record.id)).toEqual({
+				...record,
+				versions: versionsAtPutTime,
+				incarnation: stored.incarnation,
+			});
 		});
 
 		// The same isolation has to hold in the other direction: a caller mutating what get handed
@@ -1256,12 +1245,12 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		it('leaves the rest of the store alone', async () => {
 			const kept = makeRecord();
 			const removed = makeRecord();
-			await store.put(kept);
+			const keptStored = await store.put(kept);
 			await store.put(removed);
 
 			await store.delete(removed.id);
 
-			expect(await store.list()).toEqual([kept]);
+			expect(await store.list()).toEqual([keptStored]);
 		});
 
 		// Matches IndexedDB's own `objectStore.delete`, which succeeds silently on a missing key,

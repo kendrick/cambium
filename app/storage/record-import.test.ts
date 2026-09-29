@@ -204,14 +204,24 @@ describe('importRecordArchive', () => {
 		expect(await store.get(original.id)).toEqual(original);
 
 		const imported = await store.get(result.id);
-		const { id: _droppedId, revision: _importedRevision, ...importedRest } = imported!;
-		const { id: _droppedOriginalId, revision: _originalRevision, ...originalRest } = original;
+		const {
+			id: _droppedId,
+			revision: _importedRevision,
+			incarnation: _importedIncarnation,
+			...importedRest
+		} = imported!;
+		const {
+			id: _droppedOriginalId,
+			revision: _originalRevision,
+			incarnation: _originalIncarnation,
+			...originalRest
+		} = original;
 
 		expect(imported!.revision).toBe(FIRST_REVISION);
 		expect(importedRest).toEqual(originalRest);
 	});
 
-	it('round-trips export, delete, import to an equal record apart from id and revision', async () => {
+	it('round-trips export, delete, import to an equal record apart from id, revision and incarnation', async () => {
 		const store = createInMemoryRecordStore();
 		const original = await store.put(makeRecord());
 		const bytes = serializeRecord(original);
@@ -223,14 +233,38 @@ describe('importRecordArchive', () => {
 		if (!result.ok) throw new Error(result.error.message);
 
 		const imported = await store.get(result.id);
-		const { id: _droppedId, revision: _droppedRevision, ...importedRest } = imported!;
+		const {
+			id: _droppedId,
+			revision: _droppedRevision,
+			incarnation: _droppedIncarnation,
+			...importedRest
+		} = imported!;
 		const {
 			id: _droppedOriginalId,
 			revision: _droppedOriginalRevision,
+			incarnation: _droppedOriginalIncarnation,
 			...originalRest
 		} = original;
 
 		expect(importedRest).toEqual(originalRest);
+	});
+
+	// The archive's incarnation names the record it was exported from. Import makes a new record, so
+	// storage has to mint it a new one, and the name the person gave it comes along.
+	it('imports under a fresh incarnation and keeps the record name', async () => {
+		const store = createInMemoryRecordStore();
+		const exported = await store.put(makeRecord({ name: 'Acme Coffee' }));
+		const freshId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+		const result = await importRecordArchive(store, serializeRecord(exported), () => freshId);
+		if (!result.ok) throw new Error(result.error.message);
+
+		const imported = await store.get(freshId);
+		expect(imported?.name).toBe('Acme Coffee');
+		expect(imported?.incarnation).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+		);
+		expect(imported?.incarnation).not.toBe(exported.incarnation);
 	});
 
 	it('gives two records when the same archive is imported twice', async () => {

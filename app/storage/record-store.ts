@@ -43,28 +43,28 @@ import { type BrandRecord, FIRST_REVISION } from '../../core/brand-record';
  * record of what was generated at one moment, so editing one rewrites history a later version may
  * cite.
  *
- * Both rules compare an incoming write against the record as storage holds it now. Neither can say
- * which incarnation the write came from, and `revision` cannot supply that, because it restarts
- * at `FIRST_REVISION` when a record is deleted and recreated under the same id. A copy of the
- * deleted incarnation can therefore hold, or later reach, the revision the live record has since
- * reached. Its write then carries the revision storage holds over a history the stored history
- * continues, which is the whole of what `wasBuiltOnStored` checks, so the write is accepted and
- * whatever the live record held is overwritten with no error raised.
+ * Both rules compare an incoming write against the record as storage holds it now, and neither can
+ * say which life of an id the write came from. `revision` restarts at `FIRST_REVISION` when a record
+ * is deleted and recreated under the same id, so a copy of the deleted record can hold, or later
+ * reach, the revision the live one stands at. Its write then passes both rules and overwrites the
+ * live record. #78 opened that gap, and #122 closed it with `incarnation`.
  *
- * How often that lines up is deliberately not stated here as a condition. Four attempts to bound it
- * have each been wrong, and each was tested against the cases its own author thought of. #78's
- * red-team measured sixteen, and `record-store-contract.ts` pins the one an ordinary sequence of
- * writes reaches.
+ * `nextCommit` mints a fresh incarnation on every insert and carries the stored one through every
+ * commit. It refuses a write whose incarnation storage no longer holds. Where the id holds a
+ * different incarnation, the id was deleted and recreated after the copy was read. Where nothing is
+ * stored, the copy's record was deleted, and taking the write as an insert would bring it back.
+ * Every copy storage hands out carries its incarnation, so such a copy can take neither route.
  *
- * #78 opened the gap: demanding a longer history used to refuse those writes whatever incarnation
- * they came from, and accepting metadata-only writes took that side effect away. No product code
- * calls `delete` today, and every record is created under a fresh uuid, so no id is ever recreated
- * and nothing a user can do reaches it. The known fixes are set out below, with #20's decision.
+ * A write carrying no incarnation goes on to the revision check. That's how an inserting caller's
+ * own object arrives on its next write, and it's the one limit left: an object the caller built
+ * itself can still commit over a recreated id or bring a deleted one back. Only `save` in
+ * `components/landing/upload-form.tsx` and `importRecordArchive` hold such an object, and neither
+ * writes it twice.
  *
- * A stale copy does not need anyone to recreate the id first. Once the id is deleted, a write from
- * a copy read before the delete finds nothing stored, so `nextCommit` takes it as an insert, stamps
- * `FIRST_REVISION`, and stores it. The deleted record comes back under its old id with no error
- * raised. The contract suite pins that too.
+ * A per-id revision floor kept by storage is the other known fix, and it isn't built. It needs a
+ * `DATABASE_VERSION` bump and state for every id ever deleted, and it can't refuse a stale write
+ * after a `delete` alone, because that write has no live record to compare against.
+ * `docs/adr/0007-allow-optional-record-fields-at-schema-1.md` records the choice.
  *
  * Restoring an archive over a record that still exists gets no special handling here. `put` judges
  * an archive as it judges any other write, so it accepts one carrying the revision storage holds
@@ -76,30 +76,12 @@ import { type BrandRecord, FIRST_REVISION } from '../../core/brand-record';
  * record archive in their non-goals, and a `BrandRecord` cannot be rebuilt from what either emits.
  * #20 serializes a record to a re-importable archive, and one of its acceptance criteria is "Export,
  * clear storage, then import yields a token set identical to the original". Clearing storage and
- * importing is delete and recreate, which is the sequence the gap above needs.
+ * importing is delete and recreate, which is the sequence the incarnation guards.
  *
  * #20 restores a record as a copy under a fresh uuid rather than in place under the id it was
- * exported with, and it decided that against this gap. Restoring in place recreates an id. Two
- * fixes are known for a recreated id, and neither is built:
- *
- * - Incarnation identity on `BrandRecord`. That is a schema change, and #36's Boundary rules it out
- *   for the phase: "Nothing in this phase changes an interface, a schema, or a call site
- *   established in v1."
- * - A per-id revision floor kept by storage. `delete` would record the highest revision the id
- *   reached, and a recreate would start one past it, so no copy of the deleted record could carry
- *   a revision the live one holds. It needs no `BrandRecord` field, but it keeps state for every id
- *   ever deleted, and IndexedDB needs a `DATABASE_VERSION` bump to hold it.
- *
- * Neither fix alone stops a stale copy from bringing back a deleted id. That write finds nothing
- * stored, so a floor would stamp it like any other recreate, and there is no live incarnation for
- * it to disagree with.
- *
- * Nothing recreates an id, then. `delete` has no caller outside the test suites, every record is
- * created under a fresh uuid, and an import mints another one. That is why the gap is dormant, and
- * dormant is not closed: `delete` is still on this interface, `wasBuiltOnStored` still accepts a
- * write against a record recreated under a deleted id, and `nextCommit` still stores a stale write
- * against a deleted one. Whatever ships a caller of `delete` first turns the gap on and owes a fix
- * with it.
+ * exported with. It also drops the archive's incarnation, which names the record the archive came
+ * from, so storage mints the copy a fresh one. Carried over, it would make `put` refuse the import
+ * as the copy of a deleted record.
  *
  * `put` resolves with the record as stored, after parsing. `BrandSeedSchema` canonicalises values
  * that have two spellings — a hue committed as 360 is stored as 0 — so a caller that adopts the
@@ -137,10 +119,10 @@ export type RecordStore = {
  * What this cannot check is whether a revision the writer presents is one it really read. The
  * number is small and a caller can compute one, so a caller that increments its own revision can
  * land on the value storage holds and be accepted. Nothing in the two records distinguishes that
- * from a copy read at that revision. It is the same limit the module docblock describes for an id
- * that was deleted and recreated, reached by a different route: `revision` counts commits and does
- * not identify a lineage. A caller carries the revision it read and does not compute one; that is a
- * contract this function cannot enforce.
+ * from a copy read at that revision, because `revision` counts commits and does not identify a
+ * lineage. `incarnation` identifies which life of an id a copy came from, and says nothing about
+ * which revision of that life it read. A caller carries the revision it read and does not compute
+ * one; that is a contract this function cannot enforce.
  *
  * An insert reaches the same limit with no increment at all. A new record carries `FIRST_REVISION`,
  * and `put` has nothing else to tell an insert from a commit by. Send a new record under an id storage
@@ -152,9 +134,10 @@ export type RecordStore = {
  *
  * Telling an insert from a commit needs something `put` does not get today. A second input to `put`
  * is one way, and #67's non-goals rule out both forms of it: "Widening the `put` signature" and "A
- * separate `putIfUnchanged` method". A field on the record that marks an insert or names an
- * incarnation is another way, and it is a schema change, which #36's Boundary rules out for the
- * phase. The limit is dormant because the one product path that inserts, `save` in
+ * separate `putIfUnchanged` method". A field on the record that marks an insert is another way.
+ * `incarnation` isn't that field. A caller's own inserted object carries none, and a write carrying
+ * none goes on to the revision check, so an insert under a taken id still reads as a commit. The
+ * limit is dormant because the one product path that inserts, `save` in
  * `components/landing/upload-form.tsx`, mints a fresh id with `crypto.randomUUID()` on every call,
  * so no insert reuses an id. The contract suite pins both the changed insert and the identical
  * resend as known limits.
@@ -219,22 +202,62 @@ export function wasBuiltOnStored(stored: BrandRecord, incoming: BrandRecord): bo
  * is no base to check and the record starts at `FIRST_REVISION`. A caller's own `revision` is
  * discarded there rather than trusted, which is what keeps a record that arrives at revision 7 from
  * being stored at 7 and making every later write compare against a number no commit produced.
+ *
+ * An insert also stamps a fresh `incarnation`, and refuses a record that arrives carrying one. Only
+ * a copy of a record storage held can carry one, and nothing holds that record now. A commit refuses
+ * an incarnation other than the stored one, then runs `wasBuiltOnStored`, then carries the stored
+ * incarnation forward. A record stored before the field existed has none, and its next commit mints
+ * one.
+ *
+ * `mintIncarnation` is a parameter so a test can pin the value without stubbing `crypto`.
  */
-export function nextCommit(stored: BrandRecord | undefined, incoming: BrandRecord): BrandRecord {
+export function nextCommit(
+	stored: BrandRecord | undefined,
+	incoming: BrandRecord,
+	mintIncarnation: () => string = () => crypto.randomUUID(),
+): BrandRecord {
 	if (stored === undefined) {
-		return { ...incoming, revision: FIRST_REVISION };
+		if (incoming.incarnation !== undefined) {
+			throw new StaleRecordWriteError(incoming.id, {
+				storedVersions: 0,
+				incomingVersions: incoming.versions.length,
+				storedRevision: 0,
+				incomingRevision: incoming.revision,
+				incarnation: 'deleted',
+			});
+		}
+
+		return stamped(incoming, FIRST_REVISION, mintIncarnation());
+	}
+
+	const standing = {
+		storedVersions: stored.versions.length,
+		incomingVersions: incoming.versions.length,
+		storedRevision: stored.revision,
+		incomingRevision: incoming.revision,
+	};
+
+	if (incoming.incarnation !== undefined && incoming.incarnation !== stored.incarnation) {
+		throw new StaleRecordWriteError(incoming.id, { ...standing, incarnation: 'replaced' });
 	}
 
 	if (!wasBuiltOnStored(stored, incoming)) {
-		throw new StaleRecordWriteError(incoming.id, {
-			storedVersions: stored.versions.length,
-			incomingVersions: incoming.versions.length,
-			storedRevision: stored.revision,
-			incomingRevision: incoming.revision,
-		});
+		throw new StaleRecordWriteError(incoming.id, standing);
 	}
 
-	return { ...incoming, revision: stored.revision + 1 };
+	return stamped(incoming, stored.revision + 1, stored.incarnation ?? mintIncarnation());
+}
+
+/**
+ * Builds the record with its keys where `BrandRecordSchema` puts them. The IndexedDB store hands back
+ * the object it wrote, while `get` and the in-memory store hand back a parse, and a caller that
+ * adopts one and serialises it has to get the bytes a later `get` gives. A spread leaves a key the
+ * incoming record didn't carry at the end, so `incarnation` would land after `versions` on every
+ * insert.
+ */
+function stamped(incoming: BrandRecord, revision: number, incarnation: string): BrandRecord {
+	const { images, versions, ...head } = incoming;
+	return { ...head, revision, incarnation, images, versions };
 }
 
 /**
@@ -246,19 +269,30 @@ export type StaleRecordWriteStanding = {
 	incomingVersions: number;
 	storedRevision: number;
 	incomingRevision: number;
+	/**
+	 * Set only when the write came from an incarnation storage no longer holds: `replaced` where the id
+	 * was deleted and created again, `deleted` where nothing is stored under it now. For `deleted`, both
+	 * stored numbers are 0, which no stored record can hold because `FIRST_REVISION` is 1.
+	 */
+	incarnation?: 'replaced' | 'deleted';
 };
 
 /**
- * Thrown when `wasBuiltOnStored` refuses a write. Two things can fail: the base the write was built
- * on is not the revision storage holds, or it is and the versions do not continue the stored
- * history. `storedRevision` is where the record stands, `incomingRevision` is the base the refused
- * write carried, and a caller reads which failed off those two without parsing the message.
+ * Thrown when `nextCommit` refuses a write. Four things can fail. The write can carry an incarnation
+ * storage no longer holds, because the id was deleted and recreated after the copy was read
+ * (`incarnation: 'replaced'`) or because the record was deleted and nothing is stored under the id
+ * now (`incarnation: 'deleted'`). Otherwise `incarnation` is null and `wasBuiltOnStored` refused the
+ * write: the base it was built on is not the revision storage holds, or it is and the versions do not
+ * continue the stored history. `storedRevision` is where the record stands, `incomingRevision` is the
+ * base the refused write carried, and a caller reads which failed off those fields without parsing
+ * the message.
  *
- * The recovery is the same either way, which is why there is one error and not two: re-read the
- * record and commit again from what comes back. That holds for a copy another writer overtook, for a
- * commit whose own response was lost and was sent a second time, and for a copy of an id that was
- * deleted and recreated. Only the first of those has a second writer in it, so no wording here says
- * one landed. A resent insert is not on that list. `put` accepts its first resend as a commit, and
+ * The recovery is the same in every case, which is why there is one error and not several: re-read
+ * the record and commit again from what comes back. That holds for a copy another writer overtook,
+ * for a commit whose own response was lost and was sent a second time, and for a copy of an id that
+ * was deleted and recreated. For `deleted` the re-read finds nothing, so there is no record left to
+ * commit to. Only an overtaken copy has a second writer in it, so no wording here says one landed.
+ * A resent insert is not on that list. `put` accepts its first resend as a commit, and
  * `wasBuiltOnStored` says why.
  *
  * The version counts are context rather than the test the write failed, and they measure neither
@@ -291,26 +325,39 @@ export class StaleRecordWriteError extends Error {
 	readonly incomingVersions: number;
 	readonly storedRevision: number;
 	readonly incomingRevision: number;
+	readonly incarnation: 'replaced' | 'deleted' | null;
 
 	constructor(recordId: string, standing: StaleRecordWriteStanding, options?: { cause?: unknown }) {
-		super(staleWriteMessage(recordId, standing.storedRevision, standing.incomingRevision), options);
+		super(staleWriteMessage(recordId, standing), options);
 		this.name = 'StaleRecordWriteError';
 		this.recordId = recordId;
 		this.storedVersions = standing.storedVersions;
 		this.incomingVersions = standing.incomingVersions;
 		this.storedRevision = standing.storedRevision;
 		this.incomingRevision = standing.incomingRevision;
+		this.incarnation = standing.incarnation ?? null;
 	}
 }
 
 /**
- * The sentence for whichever of the two refusals happened, told apart by the revisions alone.
- * Version counts stay out of it: they are the same number in the case two writers race on images,
- * and they run the wrong way for a copy that ran ahead, so a message built on them describes the
- * write rather than the reason it was refused.
+ * The sentence for whichever refusal happened. An incarnation refusal is named first, because its
+ * revisions belong to two different records and comparing them says nothing. The other two are told
+ * apart by the revisions alone. Version counts stay out of it: they are the same number in the case
+ * two writers race on images, and they run the wrong way for a copy that ran ahead, so a message
+ * built on them describes the write rather than the reason it was refused.
  */
-function staleWriteMessage(recordId: string, stored: number, builtOn: number): string {
-	// Two branches rather than the three the old rule needed. That rule compared the revision a
+function staleWriteMessage(recordId: string, standing: StaleRecordWriteStanding): string {
+	if (standing.incarnation === 'deleted') {
+		return `record ${recordId} is no longer stored, and this write was built on a copy read before it was deleted; a stale copy does not bring a deleted record back`;
+	}
+
+	if (standing.incarnation === 'replaced') {
+		return `record ${recordId} was deleted and created again after this copy was read, so the write belongs to a record that no longer exists`;
+	}
+
+	const { storedRevision: stored, incomingRevision: builtOn } = standing;
+
+	// Two revision branches rather than the three the old rule needed. That rule compared the revision a
 	// writer wanted to write, so it could tell a copy that had been overtaken from one that had run
 	// ahead, and the two wanted different recoveries. A base that does not match is one thing however
 	// it came to differ, and re-reading is the answer to all of it, so a wording that sorted the

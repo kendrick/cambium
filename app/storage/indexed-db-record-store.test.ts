@@ -112,7 +112,7 @@ describe('createIndexedDbRecordStore persistence', () => {
 	it('keeps a record and its images after the connection closes and another opens', async () => {
 		const record = makeRecordWithImage();
 		const store = await createIndexedDbRecordStore();
-		await store.put(record);
+		const stored = await store.put(record);
 
 		closeIndexedDbRecordStore(store);
 
@@ -124,8 +124,8 @@ describe('createIndexedDbRecordStore persistence', () => {
 
 		const reopened = await createIndexedDbRecordStore();
 
-		expect(await reopened.get(record.id)).toEqual(record);
-		expect(await reopened.list()).toEqual([record]);
+		expect(await reopened.get(record.id)).toEqual(stored);
+		expect(await reopened.list()).toEqual([stored]);
 	});
 
 	// Reading rejects rather than skipping or repairing. A mismatch that read as an empty list would
