@@ -29,7 +29,7 @@ export function PinToggle({
 			data-pinned={pinned ? '' : undefined}
 			onClick={onToggle}
 			className={cn(
-				'focus-visible:ring-ring/50 inline-flex size-7 shrink-0 items-center justify-center rounded-md border outline-none focus-visible:ring-3',
+				'inline-flex size-7 shrink-0 items-center justify-center rounded-md border',
 				pinned
 					? 'border-foreground bg-foreground text-background'
 					: 'text-muted-foreground hover:bg-muted hover:text-foreground border-transparent',
