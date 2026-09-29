@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
+import { PNG } from 'pngjs';
 
 import { expect, test } from './fixtures';
 import {
@@ -15,10 +16,19 @@ import {
  * `components/ui/button-contrast.test.ts` gates the same defect (#68) at the seam
  * `docs/agents/testing.md` calls the pure core: compiled CSS, resolved tokens, the repo's own
  * compositing math. This is the consumer that math is a claim about — the browser rendering the
- * preview gallery for real — so it reads `getComputedStyle` on the actual `Button` and `Badge`
- * markup and does its own alpha-blend and WCAG contrast arithmetic, independent of
- * `core/oklch.ts`'s, rather than re-deriving the Vitest suite's answer and checking that against
- * itself.
+ * preview gallery for real — so it reads a `locator.screenshot()` of the actual `Button` and `Badge`
+ * markup and does its own WCAG contrast arithmetic over the pixels Chromium already composited,
+ * independent of `core/oklch.ts`'s, rather than re-deriving the Vitest suite's answer and checking
+ * that against itself.
+ *
+ * An earlier version of this file read `getComputedStyle`, resolved each declared colour to sRGB
+ * through a throwaway canvas, and blended fill over backdrop itself (PR #166 review). That path
+ * quantizes the backdrop and the translucent fill to 8-bit bytes independently before blending them,
+ * where Chromium composites the underlying colour values first and quantizes the result once — close
+ * enough to agree most of the time, but the gap widens exactly at the low alpha fractions
+ * (`/5`, `/8`) this spec exists to check, near the 4.5:1 boundary where a rounding difference can flip
+ * the verdict. A screenshot has no such gap: it's the pixel the compositor actually painted, so
+ * reading it is the consumer's unit rather than a re-implementation of the consumer.
  *
  * Distinct from `e2e/stylesheet-dark.spec.ts`, which compiles a hand-assembled stylesheet through
  * `page.setContent()` for a cascade question no route yet renders. The preview gallery already
@@ -88,60 +98,7 @@ async function settle(page: Page): Promise<void> {
 		.toBe(0);
 }
 
-type Rgb = { r: number; g: number; b: number; a: number };
-
-/**
- * Resolves any CSS colour string `getComputedStyle` hands back — `rgb()`/`rgba()` on most engines,
- * `oklch()` on one new enough to keep a computed colour in its origin space, since this repo's
- * tokens are `oklch(...)` literals — to the sRGB bytes a canvas actually paints. A canvas 2D context
- * rasterizes to sRGB on `getImageData` regardless of what colour space `fillStyle` was set in, so
- * this asks the browser to do the conversion rather than reimplementing it, the same reason this
- * file writes its own alpha blend and contrast maths below instead of importing `core/oklch.ts`'s.
- */
-async function resolveToRgb(page: Page, css: string): Promise<Rgb> {
-	return page.evaluate((value) => {
-		const canvas = document.createElement('canvas');
-		canvas.width = 1;
-		canvas.height = 1;
-		const ctx = canvas.getContext('2d', { willReadFrequently: true });
-		if (!ctx) throw new Error('2d canvas context unavailable');
-
-		ctx.fillStyle = value;
-		ctx.fillRect(0, 0, 1, 1);
-		const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
-
-		return { r: r!, g: g!, b: b!, a: a! / 255 };
-	}, css);
-}
-
-/** `getComputedStyle(element)[property]`, resolved to sRGB bytes via `resolveToRgb`. */
-async function computedRgb(
-	page: Page,
-	locator: Locator,
-	property: 'color' | 'backgroundColor',
-): Promise<Rgb> {
-	const css = await locator.evaluate((node, prop) => getComputedStyle(node)[prop], property);
-
-	return resolveToRgb(page, css);
-}
-
-/**
- * What lands on screen when a translucent `source` paints over an opaque `backdrop`: a per-channel
- * sRGB blend on the 8-bit values the browser already reports, rounded the way a pixel is. Written
- * from the WCAG/CSS compositing model directly rather than imported from `core/oklch.ts`'s
- * `compositeOver` — the point of this spec is to check that function's answer against the browser's,
- * not to ask it to check itself.
- */
-function alphaComposite(backdrop: Rgb, source: Rgb): Rgb {
-	const mix = (under: number, over: number) => Math.round(under * (1 - source.a) + over * source.a);
-
-	return {
-		r: mix(backdrop.r, source.r),
-		g: mix(backdrop.g, source.g),
-		b: mix(backdrop.b, source.b),
-		a: 1,
-	};
-}
+type Rgb = { r: number; g: number; b: number };
 
 /** One sRGB byte, linearised per the WCAG relative-luminance formula (2.4.7 / SC 1.4.3). */
 function linearised(byte: number): number {
@@ -155,17 +112,17 @@ function relativeLuminance({ r, g, b }: Rgb): number {
 }
 
 /**
- * The `background-color` of the nearest ancestor that paints one, plus whether that ancestor is the
- * app screen's orders table. Walked in the browser rather than assumed, because a table row or cell
- * gaining a fill would change the surface the badge composites over, and that fill is what the
- * browser would actually blend against.
+ * Whether the nearest ancestor that paints a background is the app screen's orders table, walked in
+ * the browser rather than assumed. `paintedContrast` below reads the composited pixel regardless of
+ * what that ancestor is, so this exists only to confirm the specimen under test is the badge actually
+ * sitting on `card` — the one class-resolution fact a pixel read can't tell you on its own.
  */
-async function paintedSurface(locator: Locator): Promise<{ css: string; isTable: boolean }> {
+async function sitsOnTable(locator: Locator): Promise<boolean> {
 	return locator.evaluate((node) => {
 		for (let current = node.parentElement; current; current = current.parentElement) {
 			const css = getComputedStyle(current).backgroundColor;
 			if (css !== 'rgba(0, 0, 0, 0)' && css !== 'transparent') {
-				return { css, isTable: current.matches('[data-preview-part="table"]') };
+				return current.matches('[data-preview-part="table"]');
 			}
 		}
 		throw new Error('no ancestor paints a background');
@@ -181,6 +138,77 @@ function contrastRatio(a: Rgb, b: Rgb): number {
 	const [lighter, darker] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
 
 	return (lighter! + 0.05) / (darker! + 0.05);
+}
+
+/**
+ * Every pixel inside `target`'s box, decoded from a real screenshot the way `e2e/token-list.spec.ts`'s
+ * `paintedCentre` reads one — except the whole box here, not just its centre, because neither the
+ * fill nor a glyph's ink sits at a fixed offset across a link's underline, a pill badge's rounded
+ * ends, and a button's padding.
+ */
+async function paintedPixels(target: Locator): Promise<Rgb[]> {
+	const png = PNG.sync.read(await target.screenshot({ animations: 'disabled' }));
+	const pixels: Rgb[] = [];
+	for (let offset = 0; offset < png.data.length; offset += 4) {
+		pixels.push({ r: png.data[offset]!, g: png.data[offset + 1]!, b: png.data[offset + 2]! });
+	}
+	return pixels;
+}
+
+/**
+ * The fill Chromium actually painted, taken as whichever exact byte triple covers the most pixels in
+ * the box. A Tailwind fraction like `/5` names an intent, not a byte value; the majority colour is
+ * what compositing that intent over whatever sits underneath produced, with the rounded corners' and
+ * glyphs' anti-aliased edges outvoted by the flat fill between them.
+ */
+function paintedFill(pixels: Rgb[]): Rgb {
+	const counts = new Map<string, { rgb: Rgb; count: number }>();
+	for (const rgb of pixels) {
+		const key = `${rgb.r},${rgb.g},${rgb.b}`;
+		const entry = counts.get(key);
+		if (entry) entry.count += 1;
+		else counts.set(key, { rgb, count: 1 });
+	}
+
+	let winner: { rgb: Rgb; count: number } | undefined;
+	for (const entry of counts.values()) {
+		if (!winner || entry.count > winner.count) winner = entry;
+	}
+	if (!winner) throw new Error('screenshot decoded to zero pixels');
+	return winner.rgb;
+}
+
+/**
+ * The pixel likeliest to be a glyph's true ink rather than an anti-aliased blend toward the fill:
+ * whichever pixel in the box contrasts hardest against `fill`. Every blended edge pixel sits between
+ * the glyph colour and the fill by construction, so it can only read as less extreme than the glyph's
+ * own ink, never more — the true text colour is always the contrast-maximising pixel, even at the
+ * small sizes here (badge text at 12px, button text at 14px) where no run is wide enough to guarantee
+ * a large flat interior.
+ */
+function paintedText(pixels: Rgb[], fill: Rgb): Rgb {
+	let winner: Rgb | undefined;
+	let winnerRatio = -Infinity;
+	for (const pixel of pixels) {
+		const ratio = contrastRatio(pixel, fill);
+		if (ratio > winnerRatio) {
+			winnerRatio = ratio;
+			winner = pixel;
+		}
+	}
+	if (!winner) throw new Error('screenshot decoded to zero pixels');
+	return winner;
+}
+
+/**
+ * The ratio between what Chromium painted for `target`'s fill and what it painted for its text —
+ * the whole measurement this spec exists to make, now taken from one screenshot rather than from a
+ * `getComputedStyle` value this file would otherwise have to composite itself.
+ */
+async function paintedContrast(target: Locator): Promise<number> {
+	const pixels = await paintedPixels(target);
+	const fill = paintedFill(pixels);
+	return contrastRatio(paintedText(pixels, fill), fill);
 }
 
 test('the link Button, the destructive Button (rest and hover), and the destructive Badge on the page and on card clear 4.5:1 as the browser actually paints them, light and dark', async ({
@@ -202,30 +230,17 @@ test('the link Button, the destructive Button (rest and hover), and the destruct
 		await switchScheme(page, preview, scheme);
 		await settle(page);
 
-		// The page surface every specimen below sits on: neither the `Specimen` wrapper nor the
-		// gallery section declares a background of its own (`gallery.tsx`), so this is the real
-		// backdrop a translucent fill composites against, not an assumption borrowed from
-		// `core/semantic-map.ts`.
-		const backdrop = await computedRgb(page, preview, 'backgroundColor');
+		expect(await paintedContrast(linkButton), `link ${scheme}`).toBeGreaterThanOrEqual(TEXT_TARGET);
 
-		const linkColor = await computedRgb(page, linkButton, 'color');
-		expect(contrastRatio(linkColor, backdrop), `link ${scheme}`).toBeGreaterThanOrEqual(
-			TEXT_TARGET,
-		);
-
-		const destructiveColor = await computedRgb(page, destructiveButton, 'color');
-
-		const restFill = await computedRgb(page, destructiveButton, 'backgroundColor');
 		expect(
-			contrastRatio(destructiveColor, alphaComposite(backdrop, restFill)),
+			await paintedContrast(destructiveButton),
 			`destructive button rest ${scheme}`,
 		).toBeGreaterThanOrEqual(TEXT_TARGET);
 
 		await destructiveButton.hover();
 		await settle(page);
-		const hoverFill = await computedRgb(page, destructiveButton, 'backgroundColor');
 		expect(
-			contrastRatio(destructiveColor, alphaComposite(backdrop, hoverFill)),
+			await paintedContrast(destructiveButton),
 			`destructive button hover ${scheme}`,
 		).toBeGreaterThanOrEqual(TEXT_TARGET);
 		// Off the button before the next scheme (or the badge below) reads a style that is still
@@ -233,21 +248,17 @@ test('the link Button, the destructive Button (rest and hover), and the destruct
 		await page.mouse.move(0, 0);
 		await settle(page);
 
-		const badgeColor = await computedRgb(page, destructiveBadge, 'color');
-		const badgeFill = await computedRgb(page, destructiveBadge, 'backgroundColor');
 		expect(
-			contrastRatio(badgeColor, alphaComposite(backdrop, badgeFill)),
+			await paintedContrast(destructiveBadge),
 			`destructive badge ${scheme}`,
 		).toBeGreaterThanOrEqual(TEXT_TARGET);
 
-		const surface = await paintedSurface(refundedBadge);
-		expect(surface.isTable, `refunded badge ${scheme} sits on the orders table`).toBe(true);
-		const card = await resolveToRgb(page, surface.css);
-		expect(card.a, `card ${scheme} is opaque`).toBe(1);
-		const refundedColor = await computedRgb(page, refundedBadge, 'color');
-		const refundedFill = await computedRgb(page, refundedBadge, 'backgroundColor');
 		expect(
-			contrastRatio(refundedColor, alphaComposite(card, refundedFill)),
+			await sitsOnTable(refundedBadge),
+			`refunded badge ${scheme} sits on the orders table`,
+		).toBe(true);
+		expect(
+			await paintedContrast(refundedBadge),
 			`refunded badge on card ${scheme}`,
 		).toBeGreaterThanOrEqual(TEXT_TARGET);
 	}
