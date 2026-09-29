@@ -261,11 +261,15 @@ function allEntries(
  * targets ES2022 (the trade `core/dtcg/report.ts` also makes), so the lint rule aimed at exactly this
  * mutation is disabled once, here, rather than at each of this file's two call sites.
  *
- * Ordered by codepoint, not `localeCompare`: this is the only locale-sensitive sort in `core/`, and a
- * token path is an identifier, not prose a reader collates by a language's own rules. `localeCompare`
- * without an explicit locale reads the runtime's default ICU locale, so the same token set could sort
- * this table into a different row order on a machine configured differently — exactly the kind of
- * environment-dependent output a pure function (`designDoc`'s own docblock) can't afford.
+ * Ordered by UTF-16 code unit, not `localeCompare`: this is the only locale-sensitive sort in `core/`,
+ * and a token path is an identifier, not prose a reader collates by a language's own rules. `aKey <
+ * bKey` isn't quite codepoint order — an astral character (U+10000 and up, a surrogate pair) can sort
+ * ahead of a single unit in U+E000–U+FFFF even though its codepoint is larger — but it's still
+ * locale-free and deterministic, because it follows the string's own encoding rather than a runtime's
+ * ICU tables. `localeCompare` without an explicit locale reads the runtime's default ICU locale, so
+ * the same token set could sort this table into a different row order on a machine configured
+ * differently — exactly the kind of environment-dependent output a pure function (`designDoc`'s own
+ * docblock) can't afford.
  */
 function sortedByKeys<T>(items: readonly T[], keysOf: (item: T) => readonly string[]): T[] {
 	// oxlint-disable-next-line unicorn/no-array-sort
@@ -388,6 +392,20 @@ function inventedSection(entries: readonly TokenEntry[]): string[] {
 const PAIRING_ROLES = ['display', 'body', 'mono'] as const;
 
 /**
+ * `displayDiffersFromBody` decides whether the pairing ranks display and body as separate roles
+ * (`brand-seed.ts`'s own docblock), so it's a type decision as real as category or tone: leaving it
+ * off the Measured row let two seeds that disagree on it render an identical Type section. "yes"/"no"
+ * matches how a reader already reads this row rather than the raw `true`/`false` the field holds, and
+ * "not classified" reuses this row's own wording for every other cell an absent classification leaves
+ * unanswered.
+ */
+function displayDiffersCell(typeClassification: BrandSeed['typeClassification']): string {
+	if (!typeClassification) return 'not classified';
+
+	return typeClassification.displayDiffersFromBody ? 'yes' : 'no';
+}
+
+/**
  * A stated ratio with no classification is still a measured scale (criterion 4 asks the doc to say
  * so), so the row prints whenever either half is present, each missing half saying it's missing
  * rather than the whole row vanishing because one field came back empty.
@@ -401,6 +419,7 @@ function typeSection(seed: BrandSeed): string[] {
 						seed.typeClassification?.tone ?? 'not classified',
 						seed.typeClassification?.xHeight ?? 'not classified',
 						seed.typeScaleRatio === null ? 'no ratio' : String(seed.typeScaleRatio),
+						displayDiffersCell(seed.typeClassification),
 					],
 				]
 			: [];
@@ -420,7 +439,10 @@ function typeSection(seed: BrandSeed): string[] {
 		'',
 		'**Measured**',
 		'',
-		...table(['Category', 'Tone', 'X-height', 'Type scale ratio'], measured),
+		...table(
+			['Category', 'Tone', 'X-height', 'Type scale ratio', 'Display differs from body'],
+			measured,
+		),
 		'',
 		'**Suggested**',
 		'',

@@ -540,6 +540,19 @@ describe('designDoc repairs', () => {
 	});
 });
 
+/** The Measured row's Display differs from body cell, for a seed whose typeClassification only differs there. */
+function displayDiffersCellFor(displayDiffersFromBody: boolean): string | undefined {
+	const flipped = designDoc({
+		tokens,
+		seed: { ...seed, typeClassification: { ...seed.typeClassification!, displayDiffersFromBody } },
+		repairs,
+	});
+	const measured = parseTables(flipped.split('\n')).find((t) => t.headers[0] === 'Category')!;
+	const column = measured.headers.indexOf('Display differs from body');
+
+	return measured.rows[0]?.[column];
+}
+
 describe('designDoc type section', () => {
 	it("labels the Measured and Suggested tables and shows the seed's typeScaleRatio", () => {
 		expect(docLines).toContain('**Measured**');
@@ -556,6 +569,18 @@ describe('designDoc type section', () => {
 		const measured = noRatioTables.find((t) => t.headers[0] === 'Category')!;
 
 		expect(measured.rows[0]?.[3]).toBe('no ratio');
+	});
+
+	/**
+	 * The bug this guards against: `displayDiffersFromBody` decides whether the pairing ranks display
+	 * and body as separate roles, yet the Type section rendered byte-identically whichever way it was
+	 * set, because nothing printed it. Rendering both settings and diffing the Measured row is the
+	 * direct check that a real seed difference now reaches the doc, rather than trusting one flip's
+	 * cell value in isolation.
+	 */
+	it('changes the Measured row when typeClassification.displayDiffersFromBody flips', () => {
+		expect(displayDiffersCellFor(true)).toBe('yes');
+		expect(displayDiffersCellFor(false)).toBe('no');
 	});
 });
 
@@ -593,6 +618,9 @@ function allowedAtoms(): Set<string> {
 		atoms.add(seed.typeClassification.category);
 		atoms.add(seed.typeClassification.tone);
 		atoms.add(seed.typeClassification.xHeight);
+		// Only the value this fixture's seed actually holds, not both "yes" and "no": adding both would
+		// let a row printing the wrong one for this seed still pass the set-membership check below.
+		atoms.add(seed.typeClassification.displayDiffersFromBody ? 'yes' : 'no');
 	}
 
 	atoms.add(seed.typeScaleRatio === null ? 'no ratio' : String(seed.typeScaleRatio));
@@ -762,6 +790,23 @@ describe('designDoc traceability', () => {
 			expect(scoreCell).toBe(candidate!.score === null ? 'no score' : String(candidate!.score));
 		}
 	});
+
+	/**
+	 * The Measured row's first four cells already trace to `seed.typeClassification`'s other three
+	 * fields plus `typeScaleRatio`; `displayDiffersFromBody` is the fourth field on that same object
+	 * and had no cell at all until now, so nothing here checked it. `allowedAtoms` only proves the
+	 * printed string is a member of the right set (the seed's own "yes" or "no"); this checks it's the
+	 * *row's* value, the same distinction `rowToken` draws for the Token-keyed tables above.
+	 */
+	it("ties the Measured row's Display differs from body cell to the seed's own typeClassification", () => {
+		const measured = tables.find((t) => t.headers[0] === 'Category')!;
+		const column = measured.headers.indexOf('Display differs from body');
+
+		expect(column).not.toBe(-1);
+		expect(measured.rows[0]?.[column]).toBe(
+			seed.typeClassification!.displayDiffersFromBody ? 'yes' : 'no',
+		);
+	});
 });
 
 /** The lines between a `## <heading>` and the next `## ` (or the document's end). */
@@ -838,7 +883,13 @@ describe('designDoc edge cases', () => {
 		const suggested = noClassTables.find((t) => t.headers[0] === 'Family');
 
 		expect(measured!.rows).toEqual([
-			['not classified', 'not classified', 'not classified', String(seed.typeScaleRatio)],
+			[
+				'not classified',
+				'not classified',
+				'not classified',
+				String(seed.typeScaleRatio),
+				'not classified',
+			],
 		]);
 		// suggestedPairing is still stated, so that table keeps its rows.
 		expect(suggested!.rows.length).toBeGreaterThan(0);
