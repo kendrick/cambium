@@ -1,3 +1,5 @@
+import { strToU8, zipSync, type Zippable } from 'fflate';
+
 import type { BrandSeed } from '../brand-seed';
 import type { RepairEntry } from '../contrast/repair';
 import { cssNaming } from '../css/globals-css';
@@ -68,4 +70,37 @@ export function exportArchiveEntries({
 	}
 
 	return entries;
+}
+
+/**
+ * Built from local-time fields, not a UTC instant, because fflate writes each entry's DOS time from
+ * `getFullYear()`, `getHours()` and the rest. `1980-01-01T00:00:00Z` is 1979 anywhere west of UTC,
+ * where fflate throws, and a different local time everywhere else, so the bytes would depend on
+ * where the export ran. Restated from `core/record-archive.ts`, which keeps its copy private.
+ */
+function zipEpoch(): Date {
+	return new Date(1980, 0, 1, 0, 0, 0);
+}
+
+// Pinned because the determinism promise covers the compressed bytes, and a library default can
+// move. Every entry is text, which is the case `core/record-archive.ts` also deflates at 6.
+const ARCHIVE_LEVEL = 6;
+
+/**
+ * `exportArchiveEntries`, zipped. Same input, same bytes, in any time zone: entry order, `mtime`
+ * and level are all fixed. #40's export pane downloads the result; it has no filename of its own.
+ */
+export function buildExportArchive(input: ExportArchiveInput): Uint8Array<ArrayBuffer> {
+	const entries = exportArchiveEntries(input);
+	const mtime = zipEpoch();
+	const files: Zippable = {};
+
+	// fflate writes entries in key insertion order, so sorting here is what fixes their order.
+	// `toSorted` is ES2023 and tsconfig targets ES2022. The array is fresh.
+	// oxlint-disable-next-line unicorn/no-array-sort
+	for (const path of Object.keys(entries).sort()) {
+		files[path] = [strToU8(entries[path]!), { level: ARCHIVE_LEVEL, mtime }];
+	}
+
+	return zipSync(files);
 }
