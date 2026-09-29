@@ -20,7 +20,7 @@ import type { ScaleEngine } from '../../core/scale-engine';
 
 import { libraryOrder, recordLabel } from './library/library-order';
 import { type LibraryItem, LibraryRow } from './library/library-row';
-import { paletteSwatches } from './library/palette';
+import { type PaletteSwatch, paletteSwatches } from './library/palette';
 import type { RenameOutcome } from './library/rename-form';
 
 // A connection per call, as the workspace does. One held while this page sits idle would block a
@@ -39,21 +39,32 @@ function toItem(row: StoredRow, engine: ScaleEngine): LibraryItem {
 	if (row.kind === 'unreadable') return { kind: 'unreadable', id: row.id, label: null };
 
 	const { record } = row;
-	const latest = record.versions.at(-1);
-	const tokenSet = latest ? tokenSetForVersion(engine, latest) : null;
 
 	return {
 		kind: 'readable',
 		id: record.id,
 		label: recordLabel(record),
 		record,
-		swatches: tokenSet ? paletteSwatches(tokenSet) : null,
+		swatches: swatchesFor(record, engine),
 	};
 }
 
+// Caught per record because a throw here would reject the whole listing, and one brand this build
+// can't draw a palette for shouldn't hide the rest. That record still lists, without a palette.
+function swatchesFor(record: BrandRecord, engine: ScaleEngine): PaletteSwatch[] | null {
+	const latest = record.versions.at(-1);
+	if (!latest) return null;
+
+	try {
+		const tokenSet = tokenSetForVersion(engine, latest);
+		return tokenSet ? paletteSwatches(tokenSet) : null;
+	} catch {
+		return null;
+	}
+}
+
 /**
- * Every brand saved in this browser. `landing-route.tsx` loads it lazily, because it reaches `idb`,
- * zod and the scale engine, and `/` has no first-load room for any of them.
+ * Every brand saved in this browser.
  *
  * `firstRun` renders inside the empty state. #40 puts its keyless demo entry there.
  */

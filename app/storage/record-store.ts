@@ -53,13 +53,16 @@ import { type BrandRecord, FIRST_REVISION } from '../../core/brand-record';
  * commit. It refuses a write whose incarnation storage no longer holds. Where the id holds a
  * different incarnation, the id was deleted and recreated after the copy was read. Where nothing is
  * stored, the copy's record was deleted, and taking the write as an insert would bring it back.
- * Every copy storage hands out carries its incarnation, so such a copy can take neither route.
+ * A copy that carries an incarnation can take neither route.
  *
- * A write carrying no incarnation goes on to the revision check. That's how an inserting caller's
- * own object arrives on its next write, and it's the one limit left: an object the caller built
- * itself can still commit over a recreated id or bring a deleted one back. Only `save` in
- * `components/landing/upload-form.tsx` and `importRecordArchive` hold such an object, and neither
- * writes it twice.
+ * A write carrying no incarnation skips that check and goes on to the revision check. That is the
+ * limit left open. Such a write can still commit over a recreated id or bring a deleted record back.
+ * Two kinds of object carry none. One is the object an inserting caller built itself, since storage
+ * mints the incarnation on the way in. Only `save` in `components/landing/upload-form.tsx` and
+ * `importRecordArchive` hold one, and neither writes it twice. The other is any copy of a record
+ * stored before the field existed, read through `get`, `list` or `listStoredRows` in any tab, the
+ * library's and the workspace's included. That record has no incarnation until its first commit
+ * since the field arrived, which stamps it one.
  *
  * A per-id revision floor kept by storage is the other known fix, and it isn't built. It needs a
  * `DATABASE_VERSION` bump and state for every id ever deleted, and it can't refuse a stale write
@@ -208,14 +211,8 @@ export function wasBuiltOnStored(stored: BrandRecord, incoming: BrandRecord): bo
  * an incarnation other than the stored one, then runs `wasBuiltOnStored`, then carries the stored
  * incarnation forward. A record stored before the field existed has none, and its next commit mints
  * one.
- *
- * `mintIncarnation` is a parameter so a test can pin the value without stubbing `crypto`.
  */
-export function nextCommit(
-	stored: BrandRecord | undefined,
-	incoming: BrandRecord,
-	mintIncarnation: () => string = () => crypto.randomUUID(),
-): BrandRecord {
+export function nextCommit(stored: BrandRecord | undefined, incoming: BrandRecord): BrandRecord {
 	if (stored === undefined) {
 		if (incoming.incarnation !== undefined) {
 			throw new StaleRecordWriteError(incoming.id, {
@@ -227,7 +224,7 @@ export function nextCommit(
 			});
 		}
 
-		return stamped(incoming, FIRST_REVISION, mintIncarnation());
+		return stamped(incoming, FIRST_REVISION, crypto.randomUUID());
 	}
 
 	const standing = {
@@ -245,7 +242,7 @@ export function nextCommit(
 		throw new StaleRecordWriteError(incoming.id, standing);
 	}
 
-	return stamped(incoming, stored.revision + 1, stored.incarnation ?? mintIncarnation());
+	return stamped(incoming, stored.revision + 1, stored.incarnation ?? crypto.randomUUID());
 }
 
 /**

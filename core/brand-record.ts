@@ -160,8 +160,11 @@ export const RECORD_NAME_MAX_LENGTH = 100;
  *
  * `incarnation` tells one life of an id from the next. Storage mints it on insert and carries it
  * through every commit, and no producer sets it. `RecordStore.put` refuses a write carrying an
- * incarnation it no longer holds, which is how a copy of a deleted record is kept from writing
- * over a record recreated under the same id, or from bringing the deleted one back (#122).
+ * incarnation it no longer holds, so a copy of a deleted record that carries one can neither write
+ * over a record recreated under the same id nor bring the deleted one back (#122). A record stored
+ * before the field existed still parses, because the field is optional, and carries none until its
+ * next commit. `put` has nothing to check on a copy of that record, and `app/storage/record-store.ts`
+ * states the limit.
  *
  * Seed provenance is checked against the images the record actually holds. An id pointing at
  * no image is provenance that cannot be followed, which is worse than none, because it still

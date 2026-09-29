@@ -6,7 +6,7 @@ The stamp stays at 1 because #35 is still open, so no v1 has been declared, and 
 
 `name` sits beside `brandUrl` and follows its path. A rename is a metadata-only `put` that moves `revision`, the name travels in the record archive, and it goes when the record is deleted.
 
-Storage mints `incarnation` on every insert and carries it through every commit. `put` refuses a write that carries an incarnation storage no longer holds. That closes both routes #122 describes: a copy of a deleted incarnation writing over a recreated id, and a copy read before a delete bringing the record back. Import drops the archive's incarnation, so every import is a new record with a fresh one.
+Storage mints `incarnation` on every insert and carries it through every commit. `put` refuses a write that carries an incarnation storage no longer holds. That closes both routes #122 describes for any copy carrying one: a copy of a deleted incarnation writing over a recreated id, and a copy read before a delete bringing the record back. A copy carrying none can still take both, as Consequences says. Import drops the archive's incarnation, so every import is a new record with a fresh one.
 
 ## Considered Options
 
@@ -28,4 +28,6 @@ A build older than this change refuses any record carrying either field, because
 
 Renaming a record in the library while a workspace tab has it open moves the revision, so that tab's next commit fails with `StaleRecordWriteError`. That is correct, and it's new behavior a person can reach.
 
-One limit stays open. An object the inserting caller built itself carries no incarnation, because storage mints it on the way in, so such an object could still resurrect a deleted id or commit over a recreated one. Only the upload form and archive import hold such an object, and neither writes twice. `app/storage/record-store.ts` says so where the rule is written.
+One limit stays open. A write carrying no incarnation skips the incarnation check, so it can still resurrect a deleted id or commit over a recreated one. Two kinds of object carry none. The first is an object the inserting caller built itself, because storage mints the incarnation on the way in. Only the upload form and archive import hold such an object, and neither writes it twice.
+
+The second is any copy of a record saved before this change, whichever tab holds it: the library's listing and a workspace tab's copy both qualify. That record gets its incarnation at its first commit after this change, so the window lasts until then. A library tab holding such a copy can rename the record after another tab deleted it, and the rename brings the record back. Closing that would mean changing the revision rule or the insert rule, and this change keeps both. `app/storage/record-store.ts` says so where the rule is written.
