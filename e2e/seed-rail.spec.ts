@@ -518,7 +518,9 @@ test("showing a key colour's source draws the region box at the stored fraction,
 	await page.getByRole('button', { name: 'Show source of brand key colour' }).click();
 
 	const image = page.locator('[data-source-image] img');
-	const region = page.locator('[data-source-region]');
+	// Scoped under the dialog's own frame: the seed rail's strip draws outlines with the same
+	// attribute, and an unscoped locator would match those too.
+	const region = page.locator('[data-source-image] [data-region-outline]');
 	await expect(image).toBeVisible();
 	await expect(region).toBeVisible();
 
@@ -540,7 +542,7 @@ test("showing a key colour's source draws the region box at the stored fraction,
 			'The model named this image but recorded no region, so the whole image is shown.',
 		),
 	).toBeVisible();
-	await expect(page.locator('[data-source-region]')).toHaveCount(0);
+	await expect(page.locator('[data-source-image] [data-region-outline]')).toHaveCount(0);
 });
 
 test('an image whose tag disagrees with the model shows both readings, and one that agrees shows nothing', async ({

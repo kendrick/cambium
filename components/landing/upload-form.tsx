@@ -11,6 +11,7 @@ import {
 	MAX_REFERENCE_IMAGES,
 	MIN_REFERENCE_IMAGES,
 } from '@/components/landing/image-set';
+import { TAG_LABELS } from '@/components/image-tag-labels';
 import { Button } from '@/components/ui/button';
 import {
 	ACCEPTED_IMAGE_TYPES,
@@ -35,14 +36,8 @@ type PickedImage = {
 	prepared: PreparedImage;
 };
 
-/** Exported so the saved view in `landing-route.tsx` prints the same words the picker offered. */
-export const TAG_LABELS: Record<ImageTag, string> = {
-	auto: 'Automatic',
-	logo: 'Logo',
-	ui: 'Interface',
-	photo: 'Photograph',
-	artwork: 'Artwork',
-};
+/** Re-exported so `landing-route.tsx`'s saved view keeps importing it from here. */
+export { TAG_LABELS };
 
 /**
  * Kept apart from `chooseGuidance` so the rule and the sentence move independently. The rule is

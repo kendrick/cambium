@@ -1,5 +1,6 @@
 import type { ReferenceImage } from '../../../core/brand-record';
 import type { Rect } from '../../../core/brand-seed';
+import { RegionFrame } from '@/components/reference-thumbnail';
 import { Button } from '@/components/ui/button';
 import {
 	Dialog,
@@ -10,14 +11,6 @@ import {
 	DialogTrigger,
 } from '@/components/ui/dialog';
 
-const percent = (fraction: number) => `${fraction * 100}%`;
-
-/**
- * The region is stored as fractions of the image, so percentages of a box that shrink-wraps the
- * `<img>` land on the same pixels at any display size. The wrapper has to hug the image exactly:
- * `object-contain` or a wider wrapper would letterbox it, and the percentages would then measure the
- * letterbox instead of the picture.
- */
 export function SourceRegion({
 	label,
 	image,
@@ -53,28 +46,13 @@ export function SourceRegion({
 				</DialogDescription>
 				{image ? (
 					<div className="bg-muted flex justify-center rounded-md p-2">
-						<div data-source-image className="relative w-fit">
-							{/* A data URL held in the record, so next/image's optimiser has nothing to fetch. */}
-							{/* oxlint-disable-next-line nextjs/no-img-element */}
-							<img
-								src={image.downscaled}
-								alt={`The reference this colour was read from, tagged ${image.tag}`}
-								className="block h-auto max-h-[60vh] w-auto max-w-full"
-							/>
-							{region ? (
-								<div
-									data-source-region
-									aria-hidden
-									className="pointer-events-none absolute rounded-sm border-2 border-white shadow-[0_0_0_1px_black,inset_0_0_0_1px_black]"
-									style={{
-										left: percent(region.x),
-										top: percent(region.y),
-										width: percent(region.width),
-										height: percent(region.height),
-									}}
-								/>
-							) : null}
-						</div>
+						<RegionFrame
+							data-source-image
+							src={image.downscaled}
+							alt={`The reference this colour was read from, tagged ${image.tag}`}
+							imageClassName="max-h-[60vh] max-w-full"
+							outlines={region ? [{ id: 'source', region }] : []}
+						/>
 					</div>
 				) : null}
 				<div className="flex justify-end">
