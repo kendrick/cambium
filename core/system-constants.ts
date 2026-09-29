@@ -65,8 +65,9 @@ export function systemConstants(): UntaggedSystemConstants {
 			source: 'system',
 			values: {
 				// disabled and ring are vendored: components/ui/button.tsx paints a disabled control
-				// with `disabled:opacity-50` and, in the preview only, its focus halo with `ring-ring/50`.
-				// The chrome draws a `--foreground` outline instead, which doesn't feed this value.
+				// with `disabled:opacity-50` and its focus halo with `ring-ring/50`, which paints only
+				// where a ring width is set: in the preview, or on an `aria-invalid` control. The chrome's
+				// focus indicator is a `--foreground` outline instead, which doesn't feed this value.
 				disabled: 0.5,
 				ring: 0.5,
 				// muted and overlay are stated defaults nobody measured, which is exactly what

@@ -158,6 +158,10 @@ test("a button in the preview's sample app draws the generated ring, not the chr
 
 	for (const side of SIDES) {
 		const run = outwardRun(shots.box, shots.clip, shots.focused, side);
+		// An empty band makes Math.max return -Infinity, which passes `<= 2` without reading a pixel.
+		expect(run.length, `${side} edge: the scan covers the whole band`).toBeGreaterThanOrEqual(
+			BAND * DPR,
+		);
 		const shift = run.map(([x, y]) => {
 			const [fr, fg, fb] = pixel(shots.focused, x, y);
 			const [ur, ug, ub] = pixel(shots.unfocused, x, y);
@@ -200,7 +204,7 @@ async function readIndicator(page: Page, target: Locator): Promise<Reading[]> {
 	});
 }
 
-/** Soft, so one run reports every control and edge, which is what the red run on `main` needs to show. */
+/** Soft, so a regression reports every control and edge that falls short in one run, not just the first. */
 function expectIndicator(name: string, readings: Reading[]): void {
 	for (const { side, ratio, widthCss } of readings) {
 		expect
@@ -220,15 +224,29 @@ type Scheme = 'light' | 'dark';
  */
 async function applyScheme(page: Page, scheme: Scheme): Promise<void> {
 	if (scheme === 'dark') await page.evaluate(() => document.documentElement.classList.add('dark'));
+	await expectScheme(page, scheme);
+}
+
+/**
+ * Checked again right before each measurement, because a re-render or a client navigation between
+ * `applyScheme` and the screenshot could drop the class and a dark pass would quietly measure light.
+ */
+async function expectScheme(page: Page, scheme: Scheme): Promise<void> {
 	const html = page.locator('html');
 	if (scheme === 'dark') await expect(html).toHaveClass(/(^|\s)dark(\s|$)/);
 	else await expect(html).not.toHaveClass(/(^|\s)dark(\s|$)/);
 }
 
+async function readIndicatorIn(page: Page, scheme: Scheme, target: Locator): Promise<Reading[]> {
+	await expectScheme(page, scheme);
+	return readIndicator(page, target);
+}
+
 /**
- * The placeholder's painted colour against its own field. The field colour is the most common pixel
- * in the field's interior, and the text colour is whichever pixel contrasts most with it.
- * Antialiasing only blends text toward the field, so this never reads higher than the true colour.
+ * The placeholder as the browser paints it, against its own field. The field colour is the most
+ * common pixel in the field's interior, and the text colour is whichever pixel contrasts most with
+ * it. Rasterised glyphs can land lighter or darker than the declared colour (antialiasing, text
+ * gamma), and the painted pixel is what a reader sees, so that's the unit measured here.
  */
 async function placeholderContrast(page: Page, field: Locator): Promise<number> {
 	await expect(field).toHaveValue('');
@@ -275,12 +293,12 @@ for (const scheme of ['light', 'dark'] as const) {
 		expect
 			.soft(placeholder, `Brand site placeholder: ${placeholder.toFixed(2)}:1`)
 			.toBeGreaterThanOrEqual(TEXT_TARGET);
-		expectIndicator('Brand site text input', await readIndicator(page, brandSite));
+		expectIndicator('Brand site text input', await readIndicatorIn(page, scheme, brandSite));
 
 		const recordId = await saveOneRecord(page);
 		await waitForGenerateReady(page);
 		await applyScheme(page, scheme);
-		expectIndicator('Generate button', await readIndicator(page, generateButton(page)));
+		expectIndicator('Generate button', await readIndicatorIn(page, scheme, generateButton(page)));
 
 		await mockAnthropic(page, (body) => ({
 			status: 200,
@@ -293,14 +311,18 @@ for (const scheme of ['light', 'dark'] as const) {
 		const outputTab = page
 			.getByRole('tablist', { name: 'Output' })
 			.getByRole('tab', { name: 'Preview' });
-		expectIndicator('Output tab', await readIndicator(page, outputTab));
+		expectIndicator('Output tab', await readIndicatorIn(page, scheme, outputTab));
 		expectIndicator(
 			'Pin toggle',
-			await readIndicator(page, page.getByRole('button', { name: 'Pin tracking' })),
+			await readIndicatorIn(page, scheme, page.getByRole('button', { name: 'Pin tracking' })),
 		);
 		expectIndicator(
 			'Native select',
-			await readIndicator(page, page.getByRole('combobox', { name: 'Tracking', exact: true })),
+			await readIndicatorIn(
+				page,
+				scheme,
+				page.getByRole('combobox', { name: 'Tracking', exact: true }),
+			),
 		);
 	});
 }
