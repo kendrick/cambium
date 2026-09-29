@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useId } from 'react';
 
 import {
 	type BrandSeed,
@@ -258,6 +258,15 @@ export function TypeClassificationEditor({
 }
 
 /**
+ * Nothing reads the pairing downstream yet: `TokenSet` has no font-family field, and the preview
+ * renders in the app's own Inter. The field says so until a `fontFamily` token exists to carry the
+ * choice into what gets exported. Otherwise it looks like a control that shapes the output and then
+ * quietly drops the choice.
+ */
+const NOT_EXPORTED_NOTE =
+	"This pairing is a suggestion. It isn't exported, and the preview doesn't use it.";
+
+/**
  * Where the font ranking follows the model, it takes each slot's first candidate
  * (`core/rank-fonts.ts`), so a choice has to land first. Option values are indices because two
  * candidates can share a family name.
@@ -269,6 +278,8 @@ export function PairingEditor({
 	value: Present<'suggestedPairing'>;
 	onChange: (next: Present<'suggestedPairing'>) => void;
 }) {
+	const noteId = useId();
+
 	return (
 		<>
 			{SLOTS.map((slot) => {
@@ -288,12 +299,14 @@ export function PairingEditor({
 								// correction, a save-and-reload, or a Discard back to the active version.
 								key={handPick?.family ?? ''}
 								label={`${capitalise(slot)} font`}
+								describedBy={noteId}
 								defaultValue={handPick?.family}
 								onName={(family) => onChange({ ...value, [slot]: [namedByHand(family)] })}
 							/>
 						) : (
 							<select
 								aria-label={`${capitalise(slot)} font`}
+								aria-describedby={noteId}
 								value={0}
 								onChange={(event) =>
 									onChange({ ...value, [slot]: pickFirst(candidates, Number(event.target.value)) })
@@ -315,6 +328,9 @@ export function PairingEditor({
 					</Sub>
 				);
 			})}
+			<p id={noteId} className="text-muted-foreground text-xs">
+				{NOT_EXPORTED_NOTE}
+			</p>
 		</>
 	);
 }
@@ -340,10 +356,12 @@ function isHandPick(candidate: FontCandidate): boolean {
  */
 function FamilyInput({
 	label,
+	describedBy,
 	defaultValue,
 	onName,
 }: {
 	label: string;
+	describedBy: string;
 	defaultValue?: string;
 	onName: (family: string) => void;
 }) {
@@ -356,6 +374,7 @@ function FamilyInput({
 		<input
 			type="text"
 			aria-label={label}
+			aria-describedby={describedBy}
 			placeholder="Name a family"
 			defaultValue={defaultValue}
 			onBlur={(event) => settle(event.target.value)}
