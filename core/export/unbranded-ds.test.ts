@@ -384,10 +384,11 @@ describe('toUnbrandedDsTheme', () => {
 		).toThrow('non-empty name and displayName');
 	});
 
-	// `registerTheme` interpolates the name into `[data-theme="…"]`, so each of these would either
-	// break out of that selector or name a theme the target never uses.
+	// `registerTheme` interpolates the name into `[data-theme="…"]` unescaped. The first name breaks
+	// out of that selector and injects a rule; the rest parse as one intact rule but aren't the
+	// lowercase-kebab shape every target identity uses, so they'd name a theme nothing else matches.
 	it.each(['a"]{}body{color:red}/*', 'a]b', 'Acme', 'a b', 'a--b', '-a', '.'])(
-		'refuses the name %j, which would land unescaped in the target selector',
+		'refuses the name %j, which is not a lowercase-kebab theme identity',
 		(bad) => {
 			expect(() =>
 				toUnbrandedDsTheme(tokenSet, { name: bad, displayName: 'Acme', scheme: 'light' }),
