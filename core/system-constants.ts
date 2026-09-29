@@ -37,7 +37,8 @@ export type UntaggedSystemConstants = {
  *
  * Issue #7 requires that no system-constant category varies with the seed, and a function that
  * takes no argument cannot vary with one. Every value here is either a vendored authority
- * (components/ui/button.tsx paints with `disabled:opacity-50` and `focus-visible:ring-3`), or
+ * (components/ui/button.tsx paints with `disabled:opacity-50` and, inside the preview,
+ * `in-data-preview:focus-visible:ring-3`; the chrome's 2px outline isn't a token), or
  * a stated default nobody has measured yet. `source: 'system'` records that distinction, and
  * `deriveNonColor` records it a second way: every token here comes back `invented` with a null
  * `seedField`, because `source: 'system'` already means no seed field reached the category.
@@ -63,8 +64,9 @@ export function systemConstants(): UntaggedSystemConstants {
 		opacity: {
 			source: 'system',
 			values: {
-				// disabled and ring are vendored: components/ui/button.tsx paints a disabled
-				// control with `disabled:opacity-50` and its focus halo with `ring-ring/50`.
+				// disabled and ring are vendored: components/ui/button.tsx paints a disabled control
+				// with `disabled:opacity-50` and, in the preview only, its focus halo with `ring-ring/50`.
+				// The chrome draws a `--foreground` outline instead, which doesn't feed this value.
 				disabled: 0.5,
 				ring: 0.5,
 				// muted and overlay are stated defaults nobody measured, which is exactly what
@@ -93,7 +95,8 @@ export function systemConstants(): UntaggedSystemConstants {
 		focusRing: {
 			source: 'system',
 			values: {
-				// width is the one components/ui/button.tsx paints, through `focus-visible:ring-3`.
+				// width is the one components/ui/button.tsx paints in the preview, through
+				// `in-data-preview:focus-visible:ring-3`. The chrome's 2px outline isn't a token.
 				// offset is 0 because that component lays no ring offset.
 				width: { value: 3, unit: 'px' },
 				offset: { value: 0, unit: 'px' },

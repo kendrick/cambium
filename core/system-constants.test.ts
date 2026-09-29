@@ -62,7 +62,8 @@ describe('systemConstants', () => {
 	/**
 	 * `focusRing` rather than `ring`. `SEMANTIC_MAP.ring` is already a colour, and a constant sharing
 	 * that name flattens to `--ring` in an export and overwrites it. The width is the one the
-	 * vendored button paints, through `focus-visible:ring-3`.
+	 * vendored button paints in the preview, through `in-data-preview:focus-visible:ring-3`. The
+	 * chrome's 2px `--foreground` outline isn't a token and doesn't feed this constant.
 	 */
 	it('sizes the focus ring the way the vendored button paints it', () => {
 		const { width, offset } = systemConstants().focusRing.values;
