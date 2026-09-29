@@ -33,6 +33,7 @@ import {
 } from '@/components/workspace/seed-rail/image-tags';
 import { KeyColorEditor, swatchFor } from '@/components/workspace/seed-rail/key-color-editor';
 import { PinToggle } from '@/components/workspace/seed-rail/pin-toggle';
+import { ReferenceStrip } from '@/components/workspace/seed-rail/reference-strip';
 import { SourceRegion } from '@/components/workspace/seed-rail/source-region';
 
 const PRESETS: readonly Interpretation[] = ['faithful', 'balanced', 'expressive'];
@@ -272,6 +273,10 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 					<AlertTitle>The seed was not saved</AlertTitle>
 					<AlertDescription>{saveError}</AlertDescription>
 				</Alert>
+			) : null}
+
+			{record ? (
+				<ReferenceStrip images={record.images} keyColors={seed?.keyColors ?? null} />
 			) : null}
 
 			<label className="flex items-center justify-between gap-2 text-sm">

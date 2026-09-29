@@ -9,6 +9,7 @@ import {
 	type BrandRecord,
 	BrandRecordSchema,
 	FIRST_REVISION,
+	type ReferenceImage,
 	SCHEMA_VERSION,
 } from '../core/brand-record';
 import type { BrandSeed } from '../core/brand-seed';
@@ -103,7 +104,10 @@ const SEED: BrandSeed = {
  * literal is also held to `BrandRecord` at compile time: `parse` takes `unknown`, so without that a
  * new required field only surfaces once a browser run trips over it.
  */
-function buildRecordWithSeed(seed: BrandSeed = SEED): BrandRecord {
+function buildRecordWithSeed(
+	seed: BrandSeed = SEED,
+	images: ReferenceImage[] = [IMAGE_1, IMAGE_2],
+): BrandRecord {
 	const createdAt = new Date().toISOString();
 
 	return BrandRecordSchema.parse({
@@ -111,7 +115,7 @@ function buildRecordWithSeed(seed: BrandSeed = SEED): BrandRecord {
 		schemaVersion: SCHEMA_VERSION,
 		revision: FIRST_REVISION,
 		brandUrl: null,
-		images: [IMAGE_1, IMAGE_2],
+		images,
 		versions: [
 			{
 				createdAt,
@@ -543,6 +547,144 @@ test("showing a key colour's source draws the region box at the stored fraction,
 		),
 	).toBeVisible();
 	await expect(page.locator('[data-source-image] [data-region-outline]')).toHaveCount(0);
+});
+
+/**
+ * 3:1 against IMAGE_1's 3:2, so in one strip the two thumbnails render at different heights
+ * (96×32 against 96×64). A strip that stretched its items would give this one a frame taller
+ * than its picture, and the outline percentages would measure the frame instead.
+ */
+const IMAGE_2_WIDE = { ...IMAGE_2, downscaled: pngDataUrl(300, 100) };
+
+/**
+ * Three regions over two images: two on img-1, so one thumbnail carries more than one outline,
+ * and one on the wide img-2. No region is square or centred, so a swapped axis or a size
+ * measured from the wrong edge lands visibly off.
+ */
+const REGIONS_SEED: BrandSeed = {
+	...SEED,
+	keyColors: [
+		SEED.keyColors![0]!,
+		{ ...SEED.keyColors![1]!, sourceRegion: { x: 0.55, y: 0.1, width: 0.35, height: 0.6 } },
+		{
+			oklch: [0.7, 0.12, 200],
+			proposedRole: 'info',
+			sourceImageId: 'img-1',
+			sourceRegion: { x: 0.6, y: 0.5, width: 0.25, height: 0.3 },
+		},
+	],
+};
+
+/** The issue's bar: 1% of the thumbnail's rendered width or height. */
+function expectWithinOnePercent(actual: number, expected: number, label: string): void {
+	expect(Math.abs(actual - expected), label).toBeLessThanOrEqual(0.01);
+}
+
+function naturalSize(image: Locator): Promise<[number, number]> {
+	return image.evaluate((element) => {
+		const img = element as HTMLImageElement;
+		return [img.naturalWidth, img.naturalHeight];
+	});
+}
+
+test('the seed rail shows every reference image above the first seed field, with no dialog open', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed();
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const strip = page.locator('[data-reference-strip]');
+	const thumbnails = strip.locator('img');
+	await expect(thumbnails).toHaveCount(2);
+	await expect(page.getByRole('dialog')).toHaveCount(0);
+
+	// The issue's own wording, with each tag in the words the picker offered it by.
+	await expect(thumbnails.nth(0)).toHaveAttribute('alt', 'Reference image 1 of 2, Logo');
+	await expect(thumbnails.nth(1)).toHaveAttribute('alt', 'Reference image 2 of 2, Interface');
+
+	// Decoded from the stored data URL, not just present: the fixtures' own dimensions.
+	await expect.poll(() => naturalSize(thumbnails.nth(0))).toEqual([240, 160]);
+	await expect.poll(() => naturalSize(thumbnails.nth(1))).toEqual([180, 120]);
+
+	const firstField = page.locator('[data-seed-field]').first();
+	await expect(firstField).toBeVisible();
+	const stripBox = await requireBox(strip);
+	const fieldBox = await requireBox(firstField);
+	expect(stripBox.y + stripBox.height).toBeLessThanOrEqual(fieldBox.y);
+});
+
+test('each key colour with a region outlines it on its own thumbnail, at the stored fraction within 1%', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(REGIONS_SEED, [IMAGE_1, IMAGE_2_WIDE]);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const withRegions = REGIONS_SEED.keyColors!.flatMap((color, index) =>
+		color.sourceRegion
+			? [{ path: `keyColors.${index}`, imageId: color.sourceImageId, region: color.sourceRegion }]
+			: [],
+	);
+	// Guards the premise: a seed with no regions would pass the loop below vacuously.
+	expect(withRegions).toHaveLength(3);
+
+	for (const { path, imageId, region } of withRegions) {
+		const thumbnail = page.locator(`[data-reference-thumbnail="${imageId}"]`);
+		const image = thumbnail.locator('img');
+		const outline = thumbnail.locator(`[data-region-outline="${path}"]`);
+		await expect(outline).toBeVisible();
+
+		const [naturalWidth, naturalHeight] = await naturalSize(image);
+		const imageBox = await requireBox(image);
+		const box = await requireBox(outline);
+
+		// The picture is drawn at its own aspect ratio, so the box measured against is the image.
+		expectWithinOnePercent(
+			imageBox.width / imageBox.height / (naturalWidth / naturalHeight),
+			1,
+			`${imageId} aspect`,
+		);
+		expectWithinOnePercent((box.x - imageBox.x) / imageBox.width, region.x, `${path} left`);
+		expectWithinOnePercent((box.y - imageBox.y) / imageBox.height, region.y, `${path} top`);
+		expectWithinOnePercent(box.width / imageBox.width, region.width, `${path} width`);
+		expectWithinOnePercent(box.height / imageBox.height, region.height, `${path} height`);
+	}
+
+	await expect(
+		page.locator('[data-reference-thumbnail="img-1"] [data-region-outline]'),
+	).toHaveCount(2);
+	await expect(
+		page.locator('[data-reference-thumbnail="img-2"] [data-region-outline]'),
+	).toHaveCount(1);
+});
+
+test('a key colour with no region draws no outline, and a record with no versions still shows its images', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed();
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	// SEED's brand colour has a region on img-1; its accent names img-2 with none.
+	await expect(
+		page.locator('[data-reference-thumbnail="img-1"] [data-region-outline="keyColors.0"]'),
+	).toBeVisible();
+	await expect(
+		page.locator('[data-reference-thumbnail="img-2"] [data-region-outline]'),
+	).toHaveCount(0);
+	await expect(page.locator('[data-reference-strip] [data-region-outline]')).toHaveCount(1);
+
+	const unversioned = BrandRecordSchema.parse({ ...buildRecordWithSeed(), versions: [] });
+	await seedWorkspaceRecord(page, unversioned);
+	await page.goto(`/workspace?${RECORD_PARAM}=${unversioned.id}`);
+
+	await expect(page.getByText('This record has no versions yet')).toBeVisible();
+	await expect(page.locator('[data-reference-strip] img')).toHaveCount(2);
+	await expect(page.locator('[data-reference-strip] [data-region-outline]')).toHaveCount(0);
 });
 
 test('an image whose tag disagrees with the model shows both readings, and one that agrees shows nothing', async ({
