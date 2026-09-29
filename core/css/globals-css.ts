@@ -565,7 +565,7 @@ function rampStepNames(primitives: Record<string, Ramp>): string[] {
  * whose whole job is to be partly transparent, and `ShadowColorSchema` requires the channel for
  * exactly that reason; dropping it would paint an opaque slab.
  */
-function boxShadow(shadow: Shadow): string {
+export function boxShadow(shadow: Shadow): string {
 	const geometry = [shadow.offsetX, shadow.offsetY, shadow.blur, shadow.spread]
 		.map((dimension) => length(dimension))
 		.join(' ');
@@ -707,6 +707,6 @@ function absentFrom(from: readonly string[], present: readonly string[]): string
  * A dimension as a CSS length. The unit always prints, `0px` included, so the token's own unit
  * survives the export.
  */
-function length(dimension: DimensionValue | SignedDimensionValue): string {
+export function length(dimension: DimensionValue | SignedDimensionValue): string {
 	return `${formatCssNumber(dimension.value)}${dimension.unit}`;
 }
