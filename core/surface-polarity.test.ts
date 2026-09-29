@@ -84,6 +84,17 @@ describe('dominantBackground', () => {
 		expect(dominantBackground(onTransparency)).toMatchObject({ share: 0.45, polarity: 'dark' });
 	});
 
+	// The same 60-row white band on either side of MIN_OPAQUE_ALPHA. Only a cutoff of exactly 128
+	// ignores it at 127 and counts it at 128, where it joins the page's own white rows and wins.
+	it.each([
+		[127, 'dark'],
+		[128, 'light'],
+	] as const)('reads a white band at alpha %i over the dark page as %s', (alpha, polarity) => {
+		const band = paintBands([{ rgb: [255, 255, 255], rows: 60, alpha }, ...DARK_DOMINANT]);
+
+		expect(dominantBackground(band)?.polarity).toBe(polarity);
+	});
+
 	it('abstains on an image with no opaque pixel', () => {
 		expect(dominantBackground(paintBands([{ rgb: [0, 0, 0], rows: 10, alpha: 0 }]))).toBeNull();
 	});
