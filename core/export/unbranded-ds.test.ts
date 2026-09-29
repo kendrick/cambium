@@ -383,6 +383,17 @@ describe('toUnbrandedDsTheme', () => {
 			toUnbrandedDsTheme(tokenSet, { name: 'acme', displayName: '', scheme: 'light' }),
 		).toThrow('non-empty name and displayName');
 	});
+
+	// `registerTheme` interpolates the name into `[data-theme="…"]`, so each of these would either
+	// break out of that selector or name a theme the target never uses.
+	it.each(['a"]{}body{color:red}/*', 'a]b', 'Acme', 'a b', 'a--b', '-a', '.'])(
+		'refuses the name %j, which would land unescaped in the target selector',
+		(bad) => {
+			expect(() =>
+				toUnbrandedDsTheme(tokenSet, { name: bad, displayName: 'Acme', scheme: 'light' }),
+			).toThrow("isn't a usable unbranded-ds theme name");
+		},
+	);
 });
 
 /**

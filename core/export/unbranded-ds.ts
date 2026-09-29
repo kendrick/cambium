@@ -170,6 +170,14 @@ export function unbrandedDsReport(tokens: TokenSet): Record<UnbrandedDsScheme, U
 }
 
 /**
+ * The one theme identity shape both adapters accept, for `toUnbrandedDsTheme`'s `name` and
+ * `toUnbrandedDsSource`'s `identity`. Each lands in the target's `[data-theme="…"]` selector, where a
+ * quote or bracket breaks out of it. The target's own identities (brand, lcars, vaporwave) are
+ * lowercase kebab, so that's the whole allowed shape.
+ */
+const THEME_IDENTITY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
  * The runtime theme unbranded-ds's `registerTheme` takes, for one colour scheme. The target keeps
  * scheme on its own axis, so a document carries one scheme's values.
  *
@@ -202,6 +210,14 @@ export function toUnbrandedDsTheme(
 	// `registerTheme` would fail later with a zod path nobody at this end can act on.
 	if (options.name === '' || options.displayName === '') {
 		throw new Error('an unbranded-ds theme needs a non-empty name and displayName');
+	}
+	// `registerTheme` interpolates `name`, unescaped, into its `[data-theme="…"]` selector
+	// (runtime.ts at the vendored SHA), so a quote or bracket there injects CSS into the consumer's
+	// page. `displayName` never reaches CSS, so it stays free text.
+	if (!THEME_IDENTITY.test(options.name)) {
+		throw new Error(
+			`"${options.name}" isn't a usable unbranded-ds theme name; use lowercase letters, digits and single hyphens, like "acme-brand"`,
+		);
 	}
 
 	const { values, report } = mapScheme(TokenSetSchema.parse(tokens), options.scheme);
@@ -236,11 +252,9 @@ export function toUnbrandedDsSource(
 	tokens: TokenSet,
 	identity: string,
 ): Record<string, UnbrandedDsSourceDocument> {
-	// The identity names a directory the target's build walks and lands in a `[data-theme="…"]`
-	// selector. "." writes a loose themes/theme/light.json the build never reads, and a quote or
-	// bracket breaks the selector. The target's own identities (brand, lcars, vaporwave) are
-	// lowercase kebab, so that's the whole allowed shape.
-	if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(identity)) {
+	// The identity also names a directory the target's build walks, where "." writes a loose
+	// themes/theme/light.json the build never reads.
+	if (!THEME_IDENTITY.test(identity)) {
 		throw new Error(
 			`"${identity}" isn't a usable unbranded-ds theme identity; use lowercase letters, digits and single hyphens, like "acme-brand"`,
 		);
