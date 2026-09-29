@@ -599,6 +599,17 @@ function workspaceFor(
 	};
 }
 
+/**
+ * The token set a version shows once the workspace opens it: derived, repaired, then the version's
+ * own overrides. The library's palette strip calls this instead of composing those steps itself, so
+ * the strip and the workspace can't disagree about a record's colours (the divergent mirror in
+ * `docs/agents/testing.md`'s #75 row). Null where the workspace shows no tokens either: no seed, or
+ * a seed the engine refuses.
+ */
+export function tokenSetForVersion(engine: ScaleEngine, version: BrandVersion): TokenSet | null {
+	return workspaceFor(engine, version).tokenSet;
+}
+
 function versionAt(record: BrandRecord, ordinal: number | null): BrandVersion | null {
 	return ordinal === null ? null : (record.versions[ordinal - 1] ?? null);
 }

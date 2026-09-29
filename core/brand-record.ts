@@ -16,6 +16,10 @@ import { TokenSetSchema } from './token-set';
  * way out, and `get` and `list` refuse it by name. Pre-release builds stamped records 1 through 10
  * in older shapes. Stamps 2 through 10 fail here the same way, but a pre-release record stamped 1
  * reuses the live number, so it fails on the fields its shape lacks rather than on the stamp.
+ *
+ * `name` and `incarnation` arrived at 1 without a bump, as optional fields a record saved before
+ * them still satisfies (ADR-0007). A build older than them refuses a record carrying either one,
+ * because the schema is strict. The first bump after release is still 2.
  */
 export const SCHEMA_VERSION = 1;
 
@@ -115,6 +119,12 @@ export const BrandVersionSchema = z
 	});
 
 /**
+ * A bound on stored text, like `BRAND_URL_MAX_LENGTH`: long enough for any brand name a person
+ * types, short enough that a library row never has to wrap one.
+ */
+export const RECORD_NAME_MAX_LENGTH = 100;
+
+/**
  * Versions are append-only and ordered oldest first, so a record is a history rather than a
  * current value. The order is enforced because callers read the last entry as current, and an
  * archive that arrives newest-first would hand them an older result without erroring.
@@ -144,6 +154,15 @@ export const BrandVersionSchema = z
  * type, and a URL parse would refuse it. Nothing fetches it either. The length cap is a bound on
  * stored text, not a claim about URLs.
  *
+ * `name` is what the person calls the brand in the library, trimmed. It's optional rather than
+ * nullable, so a record with no name has exactly one spelling: the key is absent. Renaming is a
+ * metadata-only write, so it moves `revision` like any other commit.
+ *
+ * `incarnation` tells one life of an id from the next. Storage mints it on insert and carries it
+ * through every commit, and no producer sets it. `RecordStore.put` refuses a write carrying an
+ * incarnation it no longer holds, which is how a copy of a deleted record is kept from writing
+ * over a record recreated under the same id, or from bringing the deleted one back (#122).
+ *
  * Seed provenance is checked against the images the record actually holds. An id pointing at
  * no image is provenance that cannot be followed, which is worse than none, because it still
  * reads as evidence.
@@ -154,6 +173,8 @@ export const BrandRecordSchema = z
 		schemaVersion: z.literal(SCHEMA_VERSION),
 		revision: z.number().int().positive(),
 		brandUrl: z.string().trim().min(1).max(BRAND_URL_MAX_LENGTH).nullable(),
+		name: z.string().trim().min(1).max(RECORD_NAME_MAX_LENGTH).optional(),
+		incarnation: z.uuid().optional(),
 		images: z.array(ReferenceImageSchema),
 		versions: z.array(BrandVersionSchema),
 	})
