@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
 import { BrandSeedSchema } from './brand-seed';
+import { repairContrast, withContrastRepairs } from './contrast/repair';
 import { cssNaming, toGlobalsCss } from './css/globals-css';
 import { scalarDeclarations, schemeDeclarations } from './css/scheme-declarations';
 import { toStylesheet } from './css/stylesheet';
@@ -13,6 +14,8 @@ import { serializeDtcg } from './dtcg/serialize';
 import { validateDtcg } from './dtcg/validate';
 import { deriveNonColor } from './derive-non-color';
 import { exportArtifacts } from './export/artifacts';
+import { designDoc } from './export/design-doc';
+import { toUnbrandedDsSource, toUnbrandedDsTheme, unbrandedDsReport } from './export/unbranded-ds';
 import { createOklchScaleEngine } from './oklch-scale-engine';
 import { radiusScale } from './radius-scale';
 import { resolveCandidatePool } from './font-table';
@@ -23,11 +26,12 @@ import { typeScale } from './type-scale';
 import { parseSeed } from './parse-seed';
 import { CAMBIUM_NAMESPACE, derived, invented, observed } from './provenance';
 import { rankFonts } from './rank-fonts';
+import { deserializeRecord, serializeRecord } from './record-archive';
 import { defaultSeedPins, repairPinsFor } from './seed-pins';
 import { BALANCED } from './interpretation';
 import { buildTokenSet } from './semantic-layer';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
-import { TokenSetSchema } from './token-set';
+import { type TokenSet, TokenSetSchema } from './token-set';
 
 /** Reused wherever this file needs a token to carry provenance and nothing about which. */
 const extensions = derived('keyColors', 'exercises a schema bound rather than a real derivation');
@@ -164,6 +168,36 @@ const rankableSeed = BrandSeedSchema.parse({
 // `seed` already carries the one brand key colour a scale engine needs, so it needs no widening
 // the way `rankableSeed` did.
 const rampableSeed = BrandSeedSchema.parse(seed);
+
+/**
+ * The generated set before and after contrast repair. The unbranded-ds adapters ask for the repaired
+ * set, which `cssTokenSet`'s single ramp isn't, and `designDoc` takes the repairs that produced it.
+ * Each row builds its own, so the engine runs under the `fetch` stub too.
+ */
+function exportedSet(): { base: TokenSet; repaired: TokenSet } | null {
+	const generated = createOklchScaleEngine().generate(rampableSeed, BALANCED);
+
+	if (!generated.ok) return null;
+
+	const base = buildTokenSet(generated.schemes, rampableSeed);
+
+	return { base, repaired: withContrastRepairs(base).tokenSet };
+}
+
+/**
+ * `record`, with an image `deserializeRecord` accepts. `record`'s own image is a single zero byte,
+ * which fails the magic-byte sniff on the way back in. This WebP is the one `record-archive.test.ts`
+ * uses.
+ */
+const archivableRecord = BrandRecordSchema.parse({
+	...record,
+	images: [
+		{
+			...record.images[0],
+			downscaled: 'data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==',
+		},
+	],
+});
 
 /**
  * Stage 2 stays free of DOM and browser APIs so it can run server-side unchanged, which the
@@ -349,6 +383,85 @@ describe('core purity', () => {
 				exportArtifacts(cssTokenSet, { brandUrl: null }).every(
 					(artifact) => artifact.filename.length > 0 && artifact.contents.length > 0,
 				),
+		],
+		[
+			'toUnbrandedDsTheme',
+			() => {
+				const set = exportedSet();
+
+				return (
+					set !== null &&
+					Object.keys(
+						toUnbrandedDsTheme(set.repaired, {
+							name: 'acme-brand',
+							displayName: 'Acme',
+							scheme: 'light',
+						}).theme.tokens,
+					).length > 0
+				);
+			},
+		],
+		[
+			'toUnbrandedDsSource',
+			() => {
+				const set = exportedSet();
+
+				return (
+					set !== null &&
+					Object.keys(toUnbrandedDsSource(set.repaired, 'acme-brand')).join() ===
+						'themes/theme/acme-brand/light.json,themes/theme/acme-brand/dark.json'
+				);
+			},
+		],
+		[
+			'unbrandedDsReport',
+			() => {
+				const set = exportedSet();
+
+				if (set === null) return false;
+
+				const { light, dark } = unbrandedDsReport(set.repaired);
+
+				return Array.isArray(light.defaulted) && Array.isArray(dark.adjusted);
+			},
+		],
+		[
+			'designDoc',
+			() => {
+				const set = exportedSet();
+
+				return (
+					set !== null &&
+					designDoc({
+						tokens: set.repaired,
+						seed: rampableSeed,
+						repairs: repairContrast(set.base).report,
+					}).startsWith('# Design doc\n')
+				);
+			},
+		],
+		[
+			'serializeRecord',
+			() => {
+				const bytes = serializeRecord(archivableRecord);
+
+				// The local file header signature, `PK\x03\x04`, which opens any zip holding an entry.
+				return bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+			},
+		],
+		[
+			'deserializeRecord',
+			() => {
+				const result = deserializeRecord(serializeRecord(archivableRecord));
+
+				// This row proves only that a real round trip runs under the `fetch` guard. A stub that echoed
+				// `archivableRecord` would pass these checks too; `core/record-archive.test.ts` owns unpacking.
+				return (
+					result.ok &&
+					result.record.id === archivableRecord.id &&
+					result.record.images[0]?.downscaled === archivableRecord.images[0]?.downscaled
+				);
+			},
 		],
 	])('%s parses a valid value without reaching the network', (_name, parses) => {
 		vi.stubGlobal('fetch', () => {
