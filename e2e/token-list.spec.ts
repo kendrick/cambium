@@ -1073,6 +1073,87 @@ test('an override survives a preset switch', async ({ page }) => {
 		.toBeLessThanOrEqual(1);
 });
 
+test('an override made while the scheme control reads Dark changes dark and leaves light as it was', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const DARK = TOKEN_SET.schemes.dark;
+	const target = 'brand.1';
+	const lightAlias = LIGHT.semantic.primary!.alias;
+	const darkAlias = DARK.semantic.primary!.alias;
+	// Neither scheme starts on the target, so an overridden mark can only come from this edit.
+	expect(lightAlias).not.toBe(target);
+	expect(darkAlias).not.toBe(target);
+
+	const row = page.locator('[data-token="semantic.primary"]');
+	const swatch = row.locator('[data-swatch]');
+	const revert = row.getByRole('button', { name: 'Revert primary override', exact: true });
+	await expect(swatch).toBeVisible();
+
+	const paintOf = (scheme: TokenSet['schemes']['light'], alias: string) =>
+		referencePaint(page, swatch, oklchFromFields(stepForAlias(scheme.primitives, alias)!));
+
+	await chooseScheme(page, 'dark');
+
+	const darkDerived = await paintOf(DARK, darkAlias);
+	const darkTarget = await paintOf(DARK, target);
+	// Guard: the edit changes what dark paints, so "dark took it" can fail.
+	expect(paintDistance(darkDerived, darkTarget)).toBeGreaterThan(1);
+
+	const editor = await openEditor(page, 'semantic.primary');
+	await editor.getByLabel('primary alias', { exact: true }).selectOption(target);
+	// Closed before any paint check: the popup can cover the row it hangs from.
+	await closeEditor(page, editor);
+
+	await expect(row).toHaveAttribute('data-overridden', '');
+	await expect(row.locator('[data-resolves-to]')).toHaveAttribute('data-resolves-to', target);
+	await expect
+		.poll(async () => paintDistance(await paintedCentre(swatch), darkTarget))
+		.toBeLessThanOrEqual(1);
+	// #153's verdict for dark's own pair: `primary-foreground` is `brand.1` too, so 1.00:1.
+	await expect(verdictOf(row)).toHaveCount(1);
+	await expect(verdictOf(row).first()).toHaveText(/^primary-foreground on primary: /);
+	await expect(revert).toBeVisible();
+
+	await chooseScheme(page, 'light');
+
+	// Light against the derived set, not against an earlier reading of the page, so an edit that
+	// leaked into light can't pass by matching itself.
+	const lightDerived = await paintOf(LIGHT, lightAlias);
+	const lightTarget = await paintOf(LIGHT, target);
+	expect(paintDistance(lightDerived, lightTarget)).toBeGreaterThan(1);
+
+	await expect(row).not.toHaveAttribute('data-overridden', '');
+	await expect(row.locator('[data-resolves-to]')).toHaveAttribute('data-resolves-to', lightAlias);
+	await expect
+		.poll(async () => paintDistance(await paintedCentre(swatch), lightDerived))
+		.toBeLessThanOrEqual(1);
+	// The row's verdict follows the control: light's `primary` holds no override, so nothing to say.
+	await expect(verdictOf(row)).toHaveCount(0);
+	await expect(revert).toHaveCount(0);
+
+	// The Accessibility report doesn't follow it: it lists both schemes, so dark's failure shows
+	// while the control reads Light.
+	await page.getByRole('tab', { name: 'Accessibility' }).click();
+	await expect(
+		page
+			.getByRole('tabpanel', { name: 'Accessibility' })
+			.getByText('dark: primary-foreground on primary:', { exact: false }),
+	).toBeVisible();
+
+	// And dark still holds it after the round trip.
+	await chooseScheme(page, 'dark');
+	await expect(row).toHaveAttribute('data-overridden', '');
+	await expect(verdictOf(row)).toHaveCount(1);
+	await expect
+		.poll(async () => paintDistance(await paintedCentre(swatch), darkTarget))
+		.toBeLessThanOrEqual(1);
+});
+
 /**
  * The computed `background-color` of a throwaway element painted with `oklchCss`, so the swatch's
  * computed value is compared against one the browser normalised the same way rather than against a
