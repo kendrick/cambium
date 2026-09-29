@@ -73,9 +73,10 @@ import type { RampName } from './scale-engine';
  * The price is what does the work in both branches, because a step that clears the number almost
  * always exists. `ring` moved, since a focus ring owes nothing to any one step. `destructive` moved
  * too, since the contract this repo vendors already uses it as text. `primary` stayed, because step
- * 9 is the brand colour itself. The destructive hover state stayed for the same kind of reason
- * rather than for want of a step: step 12 clears it and turns the token a dark maroon, which stops
- * it looking like danger.
+ * 9 is the brand colour itself. The destructive hover state's step stayed for the same kind of
+ * reason rather than for want of a step: step 12 would clear it and turn the token a dark maroon,
+ * which stops it looking like danger. #68 closes the resulting gap in the component instead, by
+ * narrowing the tint rather than moving the step — see the destructive paragraph below.
  *
  * Whether some other project ships the same failure is evidence about where a defect lives. It is
  * never the reason to leave one alone.
@@ -120,28 +121,31 @@ import type { RampName } from './scale-engine';
  * that paints an opaque `bg-destructive` would want step 9 back and a foreground token with it;
  * none exists in this contract today.
  *
- * One destructive state still misses AA, and the step that would fix it costs too much. `components/ui/button.tsx` paints the
- * label over a tint of the same token, so the surface moves toward the text as the tint deepens.
- * At step 11 the resting state clears at 4.57:1 in light and 6.11:1 in dark at worst, and the dark hover
- * clears at 4.78:1 at worst, but the light hover over `bg-destructive/20` reaches only 3.95:1. Step 12 would
- * clear all four, and it would equally turn `--destructive` into a dark maroon and paint
+ * All four destructive states clear AA now, and not because this table moved a step.
+ * `components/ui/button.tsx` paints the label over a tint of the same token, so the surface moves
+ * toward the text as the tint deepens. Step 11 already beat stock shadcn's own hand-picked
+ * `--destructive` in every state — as Chromium paints them, shadcn misses three of the same four,
+ * at 3.97:1 and 3.31:1 in light and 4.35:1 on dark hover — so compositing a colour with itself was
+ * always the defect, not the step chosen. Step 12 would have cleared the state step 11 still
+ * missed, but it would equally turn `--destructive` into a dark maroon and paint
  * `aria-invalid:border-destructive` in it, which stops the token doing the one job its name
- * describes. Stock shadcn misses three of the same four states with its own hand-picked value, at
- * 4.05:1 and 3.31:1 in light and 4.38:1 on dark hover, so compositing a colour with itself is the
- * defect rather than the step chosen. Step 11 beats stock shadcn in every state and clears three of
- * the four. Fixing the fourth means changing the tint, which lives in a component this ticket does
- * not own.
+ * describes. #68 clears that last state a different way: narrowing the light scheme's tints in the
+ * component rather than moving the step (fractions and per-state figures in
+ * `components/ui/button.tsx`'s comment), worst case 4.53:1 as Chromium paints it
+ * (`e2e/button-contrast.spec.ts`). `components/ui/button-contrast.test.ts` reads 4.56:1 for the
+ * same state, because it blends at unrounded alpha. This table's step stays at 11.
  *
  * `muted-foreground` on `muted` measures 4.40 to 4.44:1 in light for every seed, a fixed shortfall
  * in the neutral ramp's step 3 to step 11 spacing rather than a mapping choice. That one belongs to
  * #8.
  *
- * `primary` stays on step 9 even though `components/ui/button.tsx` renders its `link` variant as
- * `text-primary` on the page, which measures 1.01:1 to 18.07:1 across the sweep and fails AA on ten
+ * `primary` stays on step 9. Before #68, `components/ui/button.tsx` rendered its `link` variant as
+ * `text-primary` on the page, which measured 1.01:1 to 18.07:1 across the sweep and failed AA on ten
  * of twenty combinations. Step 9 is the brand colour the seed asked for, anchored there in both
  * schemes by #4 and required there by #6, so moving it would break the one promise the token set
- * exists to keep. The fix belongs to whoever owns the `link` variant or to a scheme-aware text
- * token the shadcn contract does not declare yet, and no open ticket covers it.
+ * exists to keep. #68 fixes it in the component instead: the `link` variant's text now takes
+ * `foreground` rather than `primary`, leaving `primary` itself on step 9. `foreground`/`background`
+ * was already a declared, repair-protected pair, so nothing new is added to `core/contrast/pairs.ts`.
  *
  * `chart-1` through `chart-5` are the one part of the contract this table does not cover; #69 owns
  * them. Five categorical series have to stay distinguishable and visible for
