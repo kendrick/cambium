@@ -17,7 +17,7 @@ import {
 	type ValuePath,
 } from '../../core/token-overrides';
 import { CategoryGroup } from './token-list/category-group';
-import { PrimitiveRow } from './token-list/primitive-row';
+import { RampStrip } from './token-list/ramp-strip';
 import { SemanticRow } from './token-list/semantic-row';
 import { ValueRow } from './token-list/value-row';
 import { walkCategoryTokens } from './token-list/walk-category';
@@ -183,59 +183,56 @@ export function TokenList({
 			</fieldset>
 
 			<CategoryGroup name="semantic">
-				{Object.entries(colorScheme.semantic).map(([token, entry]) => {
-					const key = overrideKey({ kind: 'alias', scheme, token, alias: entry.alias });
-					const overridden = Object.hasOwn(overrides, key);
-					// An empty list still mounts the row's live region, which has to exist before the
-					// first verdict for a screen reader to announce it.
-					const contrastFailures = (contrastByOverride[key] ?? []).map((candidate) => ({
-						label: `${candidate.foreground} on ${candidate.background}`,
-						wcag: candidate.wcag,
-						target: candidate.target,
-					}));
+				<ul className="flex flex-col">
+					{Object.entries(colorScheme.semantic).map(([token, entry]) => {
+						const key = overrideKey({ kind: 'alias', scheme, token, alias: entry.alias });
+						const overridden = Object.hasOwn(overrides, key);
+						// An empty list still mounts the row's live region, which has to exist before the
+						// first verdict for a screen reader to announce it.
+						const contrastFailures = (contrastByOverride[key] ?? []).map((candidate) => ({
+							label: `${candidate.foreground} on ${candidate.background}`,
+							wcag: candidate.wcag,
+							target: candidate.target,
+						}));
 
-					return (
-						<SemanticRow
-							key={token}
-							token={token}
-							entry={entry}
-							swatch={toOklchCss(resolved[token]!)}
-							rampOptions={rampOptions}
-							overridden={overridden}
-							issues={issuesFor(key)}
-							contrastFailures={contrastFailures}
-							onAliasChange={(alias) =>
-								holdAliasAttempt(key, tryOverride({ kind: 'alias', scheme, token, alias }))
-							}
-							onReset={
-								overridden
-									? () => {
-											holdAliasAttempt(key, null);
-											clearOverride(key);
-										}
-									: undefined
-							}
-						/>
-					);
-				})}
+						return (
+							<SemanticRow
+								key={token}
+								token={token}
+								entry={entry}
+								swatch={toOklchCss(resolved[token]!)}
+								rampOptions={rampOptions}
+								overridden={overridden}
+								issues={issuesFor(key)}
+								contrastFailures={contrastFailures}
+								onAliasChange={(alias) =>
+									holdAliasAttempt(key, tryOverride({ kind: 'alias', scheme, token, alias }))
+								}
+								onReset={
+									overridden
+										? () => {
+												holdAliasAttempt(key, null);
+												clearOverride(key);
+											}
+										: undefined
+								}
+							/>
+						);
+					})}
+				</ul>
 			</CategoryGroup>
 
 			{Object.entries(colorScheme.primitives).map(([ramp, steps]) => (
 				<CategoryGroup key={ramp} name={ramp}>
-					{steps.map((step) => (
-						<PrimitiveRow
-							// Keyed by scheme too, so a toggle remounts the row: a refused edit belongs to
-							// the scheme it was typed in, and the other scheme's step never saw it.
-							key={`${scheme}:${step.step}`}
-							scheme={scheme}
-							ramp={ramp}
-							step={step}
-							overrides={overrides}
-							issuesFor={issuesFor}
-							onOverride={tryOverride}
-							onReset={clearOverride}
-						/>
-					))}
+					<RampStrip
+						ramp={ramp}
+						scheme={scheme}
+						steps={steps}
+						overrides={overrides}
+						issuesFor={issuesFor}
+						onOverride={tryOverride}
+						onReset={clearOverride}
+					/>
 				</CategoryGroup>
 			))}
 
@@ -255,20 +252,22 @@ export function TokenList({
 						source={topEntry.source}
 						hasOverride={hasOverride}
 					>
-						{tokens.map((token) => (
-							<ValueRow
-								// Shadow is the one category here that differs by scheme; see `PrimitiveRow`'s
-								// key for why that has to remount on a toggle.
-								key={`${category === 'shadow' ? scheme : ''}:${token.path.join('.')}`}
-								category={category}
-								scheme={scheme}
-								token={token}
-								overrides={overrides}
-								issuesFor={issuesFor}
-								onOverride={tryOverride}
-								onReset={clearOverride}
-							/>
-						))}
+						<ul className="flex flex-col">
+							{tokens.map((token) => (
+								<ValueRow
+									// Shadow is the one category here that differs by scheme; see `RampStrip`'s
+									// chip key for why that has to remount on a toggle.
+									key={`${category === 'shadow' ? scheme : ''}:${token.path.join('.')}`}
+									category={category}
+									scheme={scheme}
+									token={token}
+									overrides={overrides}
+									issuesFor={issuesFor}
+									onOverride={tryOverride}
+									onReset={clearOverride}
+								/>
+							))}
+						</ul>
 					</CategoryGroup>
 				);
 			})}

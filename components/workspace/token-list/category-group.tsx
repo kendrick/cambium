@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react';
 
 /**
- * One category's rows, headed by its name. `data-source="system"` is the hook the browser suite
- * checks against all five system-constant categories at once, per `core/system-constants.ts`. It
- * names where the values came from, so an override never moves it. A derived category carries no
- * `data-source` at all.
+ * One category's rows, headed by its name. The caller brings the `<ul>`, since a ramp's strip of
+ * chips isn't a list of rows.
+ *
+ * `data-source="system"` is the hook the browser suite checks against all five system-constant
+ * categories at once, per `core/system-constants.ts`. It names where the values came from, so an
+ * override never moves it. A derived category carries no `data-source` at all.
  *
  * `hasOverride` decides the label instead. An edited system category is still system-sourced but
  * no longer untouched, so `data-untouched` and "Untouched default" hold only while no row in it is
@@ -38,7 +40,7 @@ export function CategoryGroup({
 					</span>
 				) : null}
 			</div>
-			<ul className="flex flex-col">{children}</ul>
+			{children}
 		</section>
 	);
 }

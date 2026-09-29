@@ -240,7 +240,7 @@ function exportedIdsFor(prefix: string): Map<string, number> {
 async function renderedIds(section: Locator): Promise<Map<string, number>> {
 	return tally(
 		await section
-			.locator('li[data-token]')
+			.locator('[data-token]')
 			.evaluateAll((elements) =>
 				elements.map((element) => element.getAttribute('data-token') ?? ''),
 			),
@@ -501,6 +501,39 @@ test('no two buttons in the token list share an accessible name', async ({ page 
 	expect([...tally(names)].filter(([, count]) => count > 1)).toEqual([]);
 });
 
+test('a ramp strip is one Tab stop: arrows move between steps, Tab leaves it, Enter opens the step', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const [first, second] = RAMP_NAMES;
+	const chip = (ramp: string | undefined, step: number) =>
+		page.locator(`[data-token="primitive.${ramp}.${step}"]`);
+
+	await chip(first, 1).focus();
+
+	await page.keyboard.press('ArrowRight');
+	await expect(chip(first, 2)).toBeFocused();
+	await page.keyboard.press('ArrowLeft');
+	await expect(chip(first, 1)).toBeFocused();
+
+	// One press out: the next stop is the second strip's own stop, not step 2 of this one.
+	await page.keyboard.press('Tab');
+	await expect(chip(second, 1)).toBeFocused();
+
+	await page.keyboard.press('Shift+Tab');
+	await expect(chip(first, 1)).toBeFocused();
+	await page.keyboard.press('ArrowRight');
+	await page.keyboard.press('Enter');
+
+	const editor = page.locator(`[data-editor="primitive.${first}.2"]`);
+	await expect(editor).toBeVisible();
+	await expect(editor.getByLabel(`primitive.${first}.2 l`, { exact: true })).toBeVisible();
+});
+
 test('every category is grouped, and every token opens an editor whose controls, provenance and rationale match the export', async ({
 	page,
 }) => {
@@ -524,7 +557,7 @@ test('every category is grouped, and every token opens an editor whose controls,
 	for (const ramp of RAMP_NAMES) {
 		const section = tokensSection.locator(`section[data-category="${ramp}"]`);
 		await expect(section).toBeVisible();
-		await expect(section.locator('li[data-token]')).toHaveCount(12);
+		await expect(section.locator('[data-token]')).toHaveCount(12);
 		expect(await renderedIds(section), ramp).toEqual(exportedIdsFor(`primitive.${ramp}`));
 	}
 
