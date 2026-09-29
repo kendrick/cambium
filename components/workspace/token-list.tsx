@@ -5,10 +5,8 @@ import { useMemo, useState } from 'react';
 import { OverrideRejectedError } from '../../app/state/workspace-store';
 import type { ContrastEntry } from '../../core/contrast/check';
 import { toOklchCss } from '../../core/css/oklch-css';
-import { CAMBIUM_NAMESPACE } from '../../core/provenance';
 import { resolveScheme } from '../../core/resolve-scheme';
 import type { ScaleEngineResult } from '../../core/scale-engine';
-import { STEP_ROLES } from '../../core/step-roles';
 import type { TokenSet } from '../../core/token-set';
 import {
 	overrideKey,
@@ -20,7 +18,7 @@ import {
 } from '../../core/token-overrides';
 import { CategoryGroup } from './token-list/category-group';
 import { PrimitiveRow } from './token-list/primitive-row';
-import { TokenRow } from './token-list/token-row';
+import { SemanticRow } from './token-list/semantic-row';
 import { ValueRow } from './token-list/value-row';
 import { walkCategoryTokens } from './token-list/walk-category';
 
@@ -86,9 +84,10 @@ export type TokenListProps = {
 };
 
 /**
- * Groups the derived set by category and renders every leaf with its provenance, its rationale, and
- * an edit control shaped for what it targets: a ramp.step `<select>` for a semantic alias, L/C/H
- * inputs for a primitive step, a number input per leaf everywhere else.
+ * Groups the derived set by category and renders every leaf with its provenance and rationale. Each
+ * leaf's edit control opens from a per-token popover, shaped for what it targets: a ramp.step
+ * `<select>` for a semantic alias, L/C/H inputs for a primitive step, a number input per leaf
+ * everywhere else.
  */
 export function TokenList({
 	tokenSet,
@@ -187,8 +186,6 @@ export function TokenList({
 				{Object.entries(colorScheme.semantic).map(([token, entry]) => {
 					const key = overrideKey({ kind: 'alias', scheme, token, alias: entry.alias });
 					const overridden = Object.hasOwn(overrides, key);
-					const step = Number(entry.alias.slice(entry.alias.lastIndexOf('.') + 1));
-					const role = STEP_ROLES.find((candidate) => candidate.step === step)?.role;
 					// An empty list still mounts the row's live region, which has to exist before the
 					// first verdict for a screen reader to announce it.
 					const contrastFailures = (contrastByOverride[key] ?? []).map((candidate) => ({
@@ -198,14 +195,18 @@ export function TokenList({
 					}));
 
 					return (
-						<TokenRow
+						<SemanticRow
 							key={token}
-							id={`semantic.${token}`}
-							provenance={entry.$extensions[CAMBIUM_NAMESPACE]}
-							resolvesTo={entry.alias}
-							stepRole={role}
+							token={token}
+							entry={entry}
 							swatch={toOklchCss(resolved[token]!)}
+							rampOptions={rampOptions}
 							overridden={overridden}
+							issues={issuesFor(key)}
+							contrastFailures={contrastFailures}
+							onAliasChange={(alias) =>
+								holdAliasAttempt(key, tryOverride({ kind: 'alias', scheme, token, alias }))
+							}
 							onReset={
 								overridden
 									? () => {
@@ -214,27 +215,7 @@ export function TokenList({
 										}
 									: undefined
 							}
-							issues={issuesFor(key)}
-							contrastFailures={contrastFailures}
-							revertLabel={`${token} override`}
-						>
-							<select
-								aria-label={`${token} alias`}
-								value={entry.alias}
-								onChange={(event) =>
-									holdAliasAttempt(
-										key,
-										tryOverride({ kind: 'alias', scheme, token, alias: event.target.value }),
-									)
-								}
-							>
-								{rampOptions.map((option) => (
-									<option key={option} value={option}>
-										{option}
-									</option>
-								))}
-							</select>
-						</TokenRow>
+						/>
 					);
 				})}
 			</CategoryGroup>

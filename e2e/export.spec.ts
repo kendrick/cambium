@@ -304,7 +304,9 @@ test('a re-alias applied through the token list shows up in the downloaded light
 
 	const [expectedLight] = exportArtifacts(applied.tokenSet, { brandUrl: null });
 
+	await page.getByRole('button', { name: 'Edit semantic.primary', exact: true }).click();
 	await page.getByLabel('primary alias', { exact: true }).selectOption('brand.1');
+	await page.keyboard.press('Escape');
 
 	await spyOnBlobTypes(page);
 	const { download, bytes, blobType } = await downloadArtifact(page, 'light.tokens.json');
