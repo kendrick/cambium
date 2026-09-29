@@ -6,8 +6,9 @@ import { TokenEditor } from './token-editor';
 
 /**
  * One semantic or non-colour token as a list row: what it is and what it resolves to, readable at
- * a glance, with one Tab stop, the "Edit" trigger. The controls in `children`, the full rationale,
- * Reset and any issues all live in that trigger's `TokenEditor`. `data-overridden` marks the row
+ * a glance, with the "Edit" trigger as its one stop. A semantic row whose override breaks a
+ * pair gets a second, #153's Revert below. The controls in `children`, the full rationale, Reset
+ * and any issues all live in that trigger's `TokenEditor`. `data-overridden` marks the row
  * whenever the override map holds this token, whether or not the current base still accepts it.
  *
  * `swatch` prints as text beside the chip as well, so a row shows a colour value a reader can copy

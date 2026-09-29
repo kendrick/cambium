@@ -7,10 +7,13 @@ import { nextRovingIndex } from './roving';
 
 /**
  * A ramp's steps as one toolbar with a roving tabindex, so the ramp costs one Tab stop instead of
- * one per control per step. Tab enters on the last chip that had focus, arrows move within, and
- * Enter falls through to the chip's own button, which opens its editor.
+ * one per control per step. Tab enters on the chip whose step last had focus, arrows move within,
+ * and Enter falls through to the chip's own button, which opens its editor.
  *
- * `steps` arrives already filtered, so the roving index clamps to what's rendered.
+ * `steps` arrives already filtered, so the active chip is tracked by its step number rather than
+ * its index into `steps`: a filter change re-slices the array, and an index that survived the
+ * re-slice would now name whatever chip happens to sit there instead of the one last focused.
+ * `current` falls back to the first rendered chip once the remembered step is filtered out.
  */
 export function RampStrip({
 	ramp,
@@ -29,9 +32,12 @@ export function RampStrip({
 	onOverride: (override: TokenOverride) => OverrideIssue[] | null;
 	onReset: (key: string) => void;
 }) {
-	const [active, setActive] = useState(0);
+	const [activeStep, setActiveStep] = useState<number | null>(null);
 	const chips = useRef<(HTMLButtonElement | null)[]>([]);
-	const current = Math.min(active, steps.length - 1);
+	const current = Math.max(
+		steps.findIndex((step) => step.step === activeStep),
+		0,
+	);
 
 	return (
 		// The rule wants the toolbar itself focusable, but the roving pattern keeps focus on one chip
@@ -51,7 +57,7 @@ export function RampStrip({
 				if (next === null) return;
 
 				event.preventDefault();
-				setActive(next);
+				setActiveStep(steps[next]!.step);
 				chips.current[next]?.focus();
 			}}
 		>
@@ -68,7 +74,7 @@ export function RampStrip({
 					onOverride={onOverride}
 					onReset={onReset}
 					tabIndex={index === current ? 0 : -1}
-					onFocus={() => setActive(index)}
+					onFocus={() => setActiveStep(step.step)}
 					chipRef={(node) => {
 						chips.current[index] = node;
 					}}

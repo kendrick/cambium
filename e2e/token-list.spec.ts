@@ -236,7 +236,7 @@ function exportedIdsFor(prefix: string): Map<string, number> {
 	return tally([...EXPORTED_ROWS.keys()].filter((id) => id.startsWith(`${prefix}.`)));
 }
 
-/** Every row id a section renders, in one round trip. */
+/** Every `[data-token]` id a section renders, a row's or a ramp chip's, in one round trip. */
 async function renderedIdsIn(section: Locator): Promise<Map<string, number>> {
 	return tally(
 		await section
@@ -516,8 +516,11 @@ test('typing a token name into the filter hides every row whose name does not co
 	await expect(tokens.locator('[data-token]').first()).toBeVisible();
 
 	// "border" lives in the colour groups. "md" lives only in collapsed value categories, which a
-	// filter has to open or it hides the very rows it matched.
-	for (const query of ['border', 'md']) {
+	// filter has to open or it hides the very rows it matched. "<first ramp>.1" keeps only part of
+	// a ramp (steps 1, 10, 11 and 12, since each of those ids contains that substring), which
+	// neither of the other two queries exercises: "border" and "md" each clear every step of every
+	// ramp they don't fully match.
+	for (const query of ['border', 'md', `${RAMP_NAMES[0]}.1`]) {
 		const expected = [...EXPORTED_ROWS.keys()].filter((id) => id.includes(query));
 		// Guard: the expectation isn't empty, and case folding doesn't change it for this query.
 		expect(expected.length, query).toBeGreaterThan(0);
@@ -546,11 +549,19 @@ test('no alias select or number input is in the DOM until its editor opens', asy
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 	await expect(page.locator('[data-token="semantic.primary"]')).toBeVisible();
 
+	// Every value category open, so a value row exists to check: collapsed, the row itself isn't
+	// in the DOM and a count-0 check on its controls would pass for nothing.
+	for (const category of NON_COLOUR_CATEGORIES) await expandCategory(page, category);
+
 	// Page-wide on purpose: the editor portals to <body>, so a control mounted early would sit
-	// outside the Tokens region and a region-scoped count would miss it.
+	// outside the Tokens region and a region-scoped count would miss it. `input[type="number"]` is
+	// unique to `NumberInput`, which only a token editor renders, so this catches a value row's
+	// controls too without also tripping on the workspace's own Interpretation `<select>`, which
+	// `select[aria-label$=" alias"]` avoids by construction: an alias select is the only kind a
+	// token editor ever renders.
 	await expect(page.locator('select[aria-label$=" alias"]')).toHaveCount(0);
 	await expect(page.locator('input[aria-label^="primitive."]')).toHaveCount(0);
-	await expect(page.getByLabel('radius.md value', { exact: true })).toHaveCount(0);
+	await expect(page.locator('input[type="number"]')).toHaveCount(0);
 
 	const semantic = await openEditor(page, 'semantic.primary');
 	await expect(page.locator('select[aria-label$=" alias"]')).toHaveCount(1);
@@ -560,6 +571,10 @@ test('no alias select or number input is in the DOM until its editor opens', asy
 
 	const primitive = await openEditor(page, 'primitive.brand.1');
 	await expect(primitive.locator('input[type="number"]')).toHaveCount(3);
+	await closeEditor(page, primitive);
+
+	const radius = await openEditor(page, 'radius.md');
+	await expect(radius.getByLabel('radius.md value', { exact: true })).toBeVisible();
 });
 
 test('no two buttons in the token list share an accessible name', async ({ page }) => {
@@ -624,12 +639,61 @@ test('a ramp strip is one Tab stop: arrows move between steps, Tab leaves it, En
 
 	await page.keyboard.press('Shift+Tab');
 	await expect(chip(first, 1)).toBeFocused();
+
+	// Same check, but leaving from a chip the arrows moved to rather than the strip's first one —
+	// a `tabIndex` left stale by the move would still show up here even with the check above green.
+	await page.keyboard.press('ArrowRight');
+	await page.keyboard.press('ArrowRight');
+	await expect(chip(first, 3)).toBeFocused();
+	await page.keyboard.press('Tab');
+	await expect(chip(second, 1)).toBeFocused();
+
+	await chip(first, 1).focus();
 	await page.keyboard.press('ArrowRight');
 	await page.keyboard.press('Enter');
 
 	const editor = page.locator(`[data-editor="primitive.${first}.2"]`);
 	await expect(editor).toBeVisible();
 	await expect(editor.getByLabel(`primitive.${first}.2 l`, { exact: true })).toBeVisible();
+});
+
+test("a ramp strip's roving stop follows the step that had focus, not its old position, once a filter reorders the strip", async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const [ramp] = RAMP_NAMES;
+	const chip = (step: number) => page.locator(`[data-token="primitive.${ramp}.${step}"]`);
+	const filter = page.getByRole('searchbox', { name: 'Filter by name' });
+
+	// Isolates the ramp without changing which steps render, so the strip doesn't remount (the
+	// primitives group is keyed on whether a filter is active, not on its text) and step 11's
+	// index—10, in the unfiltered 12-step order—carries into the next filter unchanged.
+	await filter.fill(ramp!);
+	await chip(11).focus();
+
+	// "<ramp>.1" keeps steps 1, 10, 11 and 12 (each id contains that substring), so step 11 stays
+	// rendered but slides from index 10 to index 2. An index remembered instead of the step itself
+	// would clamp 10 into this 4-long list and land on index 3, step 12, one past where focus
+	// actually was. `fill` moves real focus onto the field itself, which is fine: it's Tab landing
+	// back in the strip, not this fill, whose target the roving index has to get right.
+	await filter.fill(`${ramp}.1`);
+
+	// Only one element inside the strip is ever in the tab sequence, whichever stop sits between
+	// the field and the strip (the "primitives" disclosure toggle, here)—so pressing Tab until
+	// focus reaches this ramp finds that one chip regardless of how many presses that takes.
+	let landed: string | null = null;
+	for (let presses = 0; presses < 5 && !landed; presses++) {
+		await page.keyboard.press('Tab');
+		const id = await page.evaluate(
+			() => document.activeElement?.getAttribute('data-token') ?? null,
+		);
+		if (id?.startsWith(`primitive.${ramp}.`)) landed = id;
+	}
+	expect(landed).toBe(`primitive.${ramp}.11`);
 });
 
 test('every category is grouped, and every token opens an editor whose controls, provenance and rationale match the export', async ({
@@ -1508,8 +1572,8 @@ test('setting semantic.background to brand.9 shows the AA fails it causes, agree
 
 	// The verdict lands inside a polite live region the row already held, so it's announced.
 	await expect(row.getByRole('status')).toContainText('foreground on background');
-	// Revert and Reset both clear the override. Reset lives in the edit popover (Decision 21), so
-	// the row itself offers only Revert.
+	// Revert and Reset both clear the override. Reset lives in the edit popover, so the row itself
+	// offers only Revert.
 	await expect(row.getByRole('button', { name: /^Reset\b/ })).toHaveCount(0);
 
 	const lines = (await verdict.allTextContents()).map(parseVerdictLine);
@@ -1525,7 +1589,7 @@ test('setting semantic.background to brand.9 shows the AA fails it causes, agree
 	await expect(row).not.toHaveAttribute('data-overridden', '');
 	await expect(resolvesTo).toHaveAttribute('data-resolves-to', 'neutral.1');
 	// The alias select isn't in the DOM with the popover closed, so Revert hands focus to the
-	// row's Edit trigger, the one control on the row that opens it (Decision 20).
+	// row's Edit trigger, the one control on the row that opens it.
 	await expect(trigger).toBeFocused();
 	const reopened = await openEditor(page, 'semantic.background');
 	await expect(reopened.getByLabel('background alias', { exact: true })).toHaveValue('neutral.1');

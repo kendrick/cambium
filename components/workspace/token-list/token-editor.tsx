@@ -24,9 +24,11 @@ export type TokenEditorProps = {
 
 /**
  * One token's edit popover. Everything that costs a Tab stop (the controls, the rationale
- * disclosure, Reset) lives in here, so a row is one stop however much it edits. Before #151 every
- * control in the list was its own stop. base-ui unmounts a closed popup, which is what keeps an
- * alias `<select>` holding every ramp step per semantic row out of the DOM until someone asks.
+ * disclosure, Reset) lives in here, so a row costs one stop for editing however much it edits.
+ * A semantic row whose override breaks a pair still adds a second stop of its own, #153's Revert,
+ * which stays on `TokenRow` rather than in here (see its docblock). Before #151 every control in
+ * the list was its own stop. base-ui unmounts a closed popup, which is what keeps an alias
+ * `<select>` holding every ramp step per semantic row out of the DOM until someone asks.
  */
 export function TokenEditor({
 	id,
@@ -84,9 +86,11 @@ export function TokenEditor({
 }
 
 /**
- * Named after its token, so 172 of these can't all read "More" to a screen reader. A button
- * with `aria-expanded`, not `<details>`: #24's browser suite finds `raw-response.tsx`'s
- * `<details>` with a bare `page.locator('details')`.
+ * Named after its token rather than a bare "Why": a closed popover unmounts, so at most one of
+ * these is ever in the DOM, but its name still has to stand alone for whatever found it without
+ * the row's visual context: a screen reader's button list, "find", anything that skips straight
+ * to the control. A button with `aria-expanded`, not `<details>`: #24's browser suite finds
+ * `raw-response.tsx`'s `<details>` with a bare `page.locator('details')`.
  */
 function RationaleDisclosure({
 	id,
@@ -125,11 +129,11 @@ function RationaleDisclosure({
 }
 
 /**
- * Moved from `token-row.tsx`. A light-scheme edit is checked against the scheme and the top-level
- * copy that mirrors it, so the store refuses it once per copy, under paths that differ only by a
- * leading `['schemes', 'light']`. Keying on the path with that prefix stripped folds the two copies
- * into one item. Keying on the message alone would also fold two different refused fields that
- * happen to share a message, and the editor would stop saying the second one is refused.
+ * A light-scheme edit is checked against the scheme and the top-level copy that mirrors it, so the
+ * store refuses it once per copy, under paths that differ only by a leading `['schemes', 'light']`.
+ * Keying on the path with that prefix stripped folds the two copies into one item. Keying on the
+ * message alone would also fold two different refused fields that happen to share a message, and
+ * the editor would stop saying the second one is refused.
  */
 function listIssues(issues: OverrideIssue[]): Map<string, string> {
 	const listed = new Map<string, string>();
