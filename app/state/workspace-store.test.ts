@@ -12,7 +12,7 @@ import {
 	FAITHFUL,
 	type InterpretationParams,
 } from '../../core/interpretation';
-import { createOklchScaleEngine } from '../../core/oklch-scale-engine';
+import { createOklchScaleEngine, OKLCH_SCALE_ENGINE_ID } from '../../core/oklch-scale-engine';
 import type { RampSet, ScaleEngine, ScaleEngineResult } from '../../core/scale-engine';
 import { defaultSeedPins, repairPinsFor } from '../../core/seed-pins';
 import { buildTokenSet } from '../../core/semantic-layer';
@@ -403,7 +403,7 @@ describe('the workspace store', () => {
 			interpretation: 'expressive',
 			seed: seedWith(30),
 			tokenSet: null,
-			scaleEngine: 'cambium-oklch-1',
+			scaleEngine: OKLCH_SCALE_ENGINE_ID,
 		});
 		expect(recordStore.puts).toEqual([next]);
 		expect(store.getState().activeOrdinal).toBe(2);
