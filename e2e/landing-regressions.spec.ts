@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
 import { DATABASE_NAME, RECORD_STORE_NAME } from '../app/storage/indexed-db-record-store';
 import { MAX_ENCODED_BASE64_BYTES } from '../lib/image-intake';
@@ -404,4 +404,44 @@ test('a tag chosen at upload and a brand URL entered at upload survive a reload'
 	expect(records).toHaveLength(1);
 	expect(records[0]!.tags[0]).toBe('logo');
 	expect(records[0]!.brandUrl).toBe('acme.com');
+});
+
+/** What the browser decoded, rather than what the markup asked for: a broken `src` still renders an `<img>` with the right alt. */
+function naturalSize(image: Locator): Promise<[number, number]> {
+	return image.evaluate((element) => {
+		const img = element as HTMLImageElement;
+		return [img.naturalWidth, img.naturalHeight];
+	});
+}
+
+test('each picked file shows a thumbnail whose alt names the file and its current tag', async ({
+	page,
+}) => {
+	await page.goto('/');
+
+	// Two shapes, so a thumbnail showing the wrong file's pixels can't pass on size.
+	await page
+		.getByLabel('Reference images')
+		.setInputFiles([pngFile('mark.png', makePng(40, 20)), pngFile('shot.png', makePng(30, 60))]);
+
+	const markThumbnail = stagedRow(page, 'mark.png').getByRole('img');
+	const shotThumbnail = stagedRow(page, 'shot.png').getByRole('img');
+
+	// "Automatic" is what the row's own tag select shows for an untouched file.
+	await expect(markThumbnail).toHaveAttribute('alt', 'mark.png, Automatic');
+	await expect(shotThumbnail).toHaveAttribute('alt', 'shot.png, Automatic');
+
+	// Intake only downscales past a 1568px long edge (`lib/image-intake.ts`), so these come back
+	// at the size they were made.
+	await expect.poll(() => naturalSize(markThumbnail)).toEqual([40, 20]);
+	await expect.poll(() => naturalSize(shotThumbnail)).toEqual([30, 60]);
+
+	await page.getByLabel('Type of mark.png').selectOption('logo');
+	await expect(markThumbnail).toHaveAttribute('alt', 'mark.png, Logo');
+
+	// Rows are keyed by image id, so removing the first must not leave its picture on the second.
+	await stagedRow(page, 'mark.png').getByRole('button', { name: 'Remove' }).click();
+	await expect(stagedRow(page, 'mark.png')).toHaveCount(0);
+	await expect(shotThumbnail).toHaveAttribute('alt', 'shot.png, Automatic');
+	await expect.poll(() => naturalSize(shotThumbnail)).toEqual([30, 60]);
 });
