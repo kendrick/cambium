@@ -1,5 +1,7 @@
 # Remove `surfacePolarity` Rather Than Wire It Up
 
+ADR-0008 answers the fork this decision leaves to #135: polarity is derived from the reference images, and it chooses only the default scheme.
+
 Before this decision, `BrandSeedSchema` declared `surfacePolarity` as `z.enum(['light-first', 'dark-first']).nullable()` in `core/brand-seed.ts`, and `app/readers/seed-prompt.ts` asked the model for it at three sites, naming it among the eleven fields the prompt required. No production code read it. The scale engine already builds a `Record<SchemeName, RampSet>` for both `light` and `dark` from the same seed, and `SEMANTIC_MAP` resolves every scheme's surfaces, `background` included, off the neutral ramp that engine produces, so a brand's light and dark surfaces exist regardless of what this field says. #83 decided on 2026-09-25 to remove it rather than wire it up. This ADR records that removal and folds it into #77's shape change: `SCHEMA_VERSION` moves to 9 and `SEED_PROMPT_VERSION` moves to `seed-v4` in the same commit, so a stored seed breaks its parse once instead of twice.
 
 ## Considered Options
