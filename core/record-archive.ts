@@ -28,8 +28,9 @@ export type DeserializeResult =
 const RECORD_ENTRY = 'record.json';
 
 /**
- * fflate allocates each deflated entry's output at the size its central header declares, before
- * inflating a byte, so a tiny archive can demand gigabytes.
+ * fflate allocates each entry's output from the sizes its central header declares, before reading
+ * a byte of it, and several central entries can point at one local entry. Without a cap, a tiny
+ * archive can demand gigabytes.
  */
 const MAX_UNPACKED_BYTES = 64 * 1024 * 1024;
 
@@ -106,11 +107,11 @@ export function serializeRecord(record: BrandRecord): Uint8Array {
 
 /**
  * Table of contents and size first, then checksums, then paths, then content. The central
- * directory is walked and its declared sizes summed before `unzipSync` runs, because fflate
- * allocates from those sizes and an archive refused as too large must never reach it. A damaged
- * archive is reported as damaged whatever it claims to contain, and every entry name is checked
- * before anything is parsed out of `record.json`, so a hostile name is refused in an archive that
- * is otherwise well formed.
+ * directory is walked, and what fflate would allocate for it summed, before `unzipSync` runs,
+ * because fflate allocates from those sizes and an archive refused as too large must never reach
+ * it. A damaged archive is reported as damaged whatever it claims to contain, and every entry
+ * name is checked before anything is parsed out of `record.json`, so a hostile name is refused in
+ * an archive that is otherwise well formed.
  */
 export function deserializeRecord(bytes: Uint8Array): DeserializeResult {
 	const directory = readDirectory(bytes);
@@ -331,10 +332,10 @@ function toBase64(bytes: Uint8Array): string {
 /**
  * fflate's `unzipSync` never checks an entry's CRC, so a flipped byte in a stored (uncompressed)
  * image comes back as a different image with no error at all. This reads each entry's CRC from
- * the central directory so `deserializeRecord` can check it, and sums the uncompressed sizes
- * fflate will allocate so it can refuse an archive before fflate touches it. Names decode the way
- * fflate's own reader does, UTF-8 when general-purpose bit 11 is set and Latin-1 otherwise, so the
- * two agree on every key.
+ * the central directory so `deserializeRecord` can check it, and sums the sizes fflate will
+ * allocate so it can refuse an archive before fflate touches it. Names decode the way fflate's own
+ * reader does, UTF-8 when general-purpose bit 11 is set and Latin-1 otherwise, so the two agree on
+ * every key.
  *
  * Checking a CRC only helps if this walk sees every entry fflate extracts. A central directory
  * with two entries under one name, where fflate keeps the last, has to reach the duplicate check
@@ -425,12 +426,18 @@ function readDirectory(
 }
 
 /**
- * The uncompressed size fflate's `z64hs` reads for one central entry, which is the size it
- * allocates. In a zip64 archive, a 0xffffffff in any of the three 32-bit fields sends it to the
- * zip64 extra field (id 1), with the size first there when its own field is the marked one.
- * fflate walks the extra fields and reads the 8 bytes with no bounds checks, and a byte past the
- * end of the file reads as 0, so this does too. Where fflate finds no zip64 field it throws, so
- * this returns null and the archive is refused as damaged.
+ * What fflate will allocate for one central entry: `su`, the uncompressed size, for a deflated
+ * entry, and `sc`, the compressed size, for a stored one, which it copies out of the input without
+ * reading `su`. Taking the larger of the two covers both methods, so an entry that lies in either
+ * field counts at its bigger claim. Central entries can share one local header, and fflate copies
+ * each one, so every entry counts in full.
+ *
+ * Both sizes are read the way fflate's `z64hs` reads them. In a zip64 archive, a 0xffffffff in any
+ * of the three 32-bit fields sends it to the zip64 extra field (id 1), which holds `su` then `sc`,
+ * each only when its own field is the marked one. fflate walks the extra fields and reads the 8
+ * bytes with no bounds checks, and a byte past the end of the file reads as 0, so this does too.
+ * Where fflate finds no zip64 field it throws, so this returns null and the archive is refused as
+ * damaged.
  */
 function declaredSize(
 	bytes: Uint8Array,
@@ -442,18 +449,24 @@ function declaredSize(
 	const byteAt = (at: number) => bytes[at] ?? 0;
 	const u16 = (at: number) => byteAt(at) | (byteAt(at + 1) << 8);
 	const u32 = (at: number) => (u16(at) | (u16(at + 2) << 16)) >>> 0;
+	const u64 = (at: number) => u32(at) + u32(at + 4) * 2 ** 32;
 	const MARKER = 0xffffffff;
 
-	const size = u32(entry + 24);
-	const marked = size === MARKER || u32(entry + 20) === MARKER || u32(entry + 42) === MARKER;
+	const compressed = u32(entry + 20);
+	const uncompressed = u32(entry + 24);
+	const markedCompressed = compressed === MARKER;
+	const markedUncompressed = uncompressed === MARKER;
+	const marked = markedCompressed || markedUncompressed || u32(entry + 42) === MARKER;
 
-	if (!zip64 || !marked) return size;
+	if (!zip64 || !marked) return Math.max(uncompressed, compressed);
 
 	const extraEnd = extraStart + extraLength;
 
 	for (let field = extraStart; field + 4 < extraEnd; field += 4 + u16(field + 2)) {
 		if (u16(field) === 1) {
-			return size === MARKER ? u32(field + 4) + u32(field + 8) * 2 ** 32 : size;
+			const su = markedUncompressed ? u64(field + 4) : uncompressed;
+			const sc = markedCompressed ? u64(field + 4 + (markedUncompressed ? 8 : 0)) : compressed;
+			return Math.max(su, sc);
 		}
 	}
 

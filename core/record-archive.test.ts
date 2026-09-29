@@ -334,11 +334,16 @@ function declareSizes(
 	]);
 }
 
-/** An archive of `record` plus one small deflated entry declared at `size` bytes. */
+/**
+ * An archive of `record` plus one small deflated entry declared at `size` bytes. The record's own
+ * entries are stored, so each costs exactly its length: deflating a 9-byte image makes it bigger,
+ * and the cap counts the larger of the two sizes.
+ */
 function withPadding(size: number, options?: { zip64?: boolean }): Uint8Array {
-	const bytes = rezip(serializeRecord(record), (entries) => {
-		entries['padding.bin'] = strToU8('pad');
-	});
+	const bytes = zipSync(
+		{ ...unzipSync(serializeRecord(record)), 'padding.bin': [strToU8('pad'), { level: 6 }] },
+		{ level: 0 },
+	);
 	return declareSizes(bytes, { 'padding.bin': size }, options);
 }
 
@@ -347,6 +352,76 @@ const recordBytes = Object.values(unzipSync(serializeRecord(record))).reduce(
 	(total, contents) => total + contents.length,
 	0,
 );
+
+type StoredCentral = { name: string; crc: number; compressed: number; uncompressed: number };
+
+const le16 = (n: number) => [n & 0xff, (n >>> 8) & 0xff];
+const le32 = (n: number) => [...le16(n & 0xffff), ...le16(n >>> 16)];
+
+/**
+ * One stored (method 0) local entry at offset 0, followed by a central directory whose every
+ * entry points back at it, each with its own name and whatever sizes it claims. fflate copies
+ * `compressed` bytes out of the input for each central entry and never reads `uncompressed`.
+ * This is how the red-team probe on #161 made a 4 MiB file cost 256 MiB.
+ */
+function storedArchive(payload: Uint8Array, centrals: StoredCentral[]): Uint8Array {
+	const localName = strToU8('stored.bin');
+	const local = [
+		...le32(0x04034b50),
+		...le16(20),
+		...le16(0),
+		...le16(0),
+		...le32(0x210000),
+		...le32(crc32(payload)),
+		...le32(payload.length),
+		...le32(payload.length),
+		...le16(localName.length),
+		...le16(0),
+		...localName,
+	];
+	const directory: number[] = [];
+
+	for (const central of centrals) {
+		const name = strToU8(central.name);
+		directory.push(
+			...le32(0x02014b50),
+			...le16(20),
+			...le16(20),
+			...le16(0),
+			...le16(0),
+			...le32(0x210000),
+			...le32(central.crc),
+			...le32(central.compressed),
+			...le32(central.uncompressed),
+			...le16(name.length),
+			...le16(0),
+			...le16(0),
+			...le16(0),
+			...le16(0),
+			...le32(0),
+			...le32(0),
+			...name,
+		);
+	}
+
+	const directoryStart = local.length + payload.length;
+	const end = [
+		...le32(0x06054b50),
+		...le16(0),
+		...le16(0),
+		...le16(centrals.length),
+		...le16(centrals.length),
+		...le32(directory.length),
+		...le32(directoryStart),
+		...le16(0),
+	];
+	const bytes = new Uint8Array(directoryStart + directory.length + end.length);
+	bytes.set(local, 0);
+	bytes.set(payload, local.length);
+	bytes.set(directory, directoryStart);
+	bytes.set(end, directoryStart + directory.length);
+	return bytes;
+}
 
 function flipByte(archive: Uint8Array, offset: number): Uint8Array {
 	const copy = archive.slice();
@@ -823,8 +898,8 @@ describe('deserializeRecord size cap', () => {
 	it('refuses an archive declaring one byte over the cap as too-large, without unzipping it', () => {
 		const bytes = withPadding(MAX_UNPACKED_BYTES - recordBytes + 1);
 
-		// Under a thousandth of what it declares, so without the cap fflate would open this happily.
-		expect(bytes.length * 1000).toBeLessThan(MAX_UNPACKED_BYTES);
+		// Under a hundredth of what it declares, so without the cap fflate would open this happily.
+		expect(bytes.length * 100).toBeLessThan(MAX_UNPACKED_BYTES);
 		vi.mocked(unzipSync).mockClear();
 
 		const error = refusal(bytes);
@@ -836,6 +911,57 @@ describe('deserializeRecord size cap', () => {
 
 	// A zip64 size is read from the extra field, not the 0xffffffff marker, or every zip64 entry
 	// would count as 4 GiB and this would be refused.
+	// fflate copies a stored entry's compressed size and ignores its uncompressed one, so each of
+	// these central entries costs 4 MiB whatever it declares, and 64 of them cost 256 MiB.
+	it('refuses 64 stored central entries sharing one 4 MiB local entry as too-large', () => {
+		const payload = new Uint8Array(4 * 1024 * 1024).fill(0x41);
+		const crc = crc32(payload);
+		const centrals = (count: number) =>
+			Array.from({ length: count }, (_, i) => ({
+				name: `s${i}.bin`,
+				crc,
+				compressed: payload.length,
+				uncompressed: 1,
+			}));
+
+		// Two entries are enough to show fflate hands back a separate full copy for each one, so
+		// the 64 below would cost it 256 MiB.
+		const pair = unzipSync(storedArchive(payload, centrals(2)));
+		expect(pair['s0.bin']!.length).toBe(payload.length);
+		expect(crc32(pair['s0.bin']!)).toBe(crc);
+		expect(pair['s1.bin']!.buffer).not.toBe(pair['s0.bin']!.buffer);
+
+		const bytes = storedArchive(payload, centrals(64));
+		vi.mocked(unzipSync).mockClear();
+
+		expect(refusal(bytes).kind).toBe('too-large');
+		expect(unzipSync).not.toHaveBeenCalled();
+	});
+
+	it('refuses a stored entry claiming a compressed size over the cap as too-large', () => {
+		const payload = strToU8('pad');
+		const bytes = storedArchive(payload, [
+			{
+				name: 'record.json',
+				crc: crc32(payload),
+				compressed: MAX_UNPACKED_BYTES + 1,
+				uncompressed: 1,
+			},
+		]);
+		vi.mocked(unzipSync).mockClear();
+
+		expect(refusal(bytes).kind).toBe('too-large');
+		expect(unzipSync).not.toHaveBeenCalled();
+	});
+
+	it('opens an export whose every entry is stored', () => {
+		const bytes = zipSync(unzipSync(serializeRecord(record)), { level: 0 });
+		const result = deserializeRecord(bytes);
+
+		if (!result.ok) throw new Error(result.error.message);
+		expect(result.record).toEqual(record);
+	});
+
 	it('opens a zip64 archive whose 64-bit size is under the cap', () => {
 		const bytes = withPadding(3, { zip64: true });
 
