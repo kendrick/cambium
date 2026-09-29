@@ -127,6 +127,10 @@ function serializeSchemes(schemes: Schemes): string {
  * failure shape instead of the success one—a schemes-only digest saw neither: it hashed the one
  * field two different results could share. PR #162 caught it live, over a change that touched only
  * `anchor`.
+ *
+ * It hashes the result's JSON form, so `-0` reads as `0` and an `undefined` field vanishes. The token
+ * set's own outputs, CSS and DTCG, are text as well, where `-0` also prints as `0`. A change visible
+ * only to `Object.is` still obliges a new id under `ScaleEngine.id`'s rule; this pin can't see it.
  */
 function serializeResult(result: ScaleEngineResult): string {
 	return JSON.stringify(result);
