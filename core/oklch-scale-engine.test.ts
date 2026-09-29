@@ -57,7 +57,7 @@ const generate = (overrides = {}, params = BALANCED) => {
 describe('createOklchScaleEngine specifics', () => {
 	it('carries the identifier every stored version records as its scale engine', () => {
 		expect(createOklchScaleEngine().id).toBe(OKLCH_SCALE_ENGINE_ID);
-		expect(OKLCH_SCALE_ENGINE_ID).toBe('cambium-oklch-1');
+		expect(OKLCH_SCALE_ENGINE_ID).toBe('cambium-oklch-2');
 	});
 
 	it('places the canonical status hues rather than hues near the brand', () => {

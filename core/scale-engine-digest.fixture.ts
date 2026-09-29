@@ -20,10 +20,7 @@
  * update, not a collision.
  */
 export const ENGINE_DIGESTS: Readonly<Record<string, string>> = {
-	// Re-hashed again for PR #162's opencode review to add P3_ONLY_SEED and NO_KEY_COLORS_SEED to the
-	// sample: every prior seed×params combination was already inside sRGB with a resolvable
-	// keyColors array, so anchor.deviation and the failure shape never actually moved the hash the
-	// first re-hash claimed to cover. The engine's output did not change; this is the same shipped
-	// output over a sample that now exercises both.
-	'cambium-oklch-1': '5c33f508696b0466ada2a2eefa6d7134a7053cfb9d1f429a43bcefef27833711',
+	// The first id the pin covers. `cambium-oklch-1` gets no entry, because it named several outputs
+	// (see `OKLCH_SCALE_ENGINE_ID`), so no single digest describes it.
+	'cambium-oklch-2': '5c33f508696b0466ada2a2eefa6d7134a7053cfb9d1f429a43bcefef27833711',
 };

@@ -179,7 +179,7 @@ const NO_KEY_COLORS_SEED: BrandSeed = seedWith([0.6, 0.15, 200], { keyColors: nu
  * here in its own turn once it ships.
  */
 const PINNED_DIGESTS: Readonly<Record<string, string>> = {
-	'cambium-oklch-1': '5c33f508696b0466ada2a2eefa6d7134a7053cfb9d1f429a43bcefef27833711',
+	'cambium-oklch-2': '5c33f508696b0466ada2a2eefa6d7134a7053cfb9d1f429a43bcefef27833711',
 };
 
 export function testScaleEngineContract(createEngine: () => ScaleEngine) {
