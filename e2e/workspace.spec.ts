@@ -711,3 +711,54 @@ test('an axe run on the populated workspace finds nothing the run on main did no
 		expect(nodes, `${rule} flags more nodes than on main`).toBeLessThanOrEqual(AXE_ON_MAIN[rule]!);
 	}
 });
+
+test('skip to preview and skip to export are the first two Tab stops, and each lands focus in its panel', async ({
+	page,
+}) => {
+	const record = buildRecordWithOneVersion();
+	await seedWorkspaceRecord(page, record);
+
+	const targets = [
+		{ presses: 1, link: 'Skip to preview', tab: 'Preview' },
+		{ presses: 2, link: 'Skip to export', tab: 'Export' },
+	] as const;
+
+	for (const { presses, link, tab } of targets) {
+		// A fresh load for each, because Chromium keeps a sequential-focus starting point after a
+		// blur, and the count below has to start from the top of the document.
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+		await expect(
+			page.getByRole('region', { name: 'Tokens' }).getByRole('listitem').first(),
+		).toBeVisible();
+
+		await page.keyboard.press('Tab');
+		await expect(page.getByRole('link', { name: 'Skip to preview' })).toBeFocused();
+		if (presses === 2) {
+			await page.keyboard.press('Tab');
+			await expect(page.getByRole('link', { name: 'Skip to export' })).toBeFocused();
+		}
+
+		await page.keyboard.press('Enter');
+
+		await expect(page.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true');
+		// Named by its tab, for the reason the tabs scenario above gives: base-ui leaves the
+		// outgoing panel mounted and inert while its exit transition runs.
+		const panel = page.getByRole('tabpanel', { name: tab });
+		await expect
+			.poll(() => panel.evaluate((node) => node.contains(document.activeElement)), {
+				message: link,
+			})
+			.toBe(true);
+	}
+});
+
+test('the output section is headed by an h2', async ({ page }) => {
+	const record = buildRecordWithOneVersion();
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	await expect(
+		page.getByRole('region', { name: 'Output' }).getByRole('heading', { level: 2, name: 'Output' }),
+	).toBeVisible();
+});
