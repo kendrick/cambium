@@ -9,6 +9,7 @@ import {
 	type BrandRecord,
 	BrandRecordSchema,
 	FIRST_REVISION,
+	type ReferenceImage,
 	SCHEMA_VERSION,
 } from '../core/brand-record';
 import type { BrandSeed } from '../core/brand-seed';
@@ -103,7 +104,10 @@ const SEED: BrandSeed = {
  * literal is also held to `BrandRecord` at compile time: `parse` takes `unknown`, so without that a
  * new required field only surfaces once a browser run trips over it.
  */
-function buildRecordWithSeed(seed: BrandSeed = SEED): BrandRecord {
+function buildRecordWithSeed(
+	seed: BrandSeed = SEED,
+	images: ReferenceImage[] = [IMAGE_1, IMAGE_2],
+): BrandRecord {
 	const createdAt = new Date().toISOString();
 
 	return BrandRecordSchema.parse({
@@ -111,7 +115,7 @@ function buildRecordWithSeed(seed: BrandSeed = SEED): BrandRecord {
 		schemaVersion: SCHEMA_VERSION,
 		revision: FIRST_REVISION,
 		brandUrl: null,
-		images: [IMAGE_1, IMAGE_2],
+		images,
 		versions: [
 			{
 				createdAt,
@@ -518,7 +522,9 @@ test("showing a key colour's source draws the region box at the stored fraction,
 	await page.getByRole('button', { name: 'Show source of brand key colour' }).click();
 
 	const image = page.locator('[data-source-image] img');
-	const region = page.locator('[data-source-region]');
+	// Scoped under the dialog's own frame: the seed rail's strip draws outlines with the same
+	// attribute, and an unscoped locator would match those too.
+	const region = page.locator('[data-source-image] [data-region-outline]');
 	await expect(image).toBeVisible();
 	await expect(region).toBeVisible();
 
@@ -540,7 +546,185 @@ test("showing a key colour's source draws the region box at the stored fraction,
 			'The model named this image but recorded no region, so the whole image is shown.',
 		),
 	).toBeVisible();
-	await expect(page.locator('[data-source-region]')).toHaveCount(0);
+	await expect(page.locator('[data-source-image] [data-region-outline]')).toHaveCount(0);
+});
+
+/**
+ * 3:1 against IMAGE_1's 3:2, so the two thumbnails render at different sizes (96×32 against
+ * 96×64) and each region is measured against a box of its own shape.
+ */
+const IMAGE_2_WIDE = { ...IMAGE_2, downscaled: pngDataUrl(300, 100) };
+
+/**
+ * Three regions over two images: two on img-1, so one thumbnail carries more than one outline,
+ * and one on the wide img-2. No region is square or centred, so a swapped axis or a size
+ * measured from the wrong edge lands visibly off.
+ */
+const REGIONS_SEED: BrandSeed = {
+	...SEED,
+	keyColors: [
+		SEED.keyColors![0]!,
+		{ ...SEED.keyColors![1]!, sourceRegion: { x: 0.55, y: 0.1, width: 0.35, height: 0.6 } },
+		{
+			oklch: [0.7, 0.12, 200],
+			proposedRole: 'info',
+			sourceImageId: 'img-1',
+			sourceRegion: { x: 0.6, y: 0.5, width: 0.25, height: 0.3 },
+		},
+	],
+};
+
+/**
+ * The issue's bar, read as an absolute 0.01 on a fraction: 1% of the thumbnail's rendered width or
+ * height for an edge or a size, and 1% relative error for the aspect check.
+ */
+function expectWithinOnePercent(actual: number, expected: number, label: string): void {
+	expect(Math.abs(actual - expected), label).toBeLessThanOrEqual(0.01);
+}
+
+function naturalSize(image: Locator): Promise<[number, number]> {
+	return image.evaluate((element) => {
+		const img = element as HTMLImageElement;
+		return [img.naturalWidth, img.naturalHeight];
+	});
+}
+
+test('the seed rail shows every reference image above the first seed field, with no dialog open', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed();
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const strip = page.locator('[data-reference-strip]');
+	const thumbnails = strip.locator('img');
+	await expect(thumbnails).toHaveCount(2);
+	// Visible, so the geometry check below can't pass on a strip collapsed to zero height.
+	await expect(thumbnails.nth(0)).toBeVisible();
+	await expect(thumbnails.nth(1)).toBeVisible();
+	await expect(page.getByRole('dialog')).toHaveCount(0);
+
+	// The issue's own wording, with each tag in the words the picker offered it by.
+	await expect(thumbnails.nth(0)).toHaveAttribute('alt', 'Reference image 1 of 2, Logo');
+	await expect(thumbnails.nth(1)).toHaveAttribute('alt', 'Reference image 2 of 2, Interface');
+
+	// Decoded from the stored data URL, not just present: the fixtures' own dimensions.
+	await expect.poll(() => naturalSize(thumbnails.nth(0))).toEqual([240, 160]);
+	await expect.poll(() => naturalSize(thumbnails.nth(1))).toEqual([180, 120]);
+
+	const firstField = page.locator('[data-seed-field]').first();
+	await expect(firstField).toBeVisible();
+	const stripBox = await requireBox(strip);
+	const fieldBox = await requireBox(firstField);
+	expect(stripBox.y + stripBox.height).toBeLessThanOrEqual(fieldBox.y);
+});
+
+test('each key colour with a region outlines it on its own thumbnail, at the stored fraction within 1%', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(REGIONS_SEED, [IMAGE_1, IMAGE_2_WIDE]);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	// Spelled out rather than derived from REGIONS_SEED, so the expectation can't share a bug with
+	// the strip's own filter. The paths are the rail's `data-seed-field` names.
+	const withRegions = [
+		{ path: 'keyColors.0', imageId: 'img-1', region: { x: 0.2, y: 0.15, width: 0.3, height: 0.4 } },
+		{
+			path: 'keyColors.1',
+			imageId: 'img-2',
+			region: { x: 0.55, y: 0.1, width: 0.35, height: 0.6 },
+		},
+		{ path: 'keyColors.2', imageId: 'img-1', region: { x: 0.6, y: 0.5, width: 0.25, height: 0.3 } },
+	];
+
+	for (const { path, imageId, region } of withRegions) {
+		const thumbnail = page.locator(`[data-reference-thumbnail="${imageId}"]`);
+		const image = thumbnail.locator('img');
+		const outline = thumbnail.locator(`[data-region-outline="${path}"]`);
+		await expect(outline).toBeVisible();
+
+		const [naturalWidth, naturalHeight] = await naturalSize(image);
+		const imageBox = await requireBox(image);
+		const box = await requireBox(outline);
+
+		// The picture is drawn at its own aspect ratio, so the box measured against is the image.
+		expectWithinOnePercent(
+			imageBox.width / imageBox.height / (naturalWidth / naturalHeight),
+			1,
+			`${imageId} aspect`,
+		);
+		expectWithinOnePercent((box.x - imageBox.x) / imageBox.width, region.x, `${path} left`);
+		expectWithinOnePercent((box.y - imageBox.y) / imageBox.height, region.y, `${path} top`);
+		expectWithinOnePercent(box.width / imageBox.width, region.width, `${path} width`);
+		expectWithinOnePercent(box.height / imageBox.height, region.height, `${path} height`);
+	}
+
+	await expect(
+		page.locator('[data-reference-thumbnail="img-1"] [data-region-outline]'),
+	).toHaveCount(2);
+	await expect(
+		page.locator('[data-reference-thumbnail="img-2"] [data-region-outline]'),
+	).toHaveCount(1);
+});
+
+/**
+ * `main`'s field-list heights before the strip existed, as rendered boxes, measured at 294d462 with
+ * this spec's own fixture. The rail is capped at half the viewport, so anything pinned above the list comes out of
+ * these; at 768×500 a pinned strip left the fields 11px (#170's review).
+ */
+const FIELD_LIST_FLOOR = [
+	{ width: 768, height: 400, minHeight: 37 },
+	{ width: 1280, height: 720, minHeight: 197 },
+] as const;
+
+test('the reference strip costs the seed field list none of its height on a short window', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed();
+	await seedWorkspaceRecord(page, record);
+
+	for (const { width, height, minHeight } of FIELD_LIST_FLOOR) {
+		await page.setViewportSize({ width, height });
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+		const firstField = page.locator('[data-seed-field]').first();
+		await expect(firstField).toBeAttached();
+		await expect(page.locator('[data-reference-strip] img')).toHaveCount(2);
+		// The scroller the fields live in, found from a field rather than by class name. Its rendered
+		// box, border included, is the unit the floors above were measured in.
+		const fieldList = firstField.locator('xpath=ancestor::ul[1]');
+		const { height: listHeight } = await requireBox(fieldList);
+		expect(listHeight, `${width}×${height} field list`).toBeGreaterThanOrEqual(minHeight);
+	}
+});
+
+test('a key colour with no region draws no outline, and a record with no versions still shows its images', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed();
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	// SEED's brand colour has a region on img-1; its accent names img-2 with none.
+	await expect(
+		page.locator('[data-reference-thumbnail="img-1"] [data-region-outline="keyColors.0"]'),
+	).toBeVisible();
+	await expect(
+		page.locator('[data-reference-thumbnail="img-2"] [data-region-outline]'),
+	).toHaveCount(0);
+	await expect(page.locator('[data-reference-strip] [data-region-outline]')).toHaveCount(1);
+
+	const unversioned = BrandRecordSchema.parse({ ...buildRecordWithSeed(), versions: [] });
+	await seedWorkspaceRecord(page, unversioned);
+	await page.goto(`/workspace?${RECORD_PARAM}=${unversioned.id}`);
+
+	await expect(page.getByText('This record has no versions yet')).toBeVisible();
+	await expect(page.locator('[data-reference-strip] img')).toHaveCount(2);
+	await expect(page.locator('[data-reference-strip] [data-region-outline]')).toHaveCount(0);
 });
 
 test('an image whose tag disagrees with the model shows both readings, and one that agrees shows nothing', async ({

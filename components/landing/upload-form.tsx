@@ -11,6 +11,8 @@ import {
 	MAX_REFERENCE_IMAGES,
 	MIN_REFERENCE_IMAGES,
 } from '@/components/landing/image-set';
+import { TAG_LABELS } from '@/components/image-tag-labels';
+import { ReferenceThumbnail } from '@/components/reference-thumbnail';
 import { Button } from '@/components/ui/button';
 import {
 	ACCEPTED_IMAGE_TYPES,
@@ -35,14 +37,8 @@ type PickedImage = {
 	prepared: PreparedImage;
 };
 
-/** Exported so the saved view in `landing-route.tsx` prints the same words the picker offered. */
-export const TAG_LABELS: Record<ImageTag, string> = {
-	auto: 'Automatic',
-	logo: 'Logo',
-	ui: 'Interface',
-	photo: 'Photograph',
-	artwork: 'Artwork',
-};
+/** Re-exported so `landing-route.tsx`'s saved view keeps importing it from here. */
+export { TAG_LABELS };
 
 /**
  * Kept apart from `chooseGuidance` so the rule and the sentence move independently. The rule is
@@ -414,6 +410,13 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 							className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3"
 							key={prepared.image.id}
 						>
+							{/* The downscaled data URL rather than an object URL for the `File`: it is already in
+							    state, it is exactly what will be stored and sent to the model, and there is no
+							    URL to revoke when the row is removed or the form unmounts. */}
+							<ReferenceThumbnail
+								src={prepared.image.downscaled}
+								alt={`${name}, ${TAG_LABELS[tag]}`}
+							/>
 							<span className="min-w-0 flex-1 truncate text-sm">{name}</span>
 							{/* The figures come off the stored blob rather than off the resize that was asked
 							    for, which is the one thing that makes them true. See `lib/image-intake.ts`. */}
