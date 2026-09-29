@@ -550,9 +550,8 @@ test("showing a key colour's source draws the region box at the stored fraction,
 });
 
 /**
- * 3:1 against IMAGE_1's 3:2, so in one strip the two thumbnails render at different heights
- * (96×32 against 96×64). A strip that stretched its items would give this one a frame taller
- * than its picture, and the outline percentages would measure the frame instead.
+ * 3:1 against IMAGE_1's 3:2, so the two thumbnails render at different sizes (96×32 against
+ * 96×64) and each region is measured against a box of its own shape.
  */
 const IMAGE_2_WIDE = { ...IMAGE_2, downscaled: pngDataUrl(300, 100) };
 

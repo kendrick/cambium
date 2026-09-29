@@ -30,8 +30,6 @@ export function ReferenceStrip({
 	if (images.length === 0) return null;
 
 	return (
-		// `items-start` rather than the default stretch: a stretched item grows taller than its image,
-		// and `RegionFrame`'s percentages would then measure the gap.
 		<ul
 			aria-label="Reference images"
 			data-reference-strip
