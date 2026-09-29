@@ -7,7 +7,7 @@ const LABELS: Record<SchemeName, string> = { light: 'Light', dark: 'Dark' };
  * The workspace's one scheme, for the token list and the preview together. Before #154 each held
  * its own, so the list could describe dark while the preview showed light, and an alias edit
  * landed in whichever scheme the list was on. Not persisted: the issue rules that out, and
- * ADR-0004 treats the scheme as a toggle the workspace owns, not a stored field.
+ * ADR-0004 dropped `surfacePolarity` from the seed because a toggle in the workspace can answer it.
  *
  * `aria-pressed` buttons rather than a radio group: two Tab stops and no roving focus to build for
  * two options. Plain buttons rather than `components/ui/button`: the chrome's focus outline (#152)

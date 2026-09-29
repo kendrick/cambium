@@ -559,7 +559,7 @@ test('the workspace renders exactly one scheme control, and it reports its state
 	const group = page.getByRole('group', { name: 'Colour scheme' });
 
 	await expect(group).toHaveCount(1);
-	// In the Output header, beside its h2.
+	// Scoped to the Output region because the control sits in its header row.
 	await expect(
 		page.getByRole('region', { name: 'Output' }).getByRole('group', { name: 'Colour scheme' }),
 	).toHaveCount(1);
