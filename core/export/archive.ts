@@ -1,20 +1,13 @@
 import { strToU8, zipSync, type Zippable } from 'fflate';
 
-import type { BrandSeed } from '../brand-seed';
-import type { RepairEntry } from '../contrast/repair';
 import { cssNaming } from '../css/globals-css';
 import { toThemeBlock } from '../css/theme-block';
-import type { TokenSet } from '../token-set';
 import { exportArtifacts } from './artifacts';
-import { designDoc } from './design-doc';
+import { designDoc, type DesignDocInput } from './design-doc';
 import { toUnbrandedDsSource, toUnbrandedDsTheme } from './unbranded-ds';
 
 /** `designDoc`'s own input: the archive needs nothing the design doc doesn't. */
-export type ExportArchiveInput = {
-	tokens: TokenSet;
-	seed: BrandSeed;
-	repairs: readonly RepairEntry[];
-};
+export type ExportArchiveInput = DesignDocInput;
 
 // Issue #1: "Cambium output corresponds to a `theme` identity in unbranded-ds's three-axis model:
 // one named brand with light and dark variants." One theme per archive, so its name is fixed
@@ -33,8 +26,11 @@ function json(value: unknown): string {
  *
  *     DESIGN.md
  *     tokens/{light,dark}.tokens.json, tokens/tokens.css   exportArtifacts, filenames unchanged
- *     tokens/theme.css                                     toThemeBlock alone, for a project that
- *                                                          already has a globals.css
+ *     tokens/theme.css                                     toThemeBlock alone: the Tailwind v4 theme
+ *                                                          block tokens.css also carries. Its prefixed
+ *                                                          entries read properties only tokens.css's
+ *                                                          :root/.dark rules declare, so it can't pair
+ *                                                          with a stock shadcn globals.css
  *     unbranded-ds/theme.{light,dark}.json                 toUnbrandedDsTheme's runtime theme
  *     unbranded-ds/themes/theme/brand/{light,dark}.json    toUnbrandedDsSource's keys, unchanged,
  *                                                          so the subtree drops into that repo

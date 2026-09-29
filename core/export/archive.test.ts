@@ -19,9 +19,9 @@ import { designDoc } from './design-doc';
 import { toUnbrandedDsSource, toUnbrandedDsTheme } from './unbranded-ds';
 
 /**
- * The layout #15's plan documents, typed out rather than derived, so the manifest test checks the
- * archive against the requirement and not against the code that builds it. Sorted, because the
- * zip's own directory order is sorted (Task 2).
+ * The layout #15 documents, typed out rather than derived, so the manifest test checks the
+ * archive against the requirement and not against the code that builds it. Sorted, because
+ * `buildExportArchive` sorts the directory.
  */
 const EXPECTED_PATHS = [
 	'DESIGN.md',
@@ -116,6 +116,34 @@ describe('exportArchiveEntries', () => {
 
 	it.each(EXPECTED_PATHS)('carries %s byte for byte as its adapter writes it', (path) => {
 		expect(exportArchiveEntries(input)[path]).toBe(standaloneOutputs(input)[path]);
+	});
+
+	// The byte-identity rows above restate the archive's own `json()` for these four paths, so they
+	// can't catch a wrong serialization. A JSON parser and the adapters' return values can.
+	describe("the unbranded-ds entries, in the consumer's units", () => {
+		const themeOf = (scheme: 'light' | 'dark') =>
+			toUnbrandedDsTheme(input.tokens, { name: 'brand', displayName: 'Brand', scheme }).theme;
+		const source = toUnbrandedDsSource(input.tokens, 'brand');
+		const cases: [string, unknown][] = [
+			['unbranded-ds/theme.light.json', themeOf('light')],
+			['unbranded-ds/theme.dark.json', themeOf('dark')],
+			['unbranded-ds/themes/theme/brand/light.json', source['themes/theme/brand/light.json']],
+			['unbranded-ds/themes/theme/brand/dark.json', source['themes/theme/brand/dark.json']],
+		];
+
+		it.each(cases)(
+			"%s parses to the adapter's object, one trailing newline, two-space indent",
+			(path, expected) => {
+				const text = exportArchiveEntries(input)[path]!;
+
+				expect(JSON.parse(text)).toEqual(expected);
+				expect(text.endsWith('}\n')).toBe(true);
+				expect(text.endsWith('\n\n')).toBe(false);
+				// The first key sits on line two; its indent is the file's indent.
+				expect(text.split('\n')[1]).toMatch(/^ {2}\S/);
+				expect(text).not.toContain('\t');
+			},
+		);
 	});
 
 	it('is a pure function of its input', () => {
