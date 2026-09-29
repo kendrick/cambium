@@ -237,7 +237,7 @@ function exportedIdsFor(prefix: string): Map<string, number> {
 }
 
 /** Every row id a section renders, in one round trip. */
-async function renderedIds(section: Locator): Promise<Map<string, number>> {
+async function renderedIdsIn(section: Locator): Promise<Map<string, number>> {
 	return tally(
 		await section
 			.locator('[data-token]')
@@ -444,6 +444,101 @@ function buttonNames(snapshot: string): string[] {
 	return [...snapshot.matchAll(/- button "((?:[^"\\]|\\.)*)"/g)].map((match) => match[1]!);
 }
 
+/** Every category disclosure the list should render: one per core category, ramps folded into one. */
+const CATEGORY_DISCLOSURES = ['semantic', 'primitives', ...NON_COLOUR_CATEGORIES] as const;
+
+async function expandCategory(page: Page, category: string): Promise<void> {
+	const toggle = page
+		.getByRole('region', { name: 'Tokens' })
+		.getByRole('button', { name: category, exact: true });
+	await toggle.click();
+	await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}
+
+/**
+ * Tab stops inside `region`, counted by pressing Tab from `start` until focus leaves it: the
+ * browser's own sequential navigation, not a selector's guess at what's focusable. The region
+ * counts too if it ever takes focus itself.
+ */
+async function tabStopsInside(page: Page, region: Locator, start: Locator): Promise<number> {
+	await start.focus();
+	for (let stops = 0; stops < 1000; stops++) {
+		await page.keyboard.press('Tab');
+		const inside = await region.evaluate((node) => node.contains(document.activeElement));
+		if (!inside) return stops;
+	}
+	throw new Error('focus never left the Tokens region');
+}
+
+test('the token list is one Tab stop per ramp, semantic row and category, plus the filter', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const tokens = page.getByRole('region', { name: 'Tokens' });
+	await expect(tokens.locator('[data-token]').first()).toBeVisible();
+	// The scheme toggle sits just above the region, so Tab from it walks the region from its top.
+	const start = page.getByRole('button', { name: 'dark', exact: true });
+
+	// A row whose override breaks a pair adds a stop, #153's Revert, and the issue's bound has no
+	// allowance for it. None exists at load: `buildRecordWithSeed` loads no override and this seed
+	// fails no pair. Asserted rather than assumed, so a fixture that changes either fails here, by
+	// name, instead of one stop over the bound.
+	await expect(tokens.getByRole('button', { name: /^Revert / })).toHaveCount(0);
+
+	// From the issue: one per ramp, per semantic row, per category disclosure, plus the filter.
+	const bound = RAMP_NAMES.length + SEMANTIC_TOKENS.length + CATEGORY_DISCLOSURES.length + 1;
+	const onLoad = await tabStopsInside(page, tokens, start);
+
+	expect(onLoad).toBeGreaterThan(0);
+	expect(onLoad).toBeLessThanOrEqual(bound);
+
+	// Opening every category adds one stop per value row and nothing else.
+	for (const category of NON_COLOUR_CATEGORIES) await expandCategory(page, category);
+	const valueRows = Object.values(EXPECTED_ROWS).reduce((total, count) => total + count, 0);
+
+	expect(await tabStopsInside(page, tokens, start)).toBeLessThanOrEqual(bound + valueRows);
+});
+
+test('typing a token name into the filter hides every row whose name does not contain it', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const tokens = page.getByRole('region', { name: 'Tokens' });
+	const filter = tokens.getByRole('searchbox', { name: 'Filter by name' });
+	await expect(tokens.locator('[data-token]').first()).toBeVisible();
+
+	// "border" lives in the colour groups. "md" lives only in collapsed value categories, which a
+	// filter has to open or it hides the very rows it matched.
+	for (const query of ['border', 'md']) {
+		const expected = [...EXPORTED_ROWS.keys()].filter((id) => id.includes(query));
+		// Guard: the expectation isn't empty, and case folding doesn't change it for this query.
+		expect(expected.length, query).toBeGreaterThan(0);
+		expect(
+			[...EXPORTED_ROWS.keys()].filter((id) => id.toLowerCase().includes(query)),
+			query,
+		).toEqual(expected);
+
+		await filter.fill(query);
+
+		await expect
+			.poll(async () => renderedIdsIn(tokens), { message: query })
+			.toEqual(tally(expected));
+	}
+
+	await filter.fill('');
+	await expect(tokens.locator('[data-token]')).toHaveCount(
+		SEMANTIC_TOKENS.length + RAMP_NAMES.length * 12,
+	);
+});
+
 test('no alias select or number input is in the DOM until its editor opens', async ({ page }) => {
 	const record = buildRecordWithSeed(SEED);
 	await seedWorkspaceRecord(page, record);
@@ -475,6 +570,9 @@ test('no two buttons in the token list share an accessible name', async ({ page 
 
 	const tokens = page.getByRole('region', { name: 'Tokens' });
 	await expect(tokens.locator('[data-token]').first()).toBeVisible();
+
+	// Every category open, so the value rows' triggers are in the tally too.
+	for (const category of NON_COLOUR_CATEGORIES) await expandCategory(page, category);
 
 	// An override is what gives an editor its Reset, so one is made before reading the names. This
 	// one also breaks `primary-foreground` on `primary` (1.00:1 for this seed), so #153's Revert is
@@ -546,26 +644,27 @@ test('every category is grouped, and every token opens an editor whose controls,
 
 	const tokensSection = page.getByRole('region', { name: 'Tokens' });
 	await expect(tokensSection.getByRole('listitem').first()).toBeVisible();
+	for (const category of NON_COLOUR_CATEGORIES) await expandCategory(page, category);
 
 	const semanticSection = tokensSection.locator('section[data-category="semantic"]');
 	await expect(semanticSection).toBeVisible();
 	await expect(semanticSection.locator('li[data-token]')).toHaveCount(SEMANTIC_TOKENS.length);
-	expect(await renderedIds(semanticSection)).toEqual(exportedIdsFor('semantic'));
+	expect(await renderedIdsIn(semanticSection)).toEqual(exportedIdsFor('semantic'));
 
 	// A count alone passes a section that repeats one real row in place of another, so each section
 	// also has to hold exactly the ids the export names for it.
 	for (const ramp of RAMP_NAMES) {
-		const section = tokensSection.locator(`section[data-category="${ramp}"]`);
+		const section = tokensSection.locator(`[data-ramp="${ramp}"]`);
 		await expect(section).toBeVisible();
 		await expect(section.locator('[data-token]')).toHaveCount(12);
-		expect(await renderedIds(section), ramp).toEqual(exportedIdsFor(`primitive.${ramp}`));
+		expect(await renderedIdsIn(section), ramp).toEqual(exportedIdsFor(`primitive.${ramp}`));
 	}
 
 	for (const category of NON_COLOUR_CATEGORIES) {
 		const section = tokensSection.locator(`section[data-category="${category}"]`);
 		await expect(section).toBeVisible();
 		await expect(section.locator('li[data-token]')).toHaveCount(EXPECTED_ROWS[category]);
-		expect(await renderedIds(section), category).toEqual(exportedIdsFor(category));
+		expect(await renderedIdsIn(section), category).toEqual(exportedIdsFor(category));
 	}
 
 	const ids = await tokensSection
@@ -663,6 +762,7 @@ test("a dark-scheme shadow swatch paints that scheme's own shadow colour, alpha 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	await page.getByRole('button', { name: 'dark', exact: true }).click();
+	await expandCategory(page, 'shadow');
 
 	// Dark's shadow colour differs from light's in lightness and alpha for this seed, so a swatch
 	// still reading the top-level (light) copy fails the comparison below.
@@ -701,6 +801,7 @@ test('a field that blurs unchanged stores nothing, and a cleared field is reject
 
 	// `Number('')` is 0, and 0 is a legal radius, so a cleared field that slipped through would
 	// store an override rather than fail visibly.
+	await expandCategory(page, 'radius');
 	const radiusRow = page.locator('[data-token="radius.md"]');
 	const radiusEditor = await openEditor(page, 'radius.md');
 	const radius = radiusEditor.getByLabel('radius.md value', { exact: true });
@@ -775,7 +876,7 @@ test('every system-constant category is labelled an untouched default, and no de
 		await expect(section.getByText('Untouched default')).toBeVisible();
 	}
 
-	const derivedCategories: string[] = ['semantic', ...RAMP_NAMES, ...DERIVED_VALUE_CATEGORIES];
+	const derivedCategories: string[] = ['semantic', 'primitives', ...DERIVED_VALUE_CATEGORIES];
 
 	for (const category of derivedCategories) {
 		const section = tokensSection.locator(`section[data-category="${category}"]`);
@@ -794,6 +895,7 @@ test('overriding a system value drops the untouched label without changing its s
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	const tokensSection = page.getByRole('region', { name: 'Tokens' });
+	await expandCategory(page, 'spacing');
 	const section = tokensSection.locator('section[data-category="spacing"]');
 	const row = section.locator('[data-token="spacing.md"]');
 	const shown = TOKEN_SET.spacing.values.md!.value;
@@ -954,6 +1056,8 @@ test('a version saved with overrides opens with them applied, and still does aft
 	).toBeGreaterThan(1);
 
 	async function expectOverridesShown(): Promise<void> {
+		// Collapsed again after a reload, so it opens on every pass.
+		await expandCategory(page, 'radius');
 		await expect(primaryRow).toHaveAttribute('data-overridden', '');
 		await expect(radiusRow).toHaveAttribute('data-overridden', '');
 
@@ -1039,6 +1143,7 @@ test('a rejected edit retyped back to the shown value leaves no issue behind', a
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	const shown = TOKEN_SET.opacity.values.overlay!.value;
+	await expandCategory(page, 'opacity');
 	const row = page.locator('[data-token="opacity.overlay"]');
 	const editor = await openEditor(page, 'opacity.overlay');
 	const field = editor.getByLabel('opacity.overlay value', { exact: true });
@@ -1063,6 +1168,7 @@ test('reset clears a rejected edit made on top of a held override', async ({ pag
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	const shown = TOKEN_SET.opacity.values.overlay!.value;
+	await expandCategory(page, 'opacity');
 	const row = page.locator('[data-token="opacity.overlay"]');
 	const editor = await openEditor(page, 'opacity.overlay');
 	const field = () => editor.getByLabel('opacity.overlay value', { exact: true });
@@ -1098,9 +1204,12 @@ test("a field issue raised in the light scheme doesn't follow the row into dark"
 	await lightness.blur();
 	await expect(issueItems(lightEditor)).toHaveText(['Enter a number.']);
 
-	// The outside press closes the popover, and the scheme-keyed remount drops the row's field state.
-	await page.getByRole('button', { name: 'dark', exact: true }).click();
+	// An outside press closes the popover, and the scheme-keyed remount drops the row's field state.
+	// The press lands on the Output heading because the scheme toggle sits outside the Tokens
+	// scroller now, and at this viewport a popover flipped above brand.1 covers it.
+	await page.getByRole('heading', { name: 'Output', exact: true }).click();
 	await expect(lightEditor).toHaveCount(0);
+	await page.getByRole('button', { name: 'dark', exact: true }).click();
 
 	const darkEditor = await openEditor(page, 'primitive.brand.1');
 	const darkStep = TOKEN_SET.schemes.dark.primitives.brand!.find((step) => step.step === 1)!;
@@ -1152,6 +1261,7 @@ test('reset puts every leaf of a shadow back to its committed value, a refused o
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	const shadow = LIGHT.shadow.values.xs!;
+	await expandCategory(page, 'shadow');
 	const row = page.locator('[data-token="shadow.xs"]');
 	const editor = await openEditor(page, 'shadow.xs');
 	const leaf = (label: string) => editor.getByLabel(`shadow.xs ${label}`, { exact: true });
@@ -1204,6 +1314,7 @@ test('a refused light-scheme edit lists its message once, though the store check
 	await expect(issueItems(primitive)).toHaveCount(1);
 	await closeEditor(page, primitive);
 
+	await expandCategory(page, 'shadow');
 	const shadow = await openEditor(page, 'shadow.xs');
 	const alpha = shadow.getByLabel('shadow.xs color.alpha', { exact: true });
 	await alpha.fill('2');
@@ -1219,6 +1330,7 @@ test('refusals in two different fields of one row list as two items, not one', a
 
 	// Both leaves top out at 1, so the store refuses each with the same message. Only their paths
 	// differ, and a row that merged on the message would hide the second refused field.
+	await expandCategory(page, 'shadow');
 	const shadow = await openEditor(page, 'shadow.xs');
 	const leaf = (label: string) => shadow.getByLabel(`shadow.xs ${label}`, { exact: true });
 	await leaf('color.l').fill('2');
@@ -1282,6 +1394,7 @@ test('two cleared fields of one shadow row list as two items, not one', async ({
 
 	// Neither edit reaches the store. Each field holds its own "Enter a number." issue under its
 	// own label, with the same message, so only the field tells them apart.
+	await expandCategory(page, 'shadow');
 	const shadow = await openEditor(page, 'shadow.xs');
 	const leaf = (label: string) => shadow.getByLabel(`shadow.xs ${label}`, { exact: true });
 	await leaf('offsetX').fill('');

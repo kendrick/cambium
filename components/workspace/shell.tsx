@@ -98,24 +98,16 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 					<h2 id="tokens-heading" className="text-lg font-semibold">
 						Tokens
 					</h2>
-					{/* Focusable because it scrolls on its own. Chromium and Firefox let a keyboard reach a
-					    scroller without this, Safari doesn't, and the rule below can't see the overflow. */}
-					<section
-						// oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-						tabIndex={0}
-						aria-labelledby="tokens-heading"
-						className="max-h-[60vh] min-h-0 flex-1 overflow-y-auto rounded border p-2 md:max-h-none"
-					>
-						<TokenList
-							tokenSet={tokenSet}
-							derived={derived}
-							overrides={overrides}
-							overrideIssues={overrideIssues}
-							setOverride={setOverride}
-							clearOverride={clearOverride}
-							contrastByOverride={contrastByOverride}
-						/>
-					</section>
+					<TokenList
+						headingId="tokens-heading"
+						tokenSet={tokenSet}
+						derived={derived}
+						overrides={overrides}
+						overrideIssues={overrideIssues}
+						setOverride={setOverride}
+						clearOverride={clearOverride}
+						contrastByOverride={contrastByOverride}
+					/>
 				</div>
 			</aside>
 
