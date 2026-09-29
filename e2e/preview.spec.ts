@@ -518,7 +518,9 @@ test('overriding primary in the token list repaints the preview without a reload
 		(window as Window & { cambiumNoReload?: true }).cambiumNoReload = true;
 	});
 
+	await page.getByRole('button', { name: 'Edit semantic.primary', exact: true }).click();
 	await page.getByLabel('primary alias', { exact: true }).selectOption('brand.1');
+	await page.keyboard.press('Escape');
 
 	await expect
 		.poll(() => action.evaluate((node) => getComputedStyle(node).backgroundColor))

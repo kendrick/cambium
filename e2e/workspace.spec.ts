@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { AxeBuilder } from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 
 import { DATABASE_NAME, RECORD_STORE_NAME } from '../app/storage/indexed-db-record-store';
@@ -667,4 +668,97 @@ test('a saved record links to its workspace, which opens reporting no versions y
 	await expect(page.locator('dl')).toHaveCount(0);
 	await expect(page.getByRole('region', { name: 'Tokens' }).getByRole('listitem')).toHaveCount(0);
 	await expect(page.locator('details')).toHaveCount(0);
+});
+
+/**
+ * What axe reported for `buildRecordWithOneVersion()` on the unchanged workspace, before #151
+ * touched the token list: rule id to the number of nodes it flagged. Recorded from a real run on
+ * main at 97fced8, after #153 merged, not written from expectation. The preview's own findings (see
+ * `preview.spec.ts`'s report-only axe scenario) are in here too, since they predate #151 and
+ * aren't its to fix.
+ */
+const AXE_ON_MAIN: Readonly<Record<string, number>> = {
+	'color-contrast': 6,
+};
+
+test('an axe run on the populated workspace finds nothing the run on main did not', async ({
+	page,
+}) => {
+	const record = buildRecordWithOneVersion();
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	await expect(
+		page.getByRole('region', { name: 'Tokens' }).getByRole('listitem').first(),
+	).toBeVisible();
+	// The preview is its own lazy chunk. Scanning before it lands would record a baseline without
+	// the preview's findings and then fail the branch the moment it rendered in time.
+	await expect(page.locator('[data-preview]')).toBeVisible();
+
+	const { violations } = await new AxeBuilder({ page }).analyze();
+	const found = Object.fromEntries(
+		violations.map((violation) => [violation.id, violation.nodes.length]),
+	);
+
+	await test.info().attach('axe-workspace.json', {
+		body: JSON.stringify(found, null, 2),
+		contentType: 'application/json',
+	});
+
+	for (const [rule, nodes] of Object.entries(found)) {
+		expect(AXE_ON_MAIN[rule], `${rule} is new since main`).toBeDefined();
+		expect(nodes, `${rule} flags more nodes than on main`).toBeLessThanOrEqual(AXE_ON_MAIN[rule]!);
+	}
+});
+
+test('skip to preview and skip to export are the first two Tab stops, and each lands focus in its panel', async ({
+	page,
+}) => {
+	const record = buildRecordWithOneVersion();
+	await seedWorkspaceRecord(page, record);
+
+	const targets = [
+		{ presses: 1, link: 'Skip to preview', tab: 'Preview' },
+		{ presses: 2, link: 'Skip to export', tab: 'Export' },
+	] as const;
+
+	for (const { presses, link, tab } of targets) {
+		// A fresh load for each, because Chromium keeps a sequential-focus starting point after a
+		// blur, and the count below has to start from the top of the document.
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+		await expect(
+			page.getByRole('region', { name: 'Tokens' }).getByRole('listitem').first(),
+		).toBeVisible();
+
+		await page.keyboard.press('Tab');
+		await expect(page.getByRole('link', { name: 'Skip to preview' })).toBeFocused();
+		if (presses === 2) {
+			await page.keyboard.press('Tab');
+			await expect(page.getByRole('link', { name: 'Skip to export' })).toBeFocused();
+		}
+
+		await page.keyboard.press('Enter');
+
+		await expect(page.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true');
+		// Named by its tab, for the reason the tabs scenario above gives: base-ui leaves the
+		// outgoing panel mounted and inert while its exit transition runs.
+		const panel = page.getByRole('tabpanel', { name: tab });
+		await expect
+			.poll(() => panel.evaluate((node) => node.contains(document.activeElement)), {
+				message: link,
+			})
+			.toBe(true);
+	}
+});
+
+test('the output section is headed by an h2', async ({ page }) => {
+	const record = buildRecordWithOneVersion();
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	await expect(
+		page.getByRole('region', { name: 'Output' }).getByRole('heading', { level: 2, name: 'Output' }),
+	).toBeVisible();
 });

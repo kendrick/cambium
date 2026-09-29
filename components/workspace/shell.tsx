@@ -1,6 +1,7 @@
 'use client';
 
-import { lazy, Suspense, useMemo } from 'react';
+import { lazy, Suspense, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useStore } from 'zustand';
 import type { StoreApi } from 'zustand/vanilla';
 
@@ -9,6 +10,7 @@ import { attributeContrastFailures } from '../../core/contrast/attribute';
 import { buildTokenSet } from '../../core/semantic-layer';
 import { RawResponse } from '@/components/workspace/raw-response';
 import { SeedRail } from '@/components/workspace/seed-rail';
+import { SkipLinks, type SkipTarget } from '@/components/workspace/skip-links';
 import { TokenList } from '@/components/workspace/token-list';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 
@@ -29,6 +31,8 @@ const ExportPanel = lazy(() =>
 const PREVIEW_LOADING = <p className="text-muted-foreground text-sm">Loading the preview…</p>;
 const EXPORT_LOADING = <p className="text-muted-foreground text-sm">Loading the export panel…</p>;
 
+type OutputTab = 'preview' | 'accessibility' | 'export';
+
 /**
  * Loaded by `WorkspaceRoute` through a dynamic import, never statically. base-ui's tabs and
  * zustand's React binding put /workspace over the 200 kB first-load budget when they shipped with
@@ -45,6 +49,17 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const clearOverride = useStore(store, (state) => state.clearOverride);
 	const contrast = useStore(store, (state) => state.contrast);
 	const draftSeed = useStore(store, (state) => state.draftSeed);
+
+	const [tab, setTab] = useState<OutputTab>('preview');
+	const panels = useRef<Partial<Record<OutputTab, HTMLDivElement | null>>>({});
+
+	// `flushSync` so the panel is mounted and no longer `hidden` before `focus()` runs: base-ui
+	// mounts an opening panel during the same render, and a plain `setTab` would leave the
+	// focus call aiming at the previous commit.
+	function skipTo(target: SkipTarget) {
+		flushSync(() => setTab(target));
+		panels.current[target]?.focus();
+	}
 
 	const active =
 		record && activeOrdinal !== null ? (record.versions[activeOrdinal - 1] ?? null) : null;
@@ -70,6 +85,7 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 
 	return (
 		<main className="grid min-h-dvh grid-cols-1 gap-6 p-4 md:h-dvh md:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)_auto] md:p-6">
+			<SkipLinks onSkip={skipTo} />
 			{/* The issue keeps the rail to two sections, seed over tokens. The seed's field list scrolls
 			    inside half the rail at most, so a fully stated seed can't push the token list off the
 			    bottom of a short window. */}
@@ -82,29 +98,28 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 					<h2 id="tokens-heading" className="text-lg font-semibold">
 						Tokens
 					</h2>
-					{/* Focusable because it scrolls on its own. Chromium and Firefox let a keyboard reach a
-					    scroller without this, Safari doesn't, and the rule below can't see the overflow. */}
-					<section
-						// oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-						tabIndex={0}
-						aria-labelledby="tokens-heading"
-						className="max-h-[60vh] min-h-0 flex-1 overflow-y-auto rounded border p-2 md:max-h-none"
-					>
-						<TokenList
-							tokenSet={tokenSet}
-							derived={derived}
-							overrides={overrides}
-							overrideIssues={overrideIssues}
-							setOverride={setOverride}
-							clearOverride={clearOverride}
-							contrastByOverride={contrastByOverride}
-						/>
-					</section>
+					<TokenList
+						headingId="tokens-heading"
+						tokenSet={tokenSet}
+						derived={derived}
+						overrides={overrides}
+						overrideIssues={overrideIssues}
+						setOverride={setOverride}
+						clearOverride={clearOverride}
+						contrastByOverride={contrastByOverride}
+					/>
 				</div>
 			</aside>
 
-			<section aria-label="Output" className="flex min-h-0 flex-col">
-				<Tabs defaultValue="preview" className="min-h-0 flex-1">
+			<section id="output" aria-labelledby="output-heading" className="flex min-h-0 flex-col gap-2">
+				<h2 id="output-heading" className="text-lg font-semibold">
+					Output
+				</h2>
+				<Tabs
+					value={tab}
+					onValueChange={(value) => setTab(value as OutputTab)}
+					className="min-h-0 flex-1"
+				>
 					{/* An accessible name is an accessibility contract, not copy: without one, a screen reader
 					    announces "tab list" with nothing to say it's this page's Output tabs. */}
 					<TabsList aria-label="Output">
@@ -112,7 +127,13 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 						<TabsTab value="accessibility">Accessibility</TabsTab>
 						<TabsTab value="export">Export</TabsTab>
 					</TabsList>
-					<TabsPanel value="preview" className="flex min-h-0 flex-col p-2">
+					<TabsPanel
+						value="preview"
+						ref={(node) => {
+							panels.current.preview = node;
+						}}
+						className="flex min-h-0 flex-col p-2"
+					>
 						{tokenSet ? (
 							<Suspense fallback={PREVIEW_LOADING}>
 								<Preview tokenSet={tokenSet} />
@@ -124,7 +145,13 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 							</p>
 						)}
 					</TabsPanel>
-					<TabsPanel value="accessibility" className="text-muted-foreground p-2 text-sm">
+					<TabsPanel
+						value="accessibility"
+						ref={(node) => {
+							panels.current.accessibility = node;
+						}}
+						className="text-muted-foreground p-2 text-sm"
+					>
 						{contrast === null ? (
 							<p>
 								There are no tokens to check yet. They show up here once the seed produces a token
@@ -142,7 +169,13 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 							</ul>
 						)}
 					</TabsPanel>
-					<TabsPanel value="export" className="flex min-h-0 flex-col p-2">
+					<TabsPanel
+						value="export"
+						ref={(node) => {
+							panels.current.export = node;
+						}}
+						className="flex min-h-0 flex-col p-2"
+					>
 						{tokenSet ? (
 							<Suspense fallback={EXPORT_LOADING}>
 								<ExportPanel store={store} />

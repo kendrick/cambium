@@ -6,16 +6,22 @@ import type { OverrideIssue, SchemeName, TokenOverride } from '../../../core/tok
 import { overrideKey } from '../../../core/token-overrides';
 import type { RampStep } from '../../../core/token-set';
 import { NumberInput, useFieldIssues } from './number-input';
-import { TokenRow } from './token-row';
+import { TokenEditor } from './token-editor';
 
 const CHANNELS = ['l', 'c', 'h'] as const;
 
 /**
- * One ramp step. `overrideKey` reads only `scheme`, `ramp` and `step`, never `l`, `c` or `h`, so the
- * three inputs share one key and a single reset clears all three at once. The override replaces the
- * whole triple whichever channel changed.
+ * One ramp step as a chip in `RampStrip`. `overrideKey` reads only `scheme`, `ramp` and `step`,
+ * never `l`, `c` or `h`, so the three inputs share one key and a single reset clears all three at
+ * once. The override replaces the whole triple whichever channel changed.
+ *
+ * The field issues live here, not in the popover, so a refused L stays announced after the popover
+ * closes. The refused text itself doesn't survive: the inputs are uncontrolled and unmount with it.
+ * The OKLCH text is `sr-only` on the chip because `keyed-path.spec.ts` and `seed-rail.spec.ts` read
+ * a step's value off `[data-swatch-value]` inside its `[data-token]`. The editor prints the same
+ * value visibly.
  */
-export function PrimitiveRow({
+export function PrimitiveChip({
 	scheme,
 	ramp,
 	step,
@@ -23,6 +29,9 @@ export function PrimitiveRow({
 	issuesFor,
 	onOverride,
 	onReset,
+	tabIndex,
+	onFocus,
+	chipRef,
 }: {
 	scheme: SchemeName;
 	ramp: string;
@@ -31,6 +40,9 @@ export function PrimitiveRow({
 	issuesFor: (key: string) => OverrideIssue[];
 	onOverride: (override: TokenOverride) => OverrideIssue[] | null;
 	onReset: (key: string) => void;
+	tabIndex: 0 | -1;
+	onFocus: () => void;
+	chipRef: (node: HTMLButtonElement | null) => void;
 }) {
 	const id = `primitive.${ramp}.${step.step}`;
 	const key = overrideKey({
@@ -57,11 +69,12 @@ export function PrimitiveRow({
 		h: channel === 'h' ? value : step.h,
 	});
 
+	const swatch = toOklchCss({ l: step.l, c: step.c, h: step.h });
+
 	return (
-		<TokenRow
+		<TokenEditor
 			id={id}
 			provenance={step.$extensions[CAMBIUM_NAMESPACE]}
-			swatch={toOklchCss({ l: step.l, c: step.c, h: step.h })}
 			overridden={overridden}
 			onReset={
 				overridden
@@ -73,7 +86,33 @@ export function PrimitiveRow({
 					: undefined
 			}
 			issues={[...heldIssues, ...fieldIssues]}
+			trigger={{
+				ref: chipRef,
+				tabIndex,
+				onFocus,
+				title: id,
+				'data-token': id,
+				'data-overridden': overridden ? '' : undefined,
+				className:
+					'relative h-8 min-w-0 flex-1 rounded-sm border data-[overridden]:ring-2 data-[overridden]:ring-foreground',
+				children: (
+					<>
+						<span
+							aria-hidden
+							data-swatch
+							className="absolute inset-0 rounded-sm"
+							style={{ backgroundColor: swatch }}
+						/>
+						<span data-swatch-value className="sr-only">
+							{swatch}
+						</span>
+					</>
+				),
+			}}
 		>
+			<span data-editor-swatch-value className="w-full font-mono text-xs">
+				{swatch}
+			</span>
 			{CHANNELS.map((channel) => (
 				<label
 					// Keyed on the committed value, not just the channel, so a change from outside the row
@@ -94,6 +133,6 @@ export function PrimitiveRow({
 					/>
 				</label>
 			))}
-		</TokenRow>
+		</TokenEditor>
 	);
 }

@@ -236,11 +236,11 @@ function exportedIdsFor(prefix: string): Map<string, number> {
 	return tally([...EXPORTED_ROWS.keys()].filter((id) => id.startsWith(`${prefix}.`)));
 }
 
-/** Every row id a section renders, in one round trip. */
-async function renderedIds(section: Locator): Promise<Map<string, number>> {
+/** Every `[data-token]` id a section renders, a row's or a ramp chip's, in one round trip. */
+async function renderedIdsIn(section: Locator): Promise<Map<string, number>> {
 	return tally(
 		await section
-			.locator('li[data-token]')
+			.locator('[data-token]')
 			.evaluateAll((elements) =>
 				elements.map((element) => element.getAttribute('data-token') ?? ''),
 			),
@@ -417,7 +417,60 @@ function paintDistance(actual: Rgb, expected: Rgb): number {
 	return Math.max(...actual.map((channel, index) => Math.abs(channel - expected[index]!)));
 }
 
-test('every category is grouped, and every row carries a value control, a provenance label and a rationale', async ({
+/**
+ * A token's edit trigger, found by accessible name. The `(has issues)` suffix is the trigger
+ * announcing a held issue, so a scenario that raised one can still find it.
+ */
+function editTrigger(page: Page, id: string): Locator {
+	const escaped = id.replaceAll('.', '\\.');
+	return page.getByRole('button', { name: new RegExp(`^Edit ${escaped}( \\(has issues\\))?$`) });
+}
+
+async function openEditor(page: Page, id: string): Promise<Locator> {
+	await editTrigger(page, id).click();
+	const editor = page.locator(`[data-editor="${id}"]`);
+	await expect(editor).toBeVisible();
+	return editor;
+}
+
+/** Escape, then wait out base-ui's exit animation, so the next open can't find two editors. */
+async function closeEditor(page: Page, editor: Locator): Promise<void> {
+	await page.keyboard.press('Escape');
+	await expect(editor).toHaveCount(0);
+}
+
+/** Every button name in an accessibility snapshot, read the way `getByRole` reads them. */
+function buttonNames(snapshot: string): string[] {
+	return [...snapshot.matchAll(/- button "((?:[^"\\]|\\.)*)"/g)].map((match) => match[1]!);
+}
+
+/** Every category disclosure the list should render: one per core category, ramps folded into one. */
+const CATEGORY_DISCLOSURES = ['semantic', 'primitives', ...NON_COLOUR_CATEGORIES] as const;
+
+async function expandCategory(page: Page, category: string): Promise<void> {
+	const toggle = page
+		.getByRole('region', { name: 'Tokens' })
+		.getByRole('button', { name: category, exact: true });
+	await toggle.click();
+	await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}
+
+/**
+ * Tab stops inside `region`, counted by pressing Tab from `start` until focus leaves it: the
+ * browser's own sequential navigation, not a selector's guess at what's focusable. The region
+ * counts too if it ever takes focus itself.
+ */
+async function tabStopsInside(page: Page, region: Locator, start: Locator): Promise<number> {
+	await start.focus();
+	for (let stops = 0; stops < 1000; stops++) {
+		await page.keyboard.press('Tab');
+		const inside = await region.evaluate((node) => node.contains(document.activeElement));
+		if (!inside) return stops;
+	}
+	throw new Error('focus never left the Tokens region');
+}
+
+test('the token list is one Tab stop per ramp, semantic row and category, plus the filter', async ({
 	page,
 }) => {
 	const record = buildRecordWithSeed(SEED);
@@ -425,64 +478,285 @@ test('every category is grouped, and every row carries a value control, a proven
 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
+	const tokens = page.getByRole('region', { name: 'Tokens' });
+	await expect(tokens.locator('[data-token]').first()).toBeVisible();
+	// The scheme toggle sits just above the region, so Tab from it walks the region from its top.
+	const start = page.getByRole('button', { name: 'dark', exact: true });
+
+	// A row whose override breaks a pair adds a stop, #153's Revert, and the issue's bound has no
+	// allowance for it. None exists at load: `buildRecordWithSeed` loads no override and this seed
+	// fails no pair. Asserted rather than assumed, so a fixture that changes either fails here, by
+	// name, instead of one stop over the bound.
+	await expect(tokens.getByRole('button', { name: /^Revert / })).toHaveCount(0);
+
+	// From the issue: one per ramp, per semantic row, per category disclosure, plus the filter.
+	const bound = RAMP_NAMES.length + SEMANTIC_TOKENS.length + CATEGORY_DISCLOSURES.length + 1;
+	const onLoad = await tabStopsInside(page, tokens, start);
+
+	expect(onLoad).toBeGreaterThan(0);
+	expect(onLoad).toBeLessThanOrEqual(bound);
+
+	// Opening every category adds one stop per value row and nothing else.
+	for (const category of NON_COLOUR_CATEGORIES) await expandCategory(page, category);
+	const valueRows = Object.values(EXPECTED_ROWS).reduce((total, count) => total + count, 0);
+
+	expect(await tabStopsInside(page, tokens, start)).toBeLessThanOrEqual(bound + valueRows);
+});
+
+test('typing a token name into the filter hides every row whose name does not contain it', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const tokens = page.getByRole('region', { name: 'Tokens' });
+	const filter = tokens.getByRole('searchbox', { name: 'Filter by name' });
+	await expect(tokens.locator('[data-token]').first()).toBeVisible();
+
+	// "border" lives in the colour groups. "md" lives only in collapsed value categories, which a
+	// filter has to open or it hides the very rows it matched. "<first ramp>.1" keeps only part of
+	// a ramp (steps 1, 10, 11 and 12, since each of those ids contains that substring), which
+	// neither of the other two queries exercises: "border" and "md" each clear every step of every
+	// ramp they don't fully match.
+	for (const query of ['border', 'md', `${RAMP_NAMES[0]}.1`]) {
+		const expected = [...EXPORTED_ROWS.keys()].filter((id) => id.includes(query));
+		// Guard: the expectation isn't empty, and case folding doesn't change it for this query.
+		expect(expected.length, query).toBeGreaterThan(0);
+		expect(
+			[...EXPORTED_ROWS.keys()].filter((id) => id.toLowerCase().includes(query)),
+			query,
+		).toEqual(expected);
+
+		await filter.fill(query);
+
+		await expect
+			.poll(async () => renderedIdsIn(tokens), { message: query })
+			.toEqual(tally(expected));
+	}
+
+	await filter.fill('');
+	await expect(tokens.locator('[data-token]')).toHaveCount(
+		SEMANTIC_TOKENS.length + RAMP_NAMES.length * 12,
+	);
+});
+
+test('no alias select or number input is in the DOM until its editor opens', async ({ page }) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+	await expect(page.locator('[data-token="semantic.primary"]')).toBeVisible();
+
+	// Every value category open, so a value row exists to check: collapsed, the row itself isn't
+	// in the DOM and a count-0 check on its controls would pass for nothing.
+	for (const category of NON_COLOUR_CATEGORIES) await expandCategory(page, category);
+
+	// Page-wide on purpose: the editor portals to <body>, so a control mounted early would sit
+	// outside the Tokens region and a region-scoped count would miss it. `input[type="number"]` is
+	// unique to `NumberInput`, which only a token editor renders, so this catches a value row's
+	// controls too without also tripping on the workspace's own Interpretation `<select>`, which
+	// `select[aria-label$=" alias"]` avoids by construction: an alias select is the only kind a
+	// token editor ever renders.
+	await expect(page.locator('select[aria-label$=" alias"]')).toHaveCount(0);
+	await expect(page.locator('input[aria-label^="primitive."]')).toHaveCount(0);
+	await expect(page.locator('input[type="number"]')).toHaveCount(0);
+
+	const semantic = await openEditor(page, 'semantic.primary');
+	await expect(page.locator('select[aria-label$=" alias"]')).toHaveCount(1);
+	await expect(semantic.getByLabel('primary alias', { exact: true })).toBeVisible();
+	await closeEditor(page, semantic);
+	await expect(page.locator('select[aria-label$=" alias"]')).toHaveCount(0);
+
+	const primitive = await openEditor(page, 'primitive.brand.1');
+	await expect(primitive.locator('input[type="number"]')).toHaveCount(3);
+	await closeEditor(page, primitive);
+
+	const radius = await openEditor(page, 'radius.md');
+	await expect(radius.getByLabel('radius.md value', { exact: true })).toBeVisible();
+});
+
+test('no two buttons in the token list share an accessible name', async ({ page }) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const tokens = page.getByRole('region', { name: 'Tokens' });
+	await expect(tokens.locator('[data-token]').first()).toBeVisible();
+
+	// Every category open, so the value rows' triggers are in the tally too.
+	for (const category of NON_COLOUR_CATEGORIES) await expandCategory(page, category);
+
+	// An override is what gives an editor its Reset, so one is made before reading the names. This
+	// one also breaks `primary-foreground` on `primary` (1.00:1 for this seed), so #153's Revert is
+	// on the row and its name is in the tally too.
+	const editor = await openEditor(page, 'semantic.primary');
+	await editor.getByLabel('primary alias', { exact: true }).selectOption('brand.1');
+	await expect(editor.getByRole('button', { name: 'Reset semantic.primary' })).toBeVisible();
+	await expect(
+		tokens.getByRole('button', { name: 'Revert primary override', exact: true }),
+	).toBeVisible();
+
+	// base-ui's portal leaves an `aria-owns` span beside the trigger, so the accessibility tree
+	// already nests the popup under its row and the region's snapshot holds the editor's buttons.
+	// Adding the editor's own snapshot on top would count each of them twice.
+	const names = buttonNames(await tokens.ariaSnapshot());
+	const editorNames = buttonNames(await editor.ariaSnapshot());
+	expect(editorNames).toEqual(
+		expect.arrayContaining(['Why semantic.primary', 'Reset semantic.primary']),
+	);
+	expect(names).toEqual(expect.arrayContaining(editorNames));
+
+	// Not vacuous: at least one trigger per row has to be in there.
+	expect(names.length).toBeGreaterThanOrEqual(expectedRowCount());
+	expect([...tally(names)].filter(([, count]) => count > 1)).toEqual([]);
+});
+
+test('a ramp strip is one Tab stop: arrows move between steps, Tab leaves it, Enter opens the step', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const [first, second] = RAMP_NAMES;
+	const chip = (ramp: string | undefined, step: number) =>
+		page.locator(`[data-token="primitive.${ramp}.${step}"]`);
+
+	await chip(first, 1).focus();
+
+	await page.keyboard.press('ArrowRight');
+	await expect(chip(first, 2)).toBeFocused();
+	await page.keyboard.press('ArrowLeft');
+	await expect(chip(first, 1)).toBeFocused();
+
+	// One press out: the next stop is the second strip's own stop, not step 2 of this one.
+	await page.keyboard.press('Tab');
+	await expect(chip(second, 1)).toBeFocused();
+
+	await page.keyboard.press('Shift+Tab');
+	await expect(chip(first, 1)).toBeFocused();
+
+	// Same check, but leaving from a chip the arrows moved to rather than the strip's first one —
+	// a `tabIndex` left stale by the move would still show up here even with the check above green.
+	await page.keyboard.press('ArrowRight');
+	await page.keyboard.press('ArrowRight');
+	await expect(chip(first, 3)).toBeFocused();
+	await page.keyboard.press('Tab');
+	await expect(chip(second, 1)).toBeFocused();
+
+	await chip(first, 1).focus();
+	await page.keyboard.press('ArrowRight');
+	await page.keyboard.press('Enter');
+
+	const editor = page.locator(`[data-editor="primitive.${first}.2"]`);
+	await expect(editor).toBeVisible();
+	await expect(editor.getByLabel(`primitive.${first}.2 l`, { exact: true })).toBeVisible();
+});
+
+test("a ramp strip's roving stop follows the step that had focus, not its old position, once a filter reorders the strip", async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const [ramp] = RAMP_NAMES;
+	const chip = (step: number) => page.locator(`[data-token="primitive.${ramp}.${step}"]`);
+	const filter = page.getByRole('searchbox', { name: 'Filter by name' });
+
+	// Isolates the ramp without changing which steps render, so the strip doesn't remount (the
+	// primitives group is keyed on whether a filter is active, not on its text) and step 11's
+	// index—10, in the unfiltered 12-step order—carries into the next filter unchanged.
+	await filter.fill(ramp!);
+	await chip(11).focus();
+
+	// "<ramp>.1" keeps steps 1, 10, 11 and 12 (each id contains that substring), so step 11 stays
+	// rendered but slides from index 10 to index 2. An index remembered instead of the step itself
+	// would clamp 10 into this 4-long list and land on index 3, step 12, one past where focus
+	// actually was. `fill` moves real focus onto the field itself, which is fine: it's Tab landing
+	// back in the strip, not this fill, whose target the roving index has to get right.
+	await filter.fill(`${ramp}.1`);
+
+	// Only one element inside the strip is ever in the tab sequence, whichever stop sits between
+	// the field and the strip (the "primitives" disclosure toggle, here)—so pressing Tab until
+	// focus reaches this ramp finds that one chip regardless of how many presses that takes.
+	let landed: string | null = null;
+	for (let presses = 0; presses < 5 && !landed; presses++) {
+		await page.keyboard.press('Tab');
+		const id = await page.evaluate(
+			() => document.activeElement?.getAttribute('data-token') ?? null,
+		);
+		if (id?.startsWith(`primitive.${ramp}.`)) landed = id;
+	}
+	expect(landed).toBe(`primitive.${ramp}.11`);
+});
+
+test('every category is grouped, and every token opens an editor whose controls, provenance and rationale match the export', async ({
+	page,
+}) => {
+	// One open-read-close per token, 172 for this seed.
+	test.slow();
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
 	const tokensSection = page.getByRole('region', { name: 'Tokens' });
 	await expect(tokensSection.getByRole('listitem').first()).toBeVisible();
+	for (const category of NON_COLOUR_CATEGORIES) await expandCategory(page, category);
 
 	const semanticSection = tokensSection.locator('section[data-category="semantic"]');
 	await expect(semanticSection).toBeVisible();
 	await expect(semanticSection.locator('li[data-token]')).toHaveCount(SEMANTIC_TOKENS.length);
-	expect(await renderedIds(semanticSection)).toEqual(exportedIdsFor('semantic'));
+	expect(await renderedIdsIn(semanticSection)).toEqual(exportedIdsFor('semantic'));
 
 	// A count alone passes a section that repeats one real row in place of another, so each section
 	// also has to hold exactly the ids the export names for it.
 	for (const ramp of RAMP_NAMES) {
-		const section = tokensSection.locator(`section[data-category="${ramp}"]`);
+		const section = tokensSection.locator(`[data-ramp="${ramp}"]`);
 		await expect(section).toBeVisible();
-		await expect(section.locator('li[data-token]')).toHaveCount(12);
-		expect(await renderedIds(section), ramp).toEqual(exportedIdsFor(`primitive.${ramp}`));
+		await expect(section.locator('[data-token]')).toHaveCount(12);
+		expect(await renderedIdsIn(section), ramp).toEqual(exportedIdsFor(`primitive.${ramp}`));
 	}
 
 	for (const category of NON_COLOUR_CATEGORIES) {
 		const section = tokensSection.locator(`section[data-category="${category}"]`);
 		await expect(section).toBeVisible();
 		await expect(section.locator('li[data-token]')).toHaveCount(EXPECTED_ROWS[category]);
-		expect(await renderedIds(section), category).toEqual(exportedIdsFor(category));
+		expect(await renderedIdsIn(section), category).toEqual(exportedIdsFor(category));
 	}
 
-	// Every row, across every category, batched into one evaluate rather than one assertion per row:
-	// `expectedRowCount()` is 172 for this seed, and awaiting a `toBeVisible()` apiece would make the
-	// scenario minutes slow for no more coverage than one round trip already gives.
-	const rows = await tokensSection.locator('li[data-token]').evaluateAll((elements) =>
-		elements.map((element) => {
-			const provenanceLabel = Array.from(element.querySelectorAll('span')).find((span) =>
-				/^(observed|derived|invented)$/.test(span.textContent?.trim() ?? ''),
-			);
+	const ids = await tokensSection
+		.locator('[data-token]')
+		.evaluateAll((elements) => elements.map((element) => element.getAttribute('data-token') ?? ''));
 
-			return {
-				id: element.getAttribute('data-token') ?? '',
-				inputs: Array.from(element.querySelectorAll('input'), (input) => ({
-					label: input.getAttribute('aria-label') ?? '',
-					raw: input.value,
-				})),
-				selects: Array.from(element.querySelectorAll('select'), (select) => ({
-					label: select.getAttribute('aria-label') ?? '',
-					raw: select.value,
-				})),
-				provenance: provenanceLabel?.textContent?.trim() ?? null,
-				rationale: element.querySelector('p')?.textContent?.trim() ?? '',
-			};
-		}),
-	);
+	expect(ids.length).toBe(expectedRowCount());
+	expect(tally(ids)).toEqual(tally(EXPORTED_ROWS.keys()));
 
-	expect(rows.length).toBe(expectedRowCount());
-	expect(tally(rows.map((row) => row.id))).toEqual(tally(EXPORTED_ROWS.keys()));
-
-	for (const row of rows) {
-		const exported = EXPORTED_ROWS.get(row.id)!;
+	for (const id of ids) {
+		const exported = EXPORTED_ROWS.get(id)!;
+		const editor = await openEditor(page, id);
+		const shown = await editor.evaluate((element) => ({
+			inputs: Array.from(element.querySelectorAll('input'), (input) => ({
+				label: input.getAttribute('aria-label') ?? '',
+				raw: input.value,
+			})),
+			selects: Array.from(element.querySelectorAll('select'), (select) => ({
+				label: select.getAttribute('aria-label') ?? '',
+				raw: select.value,
+			})),
+			provenance: element.querySelector('[data-provenance]')?.textContent?.trim() ?? null,
+			rationale: element.querySelector('[data-rationale]')?.textContent?.trim() ?? '',
+		}));
 
 		// `Number('')` is 0, so a blank input would pass wherever the export holds a 0 unless the raw
 		// text is checked first.
-		for (const input of row.inputs) {
+		for (const input of shown.inputs) {
 			expect(input.raw, `${input.label} is blank`).not.toBe('');
 		}
 
@@ -490,15 +764,17 @@ test('every category is grouped, and every row carries a value control, a proven
 		// the pairs collapse into a record, so a repeated control can't hide behind its twin. Inputs
 		// compare as numbers, so `0.5` and `.5` count as the same value.
 		const controls = [
-			...row.selects.map(({ label, raw }) => [label, raw] as const),
-			...row.inputs.map(({ label, raw }) => [label, Number(raw)] as const),
+			...shown.selects.map(({ label, raw }) => [label, raw] as const),
+			...shown.inputs.map(({ label, raw }) => [label, Number(raw)] as const),
 		];
 
-		expect(controls.length, `${row.id} control count`).toBe(Object.keys(exported.controls).length);
-		expect(Object.fromEntries(controls), `${row.id} controls`).toEqual(exported.controls);
-		expect(row.provenance, `${row.id} provenance`).toBe(exported.provenance);
+		expect(controls.length, `${id} control count`).toBe(Object.keys(exported.controls).length);
+		expect(Object.fromEntries(controls), `${id} controls`).toEqual(exported.controls);
+		expect(shown.provenance, `${id} provenance`).toBe(exported.provenance);
 		// The whole sentence, since the one-line truncation is CSS and `textContent` ignores it.
-		expect(row.rationale, `${row.id} rationale`).toBe(exported.rationale);
+		expect(shown.rationale, `${id} rationale`).toBe(exported.rationale);
+
+		await closeEditor(page, editor);
 	}
 
 	// One row's exact text, tied to the Node-computed set rather than to the count above: `primary`
@@ -550,6 +826,7 @@ test("a dark-scheme shadow swatch paints that scheme's own shadow colour, alpha 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	await page.getByRole('button', { name: 'dark', exact: true }).click();
+	await expandCategory(page, 'shadow');
 
 	// Dark's shadow colour differs from light's in lightness and alpha for this seed, so a swatch
 	// still reading the top-level (light) copy fails the comparison below.
@@ -576,48 +853,52 @@ test('a field that blurs unchanged stores nothing, and a cleared field is reject
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	const primitiveRow = page.locator('[data-token="primitive.brand.1"]');
-	const lightness = page.getByLabel('primitive.brand.1 l', { exact: true });
+	const primitiveEditor = await openEditor(page, 'primitive.brand.1');
+	const lightness = primitiveEditor.getByLabel('primitive.brand.1 l', { exact: true });
 	await lightness.focus();
 	await lightness.blur();
 
 	await expect(primitiveRow).not.toHaveAttribute('data-overridden', '');
 	await expect(primitiveRow.getByText('overridden', { exact: true })).toHaveCount(0);
+	await expect(primitiveEditor.getByText('overridden', { exact: true })).toHaveCount(0);
+	await closeEditor(page, primitiveEditor);
 
 	// `Number('')` is 0, and 0 is a legal radius, so a cleared field that slipped through would
 	// store an override rather than fail visibly.
+	await expandCategory(page, 'radius');
 	const radiusRow = page.locator('[data-token="radius.md"]');
-	const radius = page.getByLabel('radius.md value', { exact: true });
+	const radiusEditor = await openEditor(page, 'radius.md');
+	const radius = radiusEditor.getByLabel('radius.md value', { exact: true });
 	await radius.fill('');
 	await radius.blur();
 
-	await expect(radiusRow.getByText('Enter a number.', { exact: true })).toBeVisible();
+	await expect(radiusEditor.getByText('Enter a number.', { exact: true })).toBeVisible();
 	await expect(radiusRow).not.toHaveAttribute('data-overridden', '');
 });
 
-test('the full rationale stays closed on load and opens on demand', async ({ page }) => {
+test('the full rationale stays closed until its Why disclosure opens it', async ({ page }) => {
 	const record = buildRecordWithSeed(SEED);
 	await seedWorkspaceRecord(page, record);
 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
-	const row = page.locator('[data-token="semantic.primary"]');
 	const provenance = LIGHT.semantic.primary!.$extensions[CAMBIUM_NAMESPACE];
 	const stepRole = STEP_ROLES.find((role) => role.step === 9)!.role;
 	const expandedTrace = provenance.seedField
 		? `From the seed's ${provenance.seedField}`
 		: 'Not traced to a seed field';
 
-	const toggle = row.getByRole('button', { name: 'More' });
+	const editor = await openEditor(page, 'semantic.primary');
+	const toggle = editor.getByRole('button', { name: 'Why semantic.primary', exact: true });
 	await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
-	// Not merely hidden: `TokenRow` renders the expanded block conditionally, so on load it is absent
-	// from the DOM rather than present and collapsed.
-	const expandedBlock = row.locator('[data-rationale-expanded]');
+	// Absent, not hidden: the block renders only once toggled.
+	const expandedBlock = editor.locator('[data-rationale-expanded]');
 	await expect(expandedBlock).toHaveCount(0);
 
 	await toggle.click();
 
-	await expect(row.getByRole('button', { name: 'Less' })).toHaveAttribute('aria-expanded', 'true');
+	await expect(toggle).toHaveAttribute('aria-expanded', 'true');
 	await expect(expandedBlock).toBeVisible();
 	await expect(expandedBlock.getByText(expandedTrace)).toBeVisible();
 	await expect(expandedBlock.getByText(stepRole)).toBeVisible();
@@ -659,7 +940,7 @@ test('every system-constant category is labelled an untouched default, and no de
 		await expect(section.getByText('Untouched default')).toBeVisible();
 	}
 
-	const derivedCategories: string[] = ['semantic', ...RAMP_NAMES, ...DERIVED_VALUE_CATEGORIES];
+	const derivedCategories: string[] = ['semantic', 'primitives', ...DERIVED_VALUE_CATEGORIES];
 
 	for (const category of derivedCategories) {
 		const section = tokensSection.locator(`section[data-category="${category}"]`);
@@ -678,14 +959,16 @@ test('overriding a system value drops the untouched label without changing its s
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	const tokensSection = page.getByRole('region', { name: 'Tokens' });
+	await expandCategory(page, 'spacing');
 	const section = tokensSection.locator('section[data-category="spacing"]');
 	const row = section.locator('[data-token="spacing.md"]');
-	const field = page.getByLabel('spacing.md value', { exact: true });
 	const shown = TOKEN_SET.spacing.values.md!.value;
 
 	await expect(section).toHaveAttribute('data-source', 'system');
 	await expect(section).toHaveAttribute('data-untouched', '');
 
+	const editor = await openEditor(page, 'spacing.md');
+	const field = editor.getByLabel('spacing.md value', { exact: true });
 	await field.fill(String(shown + 1));
 	await field.blur();
 
@@ -697,7 +980,7 @@ test('overriding a system value drops the untouched label without changing its s
 	await expect(section.getByText('Untouched default')).toHaveCount(0);
 	await expect(section.getByText('Default, edited')).toBeVisible();
 
-	await row.getByRole('button', { name: 'Reset' }).click();
+	await editor.getByRole('button', { name: 'Reset spacing.md', exact: true }).click();
 
 	await expect(row).not.toHaveAttribute('data-overridden', '');
 	await expect(section).toHaveAttribute('data-untouched', '');
@@ -725,7 +1008,10 @@ test("re-aliasing primary to another step marks the row overridden and repaints 
 
 	await expect(row).not.toHaveAttribute('data-overridden', '');
 
-	await page.getByLabel('primary alias', { exact: true }).selectOption('brand.1');
+	const editor = await openEditor(page, 'semantic.primary');
+	await editor.getByLabel('primary alias', { exact: true }).selectOption('brand.1');
+	// The popup hangs from the row and can cover its swatch, so it closes before the paint read.
+	await closeEditor(page, editor);
 
 	await expect(row).toHaveAttribute('data-overridden', '');
 	await expect
@@ -744,7 +1030,9 @@ test('an override survives a preset switch', async ({ page }) => {
 	const targetStep = LIGHT.primitives.brand![0]!;
 	const target = await referencePaint(page, swatch, oklchFromFields(targetStep));
 
-	await page.getByLabel('primary alias', { exact: true }).selectOption('brand.1');
+	const editor = await openEditor(page, 'semantic.primary');
+	await editor.getByLabel('primary alias', { exact: true }).selectOption('brand.1');
+	await closeEditor(page, editor);
 	await expect(row).toHaveAttribute('data-overridden', '');
 	await expect
 		.poll(async () => paintDistance(await paintedCentre(swatch), target))
@@ -832,12 +1120,22 @@ test('a version saved with overrides opens with them applied, and still does aft
 	).toBeGreaterThan(1);
 
 	async function expectOverridesShown(): Promise<void> {
+		// Collapsed again after a reload, so it opens on every pass.
+		await expandCategory(page, 'radius');
 		await expect(primaryRow).toHaveAttribute('data-overridden', '');
 		await expect(radiusRow).toHaveAttribute('data-overridden', '');
-		await expect(page.getByLabel('primary alias', { exact: true })).toHaveValue(expectedAlias);
-		await expect(page.getByLabel('radius.lg value', { exact: true })).toHaveValue(
+
+		const primaryEditor = await openEditor(page, 'semantic.primary');
+		await expect(primaryEditor.getByLabel('primary alias', { exact: true })).toHaveValue(
+			expectedAlias,
+		);
+		await closeEditor(page, primaryEditor);
+
+		const radiusEditor = await openEditor(page, 'radius.lg');
+		await expect(radiusEditor.getByLabel('radius.lg value', { exact: true })).toHaveValue(
 			String(expectedLg),
 		);
+		await closeEditor(page, radiusEditor);
 
 		const probe = await probeComputedColour(page, oklchFromFields(expectedStep));
 		await expect(swatch).toHaveCSS('background-color', probe);
@@ -897,9 +1195,9 @@ test('every semantic row resolves to a real primitive step, checked against the 
 	}
 });
 
-/** The issue items a row lists under its controls, from a rejected edit or a held override. */
-function issueItems(row: Locator): Locator {
-	return row.locator('[data-issues] li');
+/** The issue items an editor lists under its controls, from a rejected edit or a held override. */
+function issueItems(editor: Locator): Locator {
+	return editor.locator('[data-issues] li');
 }
 
 test('a rejected edit retyped back to the shown value leaves no issue behind', async ({ page }) => {
@@ -909,20 +1207,22 @@ test('a rejected edit retyped back to the shown value leaves no issue behind', a
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	const shown = TOKEN_SET.opacity.values.overlay!.value;
+	await expandCategory(page, 'opacity');
 	const row = page.locator('[data-token="opacity.overlay"]');
-	const field = page.getByLabel('opacity.overlay value', { exact: true });
+	const editor = await openEditor(page, 'opacity.overlay');
+	const field = editor.getByLabel('opacity.overlay value', { exact: true });
 
 	// Opacity tops out at 1, so the store refuses this and keeps nothing.
 	await field.fill('9');
 	await field.blur();
-	await expect(issueItems(row)).not.toHaveCount(0);
+	await expect(issueItems(editor)).not.toHaveCount(0);
 
 	await field.fill(String(shown));
 	await field.blur();
 
 	await expect(field).toHaveValue(String(shown));
 	await expect(row).not.toHaveAttribute('data-overridden', '');
-	await expect(issueItems(row)).toHaveCount(0);
+	await expect(issueItems(editor)).toHaveCount(0);
 });
 
 test('reset clears a rejected edit made on top of a held override', async ({ page }) => {
@@ -932,8 +1232,10 @@ test('reset clears a rejected edit made on top of a held override', async ({ pag
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	const shown = TOKEN_SET.opacity.values.overlay!.value;
+	await expandCategory(page, 'opacity');
 	const row = page.locator('[data-token="opacity.overlay"]');
-	const field = () => page.getByLabel('opacity.overlay value', { exact: true });
+	const editor = await openEditor(page, 'opacity.overlay');
+	const field = () => editor.getByLabel('opacity.overlay value', { exact: true });
 
 	await field().fill('0.5');
 	await field().blur();
@@ -941,13 +1243,14 @@ test('reset clears a rejected edit made on top of a held override', async ({ pag
 
 	await field().fill('9');
 	await field().blur();
-	await expect(issueItems(row)).not.toHaveCount(0);
+	await expect(issueItems(editor)).not.toHaveCount(0);
 
-	await row.getByRole('button', { name: 'Reset' }).click();
+	// Reset leaves the popover open, so the value check after it reads the same editor.
+	await editor.getByRole('button', { name: 'Reset opacity.overlay', exact: true }).click();
 
 	await expect(row).not.toHaveAttribute('data-overridden', '');
 	await expect(field()).toHaveValue(String(shown));
-	await expect(issueItems(row)).toHaveCount(0);
+	await expect(issueItems(editor)).toHaveCount(0);
 });
 
 test("a field issue raised in the light scheme doesn't follow the row into dark", async ({
@@ -958,18 +1261,26 @@ test("a field issue raised in the light scheme doesn't follow the row into dark"
 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
-	const row = page.locator('[data-token="primitive.brand.1"]');
-	const lightness = () => page.getByLabel('primitive.brand.1 l', { exact: true });
+	const lightEditor = await openEditor(page, 'primitive.brand.1');
+	const lightness = lightEditor.getByLabel('primitive.brand.1 l', { exact: true });
 
-	await lightness().fill('');
-	await lightness().blur();
-	await expect(issueItems(row)).toHaveText(['Enter a number.']);
+	await lightness.fill('');
+	await lightness.blur();
+	await expect(issueItems(lightEditor)).toHaveText(['Enter a number.']);
 
+	// An outside press closes the popover, and the scheme-keyed remount drops the row's field state.
+	// The press lands on the Output heading because the scheme toggle sits outside the Tokens
+	// scroller now, and at this viewport a popover flipped above brand.1 covers it.
+	await page.getByRole('heading', { name: 'Output', exact: true }).click();
+	await expect(lightEditor).toHaveCount(0);
 	await page.getByRole('button', { name: 'dark', exact: true }).click();
 
+	const darkEditor = await openEditor(page, 'primitive.brand.1');
 	const darkStep = TOKEN_SET.schemes.dark.primitives.brand!.find((step) => step.step === 1)!;
-	await expect(lightness()).toHaveValue(String(darkStep.l));
-	await expect(issueItems(row)).toHaveCount(0);
+	await expect(darkEditor.getByLabel('primitive.brand.1 l', { exact: true })).toHaveValue(
+		String(darkStep.l),
+	);
+	await expect(issueItems(darkEditor)).toHaveCount(0);
 });
 
 test('reset puts every channel of a primitive back to its committed value, a refused one included', async ({
@@ -982,8 +1293,9 @@ test('reset puts every channel of a primitive back to its committed value, a ref
 
 	const step = LIGHT.primitives.brand!.find((candidate) => candidate.step === 1)!;
 	const row = page.locator('[data-token="primitive.brand.1"]');
+	const editor = await openEditor(page, 'primitive.brand.1');
 	const channel = (name: 'l' | 'c' | 'h') =>
-		page.getByLabel(`primitive.brand.1 ${name}`, { exact: true });
+		editor.getByLabel(`primitive.brand.1 ${name}`, { exact: true });
 
 	await channel('c').fill('0.01');
 	await channel('c').blur();
@@ -993,12 +1305,12 @@ test('reset puts every channel of a primitive back to its committed value, a ref
 	// the one a reset keyed only on committed values would leave showing the refused text.
 	await channel('l').fill('2');
 	await channel('l').blur();
-	await expect(issueItems(row)).not.toHaveCount(0);
+	await expect(issueItems(editor)).not.toHaveCount(0);
 
-	await row.getByRole('button', { name: 'Reset' }).click();
+	await editor.getByRole('button', { name: 'Reset primitive.brand.1', exact: true }).click();
 
 	await expect(row).not.toHaveAttribute('data-overridden', '');
-	await expect(issueItems(row)).toHaveCount(0);
+	await expect(issueItems(editor)).toHaveCount(0);
 	await expect(channel('l')).toHaveValue(String(step.l));
 	await expect(channel('c')).toHaveValue(String(step.c));
 	await expect(channel('h')).toHaveValue(String(step.h));
@@ -1013,8 +1325,10 @@ test('reset puts every leaf of a shadow back to its committed value, a refused o
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	const shadow = LIGHT.shadow.values.xs!;
+	await expandCategory(page, 'shadow');
 	const row = page.locator('[data-token="shadow.xs"]');
-	const leaf = (label: string) => page.getByLabel(`shadow.xs ${label}`, { exact: true });
+	const editor = await openEditor(page, 'shadow.xs');
+	const leaf = (label: string) => editor.getByLabel(`shadow.xs ${label}`, { exact: true });
 
 	await leaf('offsetY').fill(String(shadow.offsetY.value + 1));
 	await leaf('offsetY').blur();
@@ -1022,12 +1336,12 @@ test('reset puts every leaf of a shadow back to its committed value, a refused o
 
 	await leaf('color.alpha').fill('2');
 	await leaf('color.alpha').blur();
-	await expect(issueItems(row)).not.toHaveCount(0);
+	await expect(issueItems(editor)).not.toHaveCount(0);
 
-	await row.getByRole('button', { name: 'Reset' }).click();
+	await editor.getByRole('button', { name: 'Reset shadow.xs', exact: true }).click();
 
 	await expect(row).not.toHaveAttribute('data-overridden', '');
-	await expect(issueItems(row)).toHaveCount(0);
+	await expect(issueItems(editor)).toHaveCount(0);
 
 	const committed: Record<string, number> = {
 		offsetX: shadow.offsetX.value,
@@ -1040,7 +1354,7 @@ test('reset puts every leaf of a shadow back to its committed value, a refused o
 		'color.alpha': shadow.color.alpha,
 	};
 
-	await expect(row.locator('input')).toHaveCount(Object.keys(committed).length);
+	await expect(editor.locator('input')).toHaveCount(Object.keys(committed).length);
 
 	await Promise.all(
 		Object.entries(committed).map(([label, value]) =>
@@ -1057,14 +1371,16 @@ test('a refused light-scheme edit lists its message once, though the store check
 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
-	const primitive = page.locator('[data-token="primitive.brand.1"]');
-	const lightness = page.getByLabel('primitive.brand.1 l', { exact: true });
+	const primitive = await openEditor(page, 'primitive.brand.1');
+	const lightness = primitive.getByLabel('primitive.brand.1 l', { exact: true });
 	await lightness.fill('2');
 	await lightness.blur();
 	await expect(issueItems(primitive)).toHaveCount(1);
+	await closeEditor(page, primitive);
 
-	const shadow = page.locator('[data-token="shadow.xs"]');
-	const alpha = page.getByLabel('shadow.xs color.alpha', { exact: true });
+	await expandCategory(page, 'shadow');
+	const shadow = await openEditor(page, 'shadow.xs');
+	const alpha = shadow.getByLabel('shadow.xs color.alpha', { exact: true });
 	await alpha.fill('2');
 	await alpha.blur();
 	await expect(issueItems(shadow)).toHaveCount(1);
@@ -1078,19 +1394,21 @@ test('refusals in two different fields of one row list as two items, not one', a
 
 	// Both leaves top out at 1, so the store refuses each with the same message. Only their paths
 	// differ, and a row that merged on the message would hide the second refused field.
-	const shadow = page.locator('[data-token="shadow.xs"]');
-	const leaf = (label: string) => page.getByLabel(`shadow.xs ${label}`, { exact: true });
+	await expandCategory(page, 'shadow');
+	const shadow = await openEditor(page, 'shadow.xs');
+	const leaf = (label: string) => shadow.getByLabel(`shadow.xs ${label}`, { exact: true });
 	await leaf('color.l').fill('2');
 	await leaf('color.l').blur();
 	await expect(issueItems(shadow)).toHaveCount(1);
 	await leaf('color.alpha').fill('2');
 	await leaf('color.alpha').blur();
 	await expect(issueItems(shadow)).toHaveCount(2);
+	await closeEditor(page, shadow);
 
 	// Two cleared channels never reach the store, and share one message the same way.
-	const primitive = page.locator('[data-token="primitive.brand.1"]');
+	const primitive = await openEditor(page, 'primitive.brand.1');
 	const channel = (name: 'l' | 'c') =>
-		page.getByLabel(`primitive.brand.1 ${name}`, { exact: true });
+		primitive.getByLabel(`primitive.brand.1 ${name}`, { exact: true });
 	await channel('l').fill('');
 	await channel('l').blur();
 	await expect(issueItems(primitive)).toHaveCount(1);
@@ -1114,14 +1432,17 @@ test('a chroma too large to print is refused rather than crashing the workspace'
 	const step = LIGHT.primitives.brand!.find((candidate) => candidate.step === 1)!;
 	const row = page.locator('[data-token="primitive.brand.1"]');
 	const swatch = row.locator('[data-swatch]');
-	const chroma = page.getByLabel('primitive.brand.1 c', { exact: true });
 	const committed = await referencePaint(page, swatch, oklchFromFields(step));
 
+	const editor = await openEditor(page, 'primitive.brand.1');
+	const chroma = editor.getByLabel('primitive.brand.1 c', { exact: true });
 	await chroma.fill('1e303');
 	await chroma.blur();
 
-	await expect(issueItems(row)).toHaveCount(1);
+	await expect(issueItems(editor)).toHaveCount(1);
 	await expect(row).not.toHaveAttribute('data-overridden', '');
+	// The popup can cover the swatch it hangs beside, so it closes before the paint read.
+	await closeEditor(page, editor);
 
 	// The workspace is still alive, not a crashed React tree: the whole token list survived, and the
 	// swatch still paints the last value the store actually committed.
@@ -1137,8 +1458,9 @@ test('two cleared fields of one shadow row list as two items, not one', async ({
 
 	// Neither edit reaches the store. Each field holds its own "Enter a number." issue under its
 	// own label, with the same message, so only the field tells them apart.
-	const shadow = page.locator('[data-token="shadow.xs"]');
-	const leaf = (label: string) => page.getByLabel(`shadow.xs ${label}`, { exact: true });
+	await expandCategory(page, 'shadow');
+	const shadow = await openEditor(page, 'shadow.xs');
+	const leaf = (label: string) => shadow.getByLabel(`shadow.xs ${label}`, { exact: true });
 	await leaf('offsetX').fill('');
 	await leaf('offsetX').blur();
 	await expect(issueItems(shadow)).toHaveCount(1);
@@ -1232,22 +1554,27 @@ test('setting semantic.background to brand.9 shows the AA fails it causes, agree
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
 	const row = page.locator('[data-token="semantic.background"]');
-	const alias = page.getByLabel('background alias', { exact: true });
+	const trigger = editTrigger(page, 'semantic.background');
+	const resolvesTo = row.locator('[data-resolves-to]');
 	const verdict = row.locator('[data-contrast-verdict] [data-contrast-line]');
 	const revert = row.getByRole('button', { name: 'Revert background override', exact: true });
 
-	await expect(alias).toHaveValue('neutral.1');
+	await expect(resolvesTo).toHaveAttribute('data-resolves-to', 'neutral.1');
 	await expect(verdict).toHaveCount(0);
 
-	await alias.selectOption('brand.9');
+	const editor = await openEditor(page, 'semantic.background');
+	await editor.getByLabel('background alias', { exact: true }).selectOption('brand.9');
+	// Closed before the verdict and paint reads: the verdict lives on the row, not in the popup.
+	await closeEditor(page, editor);
 
 	await expect(row).toHaveAttribute('data-overridden', '');
 	await expect(verdict).toHaveCount(BACKGROUND_OVERRIDE_FAILURES.length);
 
 	// The verdict lands inside a polite live region the row already held, so it's announced.
 	await expect(row.getByRole('status')).toContainText('foreground on background');
-	// Revert and Reset would both clear the override, so the row offers only Revert.
-	await expect(row.getByRole('button', { name: 'Reset', exact: true })).toHaveCount(0);
+	// Revert and Reset both clear the override. Reset lives in the edit popover, so the row itself
+	// offers only Revert.
+	await expect(row.getByRole('button', { name: /^Reset\b/ })).toHaveCount(0);
 
 	const lines = (await verdict.allTextContents()).map(parseVerdictLine);
 	expect(lines).toEqual(BACKGROUND_OVERRIDE_FAILURES.map((failure) => ({ ...failure })));
@@ -1260,8 +1587,13 @@ test('setting semantic.background to brand.9 shows the AA fails it causes, agree
 	await revert.click();
 
 	await expect(row).not.toHaveAttribute('data-overridden', '');
-	await expect(alias).toHaveValue('neutral.1');
-	await expect(alias).toBeFocused();
+	await expect(resolvesTo).toHaveAttribute('data-resolves-to', 'neutral.1');
+	// The alias select isn't in the DOM with the popover closed, so Revert hands focus to the
+	// row's Edit trigger, the one control on the row that opens it.
+	await expect(trigger).toBeFocused();
+	const reopened = await openEditor(page, 'semantic.background');
+	await expect(reopened.getByLabel('background alias', { exact: true })).toHaveValue('neutral.1');
+	await closeEditor(page, reopened);
 	await expect(verdict).toHaveCount(0);
 	await expect.poll(() => paintedHeadingContrast(page)).toBeGreaterThanOrEqual(4.5);
 });
@@ -1276,16 +1608,18 @@ test('a verdict lands only on the row whose override broke the pair, and its Rev
 
 	const foregroundRow = page.locator('[data-token="semantic.foreground"]');
 	const backgroundRow = page.locator('[data-token="semantic.background"]');
-	const foregroundAlias = page.getByLabel('foreground alias', { exact: true });
-	const backgroundAlias = page.getByLabel('background alias', { exact: true });
 
 	// Passes on its own. After the background change below, `foreground on background` fails, but
 	// taking this override back wouldn't fix it: the base foreground fails on `brand.9` too.
-	await foregroundAlias.selectOption('neutral.11');
+	const foregroundEditor = await openEditor(page, 'semantic.foreground');
+	await foregroundEditor.getByLabel('foreground alias', { exact: true }).selectOption('neutral.11');
+	await closeEditor(page, foregroundEditor);
 	await expect(foregroundRow).toHaveAttribute('data-overridden', '');
 	await expect(verdictOf(foregroundRow)).toHaveCount(0);
 
-	await backgroundAlias.selectOption('brand.9');
+	const backgroundEditor = await openEditor(page, 'semantic.background');
+	await backgroundEditor.getByLabel('background alias', { exact: true }).selectOption('brand.9');
+	await closeEditor(page, backgroundEditor);
 	await expect(verdictOf(backgroundRow)).toHaveCount(BACKGROUND_OVERRIDE_FAILURES.length);
 	await expect(verdictOf(backgroundRow).first()).toHaveText(/^foreground on background: /);
 	await expect(verdictOf(foregroundRow)).toHaveCount(0);
@@ -1297,8 +1631,11 @@ test('a verdict lands only on the row whose override broke the pair, and its Rev
 		.getByRole('button', { name: 'Revert background override', exact: true })
 		.click();
 
-	await expect(backgroundAlias).toHaveValue('neutral.1');
-	await expect(backgroundAlias).toBeFocused();
+	await expect(backgroundRow.locator('[data-resolves-to]')).toHaveAttribute(
+		'data-resolves-to',
+		'neutral.1',
+	);
+	await expect(editTrigger(page, 'semantic.background')).toBeFocused();
 	await expect(verdictOf(backgroundRow)).toHaveCount(0);
 	await expect(foregroundRow).toHaveAttribute('data-overridden', '');
 	await expect(verdictOf(foregroundRow)).toHaveCount(0);
@@ -1322,7 +1659,9 @@ test('an override that keeps every declared pair at AA shows no verdict', async 
 
 	await expect(row.locator('[data-contrast-verdict]')).toHaveCount(0);
 
-	await page.getByLabel('secondary alias', { exact: true }).selectOption('neutral.4');
+	const editor = await openEditor(page, 'semantic.secondary');
+	await editor.getByLabel('secondary alias', { exact: true }).selectOption('neutral.4');
+	await closeEditor(page, editor);
 
 	await expect(row).toHaveAttribute('data-overridden', '');
 	await expect
@@ -1347,7 +1686,10 @@ test('the Accessibility tab lists a failing pair instead of the placeholder', as
 	await page.getByRole('tab', { name: 'Accessibility' }).click();
 	await expect(placeholder).toHaveCount(0);
 
-	await page.getByLabel('background alias', { exact: true }).selectOption('brand.9');
+	// Opening a token's editor doesn't touch the Output tab's selection.
+	const editor = await openEditor(page, 'semantic.background');
+	await editor.getByLabel('background alias', { exact: true }).selectOption('brand.9');
+	await closeEditor(page, editor);
 
 	await expect(panel.getByText('light: foreground on background:', { exact: false })).toBeVisible();
 	await expect(placeholder).toHaveCount(0);

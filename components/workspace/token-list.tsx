@@ -1,14 +1,12 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 
 import { OverrideRejectedError } from '../../app/state/workspace-store';
 import type { ContrastEntry } from '../../core/contrast/check';
 import { toOklchCss } from '../../core/css/oklch-css';
-import { CAMBIUM_NAMESPACE } from '../../core/provenance';
 import { resolveScheme } from '../../core/resolve-scheme';
 import type { ScaleEngineResult } from '../../core/scale-engine';
-import { STEP_ROLES } from '../../core/step-roles';
 import type { TokenSet } from '../../core/token-set';
 import {
 	overrideKey,
@@ -19,8 +17,9 @@ import {
 	type ValuePath,
 } from '../../core/token-overrides';
 import { CategoryGroup } from './token-list/category-group';
-import { PrimitiveRow } from './token-list/primitive-row';
-import { TokenRow } from './token-list/token-row';
+import { matchesFilter } from './token-list/filter';
+import { RampStrip } from './token-list/ramp-strip';
+import { SemanticRow } from './token-list/semantic-row';
 import { ValueRow } from './token-list/value-row';
 import { walkCategoryTokens } from './token-list/walk-category';
 
@@ -66,6 +65,8 @@ function categoryHasOverride(
 }
 
 export type TokenListProps = {
+	/** The id of the heading that names the Tokens region. `Shell` renders it, above the list. */
+	headingId: string;
 	tokenSet: TokenSet | null;
 	/** `attributeContrastFailures`' output: the failing pairs each override alone is answerable for. */
 	contrastByOverride: Record<string, ContrastEntry[]>;
@@ -86,11 +87,13 @@ export type TokenListProps = {
 };
 
 /**
- * Groups the derived set by category and renders every leaf with its provenance, its rationale, and
- * an edit control shaped for what it targets: a ramp.step `<select>` for a semantic alias, L/C/H
- * inputs for a primitive step, a number input per leaf everywhere else.
+ * Groups the derived set by category and renders every leaf with its provenance and rationale. Each
+ * leaf's edit control opens from a per-token popover, shaped for what it targets: a ramp.step
+ * `<select>` for a semantic alias, L/C/H inputs for a primitive step, a number input per leaf
+ * everywhere else.
  */
 export function TokenList({
+	headingId,
 	tokenSet,
 	contrastByOverride,
 	derived,
@@ -106,6 +109,7 @@ export function TokenList({
 	// later pick lands or the row resets. A held override the *current* base rejects is a different
 	// thing again and lives in the store's `overrideIssues`.
 	const [aliasAttempts, setAliasAttempts] = useState<Record<string, OverrideIssue[]>>({});
+	const [query, setQuery] = useState('');
 
 	const resolved = useMemo(
 		() => (tokenSet ? resolveScheme(tokenSet.schemes[scheme]) : {}),
@@ -113,18 +117,24 @@ export function TokenList({
 	);
 
 	if (derived === null) {
-		return <p className="text-muted-foreground text-sm">No seed yet, so there are no tokens.</p>;
+		return (
+			<TokensRegion headingId={headingId}>
+				<p className="text-muted-foreground text-sm">No seed yet, so there are no tokens.</p>
+			</TokensRegion>
+		);
 	}
 
 	if (!derived.ok) {
 		return (
-			<p className="text-sm">
-				These tokens could not be derived: <code>{derived.error.kind}</code>
-				{derived.error.kind === 'unreachable-floor'
-					? ` (${derived.error.ramp} step ${derived.error.step})`
-					: null}
-				.
-			</p>
+			<TokensRegion headingId={headingId}>
+				<p className="text-sm">
+					These tokens could not be derived: <code>{derived.error.kind}</code>
+					{derived.error.kind === 'unreachable-floor'
+						? ` (${derived.error.ramp} step ${derived.error.step})`
+						: null}
+					.
+				</p>
+			</TokensRegion>
 		);
 	}
 
@@ -166,8 +176,43 @@ export function TokenList({
 		return [...(aliasAttempts[key] ?? []), ...(overrideIssues[key] ?? [])];
 	}
 
+	const filtering = query.trim() !== '';
+	const semantic = Object.entries(colorScheme.semantic).filter(([token]) =>
+		matchesFilter(`semantic.${token}`, query),
+	);
+	const ramps = Object.entries(colorScheme.primitives)
+		.map(
+			([ramp, steps]) =>
+				[
+					ramp,
+					steps.filter((step) => matchesFilter(`primitive.${ramp}.${step.step}`, query)),
+				] as const,
+		)
+		.filter(([, steps]) => steps.length > 0);
+	const valueCategories = NON_COLOUR_CATEGORIES.map((category) => {
+		const topEntry = tokenSet[category];
+		// The top-level `shadow` mirrors only the light scheme (`checkMirroredLayers`), so the
+		// toggle has to reach into the scheme itself to show dark's own shadow values. `source`
+		// is a schema-fixed literal on this category, so the top-level copy still answers that.
+		const values = category === 'shadow' ? colorScheme.shadow.values : topEntry.values;
+		const tokens = walkCategoryTokens(values);
+
+		return {
+			category,
+			source: topEntry.source,
+			// Across every token, filtered or not: a hidden edited row still means the category
+			// isn't untouched.
+			hasOverride: categoryHasOverride(category, scheme, tokens, overrides),
+			shown: tokens.filter((token) => matchesFilter(`${category}.${token.path.join('.')}`, query)),
+		};
+	}).filter(({ shown }) => shown.length > 0);
+	const nothingMatches =
+		semantic.length === 0 && ramps.length === 0 && valueCategories.length === 0;
+
 	return (
-		<div className="flex flex-col gap-4">
+		<div className="flex min-h-0 flex-1 flex-col gap-2">
+			{/* Outside the region: it picks which scheme the list shows rather than being a token,
+			    and #154 replaces it with one control for the whole workspace. */}
 			<fieldset className="m-0 flex gap-2 border-0 p-0">
 				<legend className="sr-only">Colour scheme</legend>
 				{(['light', 'dark'] as const).map((option) => (
@@ -183,114 +228,135 @@ export function TokenList({
 				))}
 			</fieldset>
 
-			<CategoryGroup name="semantic">
-				{Object.entries(colorScheme.semantic).map(([token, entry]) => {
-					const key = overrideKey({ kind: 'alias', scheme, token, alias: entry.alias });
-					const overridden = Object.hasOwn(overrides, key);
-					const step = Number(entry.alias.slice(entry.alias.lastIndexOf('.') + 1));
-					const role = STEP_ROLES.find((candidate) => candidate.step === step)?.role;
-					// An empty list still mounts the row's live region, which has to exist before the
-					// first verdict for a screen reader to announce it.
-					const contrastFailures = (contrastByOverride[key] ?? []).map((candidate) => ({
-						label: `${candidate.foreground} on ${candidate.background}`,
-						wcag: candidate.wcag,
-						target: candidate.target,
-					}));
+			<TokensRegion headingId={headingId}>
+				<label className="bg-background sticky top-0 z-10 flex flex-col gap-1 pb-2 text-xs">
+					Filter by name
+					<input
+						type="search"
+						value={query}
+						onChange={(event) => setQuery(event.target.value)}
+						className="rounded border px-2 py-1 text-sm"
+					/>
+				</label>
 
-					return (
-						<TokenRow
-							key={token}
-							id={`semantic.${token}`}
-							provenance={entry.$extensions[CAMBIUM_NAMESPACE]}
-							resolvesTo={entry.alias}
-							stepRole={role}
-							swatch={toOklchCss(resolved[token]!)}
-							overridden={overridden}
-							onReset={
-								overridden
-									? () => {
-											holdAliasAttempt(key, null);
-											clearOverride(key);
-										}
-									: undefined
-							}
-							issues={issuesFor(key)}
-							contrastFailures={contrastFailures}
-							revertLabel={`${token} override`}
-						>
-							<select
-								aria-label={`${token} alias`}
-								value={entry.alias}
-								onChange={(event) =>
-									holdAliasAttempt(
-										key,
-										tryOverride({ kind: 'alias', scheme, token, alias: event.target.value }),
-									)
-								}
-							>
-								{rampOptions.map((option) => (
-									<option key={option} value={option}>
-										{option}
-									</option>
+				<div className="flex flex-col gap-4">
+					{semantic.length > 0 ? (
+						// Keyed on `filtering` so starting or clearing a filter remounts every group at
+						// its default. That's how a filter opens a collapsed category it matched.
+						<CategoryGroup key={`semantic:${filtering}`} name="semantic" defaultOpen>
+							<ul className="flex flex-col">
+								{semantic.map(([token, entry]) => {
+									const key = overrideKey({ kind: 'alias', scheme, token, alias: entry.alias });
+									const overridden = Object.hasOwn(overrides, key);
+									// An empty list still mounts the row's live region, which has to exist before
+									// the first verdict for a screen reader to announce it.
+									const contrastFailures = (contrastByOverride[key] ?? []).map((candidate) => ({
+										label: `${candidate.foreground} on ${candidate.background}`,
+										wcag: candidate.wcag,
+										target: candidate.target,
+									}));
+
+									return (
+										<SemanticRow
+											key={token}
+											token={token}
+											entry={entry}
+											swatch={toOklchCss(resolved[token]!)}
+											rampOptions={rampOptions}
+											overridden={overridden}
+											issues={issuesFor(key)}
+											contrastFailures={contrastFailures}
+											onAliasChange={(alias) =>
+												holdAliasAttempt(key, tryOverride({ kind: 'alias', scheme, token, alias }))
+											}
+											onReset={
+												overridden
+													? () => {
+															holdAliasAttempt(key, null);
+															clearOverride(key);
+														}
+													: undefined
+											}
+										/>
+									);
+								})}
+							</ul>
+						</CategoryGroup>
+					) : null}
+
+					{ramps.length > 0 ? (
+						// One disclosure for all seven ramps: `core/token-set.ts` treats primitives as one
+						// category, and seven disclosures would cost seven Tab stops where this costs one.
+						<CategoryGroup key={`primitives:${filtering}`} name="primitives" defaultOpen>
+							<div className="flex flex-col gap-2">
+								{ramps.map(([ramp, steps]) => (
+									<div key={ramp} className="flex flex-col gap-1">
+										<span className="font-mono text-xs">{ramp}</span>
+										<RampStrip
+											ramp={ramp}
+											scheme={scheme}
+											steps={steps}
+											overrides={overrides}
+											issuesFor={issuesFor}
+											onOverride={tryOverride}
+											onReset={clearOverride}
+										/>
+									</div>
 								))}
-							</select>
-						</TokenRow>
-					);
-				})}
-			</CategoryGroup>
+							</div>
+						</CategoryGroup>
+					) : null}
 
-			{Object.entries(colorScheme.primitives).map(([ramp, steps]) => (
-				<CategoryGroup key={ramp} name={ramp}>
-					{steps.map((step) => (
-						<PrimitiveRow
-							// Keyed by scheme too, so a toggle remounts the row: a refused edit belongs to
-							// the scheme it was typed in, and the other scheme's step never saw it.
-							key={`${scheme}:${step.step}`}
-							scheme={scheme}
-							ramp={ramp}
-							step={step}
-							overrides={overrides}
-							issuesFor={issuesFor}
-							onOverride={tryOverride}
-							onReset={clearOverride}
-						/>
+					{/* Collapsed until asked for: the issue's Tab-stop bound makes no allowance for value
+					    rows, so on load they mount nothing. */}
+					{valueCategories.map(({ category, source, hasOverride, shown }) => (
+						<CategoryGroup
+							key={`${category}:${filtering}`}
+							name={category}
+							source={source}
+							hasOverride={hasOverride}
+							defaultOpen={filtering}
+						>
+							<ul className="flex flex-col">
+								{shown.map((token) => (
+									<ValueRow
+										// Shadow is the one category here that differs by scheme; see `RampStrip`'s
+										// chip key for why that has to remount on a toggle.
+										key={`${category === 'shadow' ? scheme : ''}:${token.path.join('.')}`}
+										category={category}
+										scheme={scheme}
+										token={token}
+										overrides={overrides}
+										issuesFor={issuesFor}
+										onOverride={tryOverride}
+										onReset={clearOverride}
+									/>
+								))}
+							</ul>
+						</CategoryGroup>
 					))}
-				</CategoryGroup>
-			))}
 
-			{NON_COLOUR_CATEGORIES.map((category) => {
-				const topEntry = tokenSet[category];
-				// The top-level `shadow` mirrors only the light scheme (`checkMirroredLayers`), so the
-				// toggle has to reach into the scheme itself to show dark's own shadow values. `source`
-				// is a schema-fixed literal on this category, so the top-level copy still answers that.
-				const values = category === 'shadow' ? colorScheme.shadow.values : topEntry.values;
-				const tokens = walkCategoryTokens(values);
-				const hasOverride = categoryHasOverride(category, scheme, tokens, overrides);
-
-				return (
-					<CategoryGroup
-						key={category}
-						name={category}
-						source={topEntry.source}
-						hasOverride={hasOverride}
-					>
-						{tokens.map((token) => (
-							<ValueRow
-								// Shadow is the one category here that differs by scheme; see `PrimitiveRow`'s
-								// key for why that has to remount on a toggle.
-								key={`${category === 'shadow' ? scheme : ''}:${token.path.join('.')}`}
-								category={category}
-								scheme={scheme}
-								token={token}
-								overrides={overrides}
-								issuesFor={issuesFor}
-								onOverride={tryOverride}
-								onReset={clearOverride}
-							/>
-						))}
-					</CategoryGroup>
-				);
-			})}
+					{nothingMatches ? (
+						<p className="text-muted-foreground text-sm">
+							No token name contains “{query.trim()}”.
+						</p>
+					) : null}
+				</div>
+			</TokensRegion>
 		</div>
+	);
+}
+
+// Scrolls on its own at md and up. No `tabIndex`: every populated state holds a focusable
+// descendant (the filter at least), and focusing one scrolls the region in every engine. That's
+// also the condition axe's `scrollable-region-focusable` checks. The empty and error states hold
+// one short paragraph and never overflow.
+const SCROLLER = 'max-h-[60vh] min-h-0 flex-1 overflow-y-auto rounded border p-2 md:max-h-none';
+
+function TokensRegion({ headingId, children }: { headingId: string; children: ReactNode }) {
+	return (
+		<section aria-labelledby={headingId} className={SCROLLER}>
+			{children}
+		</section>
 	);
 }

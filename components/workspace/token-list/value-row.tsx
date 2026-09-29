@@ -75,7 +75,7 @@ export function ValueRow({
 
 				return (
 					<label
-						// See `primitive-row.tsx`: the committed value remounts the input on an outside
+						// See `primitive-chip.tsx`: the committed value remounts the input on an outside
 						// change, and the reset generation remounts a refused one whose value never moved.
 						key={`${leaf.suffix.join('.')}:${leaf.value}:${resetGeneration}`}
 						className="flex items-center gap-1 text-xs"
