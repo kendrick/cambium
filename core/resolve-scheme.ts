@@ -22,7 +22,11 @@ import { type ColorScheme, stepForAlias } from './token-set';
  * costs the one-way split the shadow derivation depends on.
  */
 export function resolveScheme(scheme: ColorScheme): Record<string, Oklch> {
-	const resolved: Record<string, Oklch> = {};
+	// Only a hand-built scheme reaches here with an own "__proto__" key: `SemanticLayerSchema`'s
+	// `z.record` drops one during parsing, so real data never carries one this far. A plain `{}`
+	// would still repoint the accumulator's own prototype on that key instead of storing it—see
+	// #121.
+	const resolved: Record<string, Oklch> = Object.create(null);
 
 	for (const [token, entry] of Object.entries(scheme.semantic)) {
 		const step = stepForAlias(scheme.primitives, entry.alias);
