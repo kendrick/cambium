@@ -454,8 +454,8 @@ describe('core purity', () => {
 			() => {
 				const result = deserializeRecord(serializeRecord(archivableRecord));
 
-				// The image comes back as the same data URL only when the archive was unpacked and its
-				// image sniffed and re-encoded, so a stubbed result can't pass here.
+				// This row proves only that a real round trip runs under the `fetch` guard. A stub that echoed
+				// `archivableRecord` would pass these checks too; `core/record-archive.test.ts` owns unpacking.
 				return (
 					result.ok &&
 					result.record.id === archivableRecord.id &&
