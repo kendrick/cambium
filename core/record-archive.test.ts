@@ -902,6 +902,28 @@ describe('deserializeRecord', () => {
 			expect(error.message).toContain('images/1.png');
 		});
 
+		// A re-zipped archive keeps every CRC valid, so only the bytes can say an image is what its
+		// name claims. Both cases would otherwise import and fail later in `createImageBitmap`.
+		it('an image entry whose bytes are not an image as invalid-record', () => {
+			const bytes = rezip(serializeRecord(record), (entries) => {
+				entries['images/1.png'] = strToU8('not an image at all');
+			});
+			const error = refusal(bytes);
+
+			expect(error.kind).toBe('invalid-record');
+			expect(error.message).toContain('images/1.png');
+		});
+
+		it('an image entry holding a different format than its name as invalid-record', () => {
+			const bytes = rezip(serializeRecord(record), (entries) => {
+				entries['images/1.png'] = entries['images/0.webp']!;
+			});
+			const error = refusal(bytes);
+
+			expect(error.kind).toBe('invalid-record');
+			expect(error.message).toContain("doesn't hold PNG data");
+		});
+
 		it(`a record stamped schema version ${SCHEMA_VERSION + 1} as invalid-record`, () => {
 			const bytes = editRecordJson(serializeRecord(record), (json) => {
 				json.schemaVersion = SCHEMA_VERSION + 1;

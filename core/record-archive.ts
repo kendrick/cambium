@@ -212,6 +212,30 @@ function fail(kind: ArchiveErrorKind, message: string): { ok: false; error: Arch
 	return { ok: false, error: { kind, message } };
 }
 
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const JPEG_SIGNATURE = [0xff, 0xd8, 0xff];
+const RIFF = [0x52, 0x49, 0x46, 0x46];
+const WEBP_FOURCC = [0x57, 0x45, 0x42, 0x50];
+
+function matchesAt(bytes: Uint8Array, offset: number, signature: readonly number[]): boolean {
+	return (
+		bytes.length >= offset + signature.length &&
+		signature.every((byte, index) => bytes[offset + index] === byte)
+	);
+}
+
+/**
+ * The same magic-byte test as `sniffImageType` in `lib/image-intake.ts`, repeated because core
+ * can't import from lib. If the two drift, an archive could restore an image intake would refuse.
+ */
+function sniffImageType(bytes: Uint8Array): string | null {
+	if (matchesAt(bytes, 0, PNG_SIGNATURE)) return 'image/png';
+	if (matchesAt(bytes, 0, JPEG_SIGNATURE)) return 'image/jpeg';
+	if (matchesAt(bytes, 0, RIFF) && matchesAt(bytes, 8, WEBP_FOURCC)) return 'image/webp';
+
+	return null;
+}
+
 /**
  * Leaves anything that isn't shaped like a record untouched, so `BrandRecordSchema` reports it in
  * its own words rather than this function inventing a second vocabulary for the same failures.
@@ -254,6 +278,17 @@ function rehydrateImages(
 			return fail(
 				'invalid-record',
 				`The image "${path}" is not a .png, .jpeg or .webp file, so it cannot be restored.`,
+			);
+		}
+
+		// The extension is only what the archive claims. Unpacking an export and re-zipping it after
+		// swapping an image's bytes keeps every CRC valid, and the record would then store a data URL
+		// whose bytes `createImageBitmap` and `<img>` can't decode. Intake decides from magic bytes for
+		// the same reason (`sniffImageType` in `lib/image-intake.ts`, which core can't import).
+		if (sniffImageType(contents) !== mediaType) {
+			return fail(
+				'invalid-record',
+				`The image "${path}" doesn't hold ${mediaType.slice('image/'.length).toUpperCase()} data, so it was not restored.`,
 			);
 		}
 
