@@ -353,7 +353,13 @@ const recordBytes = Object.values(unzipSync(serializeRecord(record))).reduce(
 	0,
 );
 
-type StoredCentral = { name: string; crc: number; compressed: number; uncompressed: number };
+type StoredCentral = {
+	name: string;
+	crc: number;
+	compressed: number;
+	uncompressed: number;
+	extra?: Uint8Array;
+};
 
 const le16 = (n: number) => [n & 0xff, (n >>> 8) & 0xff];
 const le32 = (n: number) => [...le16(n & 0xffff), ...le16(n >>> 16)];
@@ -362,9 +368,15 @@ const le32 = (n: number) => [...le16(n & 0xffff), ...le16(n >>> 16)];
  * One stored (method 0) local entry at offset 0, followed by a central directory whose every
  * entry points back at it, each with its own name and whatever sizes it claims. fflate copies
  * `compressed` bytes out of the input for each central entry and never reads `uncompressed`.
- * This is how the red-team probe on #161 made a 4 MiB file cost 256 MiB.
+ * This is how the red-team probe on #161 made a 4 MiB file cost 256 MiB. With `zip64`, a zip64
+ * end record and locator go in ahead of the end record, so fflate reads marked sizes from each
+ * entry's `extra`.
  */
-function storedArchive(payload: Uint8Array, centrals: StoredCentral[]): Uint8Array {
+function storedArchive(
+	payload: Uint8Array,
+	centrals: StoredCentral[],
+	{ zip64 = false } = {},
+): Uint8Array {
 	const localName = strToU8('stored.bin');
 	const local = [
 		...le32(0x04034b50),
@@ -383,6 +395,7 @@ function storedArchive(payload: Uint8Array, centrals: StoredCentral[]): Uint8Arr
 
 	for (const central of centrals) {
 		const name = strToU8(central.name);
+		const extra = central.extra ?? new Uint8Array(0);
 		directory.push(
 			...le32(0x02014b50),
 			...le16(20),
@@ -394,17 +407,34 @@ function storedArchive(payload: Uint8Array, centrals: StoredCentral[]): Uint8Arr
 			...le32(central.compressed),
 			...le32(central.uncompressed),
 			...le16(name.length),
-			...le16(0),
+			...le16(extra.length),
 			...le16(0),
 			...le16(0),
 			...le16(0),
 			...le32(0),
 			...le32(0),
 			...name,
+			...extra,
 		);
 	}
 
 	const directoryStart = local.length + payload.length;
+	const trailer: number[] = [];
+
+	if (zip64) {
+		const view = new DataView(new ArrayBuffer(56 + 20));
+		view.setUint32(0, 0x06064b50, true);
+		view.setBigUint64(4, 44n, true);
+		view.setBigUint64(24, BigInt(centrals.length), true);
+		view.setBigUint64(32, BigInt(centrals.length), true);
+		view.setBigUint64(40, BigInt(directory.length), true);
+		view.setBigUint64(48, BigInt(directoryStart), true);
+		view.setUint32(56, 0x07064b50, true);
+		view.setBigUint64(56 + 8, BigInt(directoryStart + directory.length), true);
+		view.setUint32(56 + 16, 1, true);
+		trailer.push(...new Uint8Array(view.buffer));
+	}
+
 	const end = [
 		...le32(0x06054b50),
 		...le16(0),
@@ -415,12 +445,22 @@ function storedArchive(payload: Uint8Array, centrals: StoredCentral[]): Uint8Arr
 		...le32(directoryStart),
 		...le16(0),
 	];
-	const bytes = new Uint8Array(directoryStart + directory.length + end.length);
+	const bytes = new Uint8Array(directoryStart + directory.length + trailer.length + end.length);
 	bytes.set(local, 0);
 	bytes.set(payload, local.length);
 	bytes.set(directory, directoryStart);
-	bytes.set(end, directoryStart + directory.length);
+	bytes.set(trailer, directoryStart + directory.length);
+	bytes.set(end, directoryStart + directory.length + trailer.length);
 	return bytes;
+}
+
+/** A zip64 extra field (id 1) holding `values` as 64-bit sizes, in the order fflate reads them. */
+function zip64Extra(...values: number[]): Uint8Array {
+	const view = new DataView(new ArrayBuffer(4 + 8 * values.length));
+	view.setUint16(0, 1, true);
+	view.setUint16(2, 8 * values.length, true);
+	values.forEach((value, i) => view.setBigUint64(4 + 8 * i, BigInt(value), true));
+	return new Uint8Array(view.buffer);
 }
 
 function flipByte(archive: Uint8Array, offset: number): Uint8Array {
@@ -886,8 +926,10 @@ describe('deserializeRecord', () => {
 describe('deserializeRecord size cap', () => {
 	it('opens an archive declaring exactly the cap, which fflate really allocates', () => {
 		const bytes = withPadding(MAX_UNPACKED_BYTES - recordBytes);
+		const padding = unzipSync(bytes)['padding.bin']!;
 
-		expect(unzipSync(bytes)['padding.bin']).toEqual(strToU8('pad'));
+		expect(padding).toEqual(strToU8('pad'));
+		expect(padding.buffer.byteLength).toBe(MAX_UNPACKED_BYTES - recordBytes);
 
 		const result = deserializeRecord(bytes);
 
@@ -909,8 +951,6 @@ describe('deserializeRecord size cap', () => {
 		expect(unzipSync).not.toHaveBeenCalled();
 	});
 
-	// A zip64 size is read from the extra field, not the 0xffffffff marker, or every zip64 entry
-	// would count as 4 GiB and this would be refused.
 	// fflate copies a stored entry's compressed size and ignores its uncompressed one, so each of
 	// these central entries costs 4 MiB whatever it declares, and 64 of them cost 256 MiB.
 	it('refuses 64 stored central entries sharing one 4 MiB local entry as too-large', () => {
@@ -954,6 +994,49 @@ describe('deserializeRecord size cap', () => {
 		expect(unzipSync).not.toHaveBeenCalled();
 	});
 
+	// Both sizes are marked, so the extra field holds su then sc. Reading sc from the first slot
+	// would charge each entry 1 byte while fflate copies 4 MiB for it.
+	it('refuses 64 shared stored entries whose zip64 compressed size is 4 MiB as too-large', () => {
+		const payload = new Uint8Array(4 * 1024 * 1024).fill(0x42);
+		const crc = crc32(payload);
+		const bytes = storedArchive(
+			payload,
+			Array.from({ length: 64 }, (_, i) => ({
+				name: `s${i}.bin`,
+				crc,
+				compressed: 0xffffffff,
+				uncompressed: 0xffffffff,
+				extra: zip64Extra(1, payload.length),
+			})),
+			{ zip64: true },
+		);
+		vi.mocked(unzipSync).mockClear();
+
+		expect(refusal(bytes).kind).toBe('too-large');
+		expect(unzipSync).not.toHaveBeenCalled();
+	});
+
+	// With no zip64 end record, fflate reads a 0xffffffff compressed size literally and copies
+	// up to the end of the file, whatever an extra field claims. So the marker counts as 4 GiB.
+	it('refuses a marked compressed size in an archive with no zip64 record as too-large', () => {
+		const payload = new Uint8Array(4 * 1024 * 1024).fill(0x42);
+		const crc = crc32(payload);
+		const bytes = storedArchive(
+			payload,
+			Array.from({ length: 64 }, (_, i) => ({
+				name: `s${i}.bin`,
+				crc,
+				compressed: 0xffffffff,
+				uncompressed: 1,
+				extra: zip64Extra(1),
+			})),
+		);
+		vi.mocked(unzipSync).mockClear();
+
+		expect(refusal(bytes).kind).toBe('too-large');
+		expect(unzipSync).not.toHaveBeenCalled();
+	});
+
 	it('opens an export whose every entry is stored', () => {
 		const bytes = zipSync(unzipSync(serializeRecord(record)), { level: 0 });
 		const result = deserializeRecord(bytes);
@@ -962,6 +1045,8 @@ describe('deserializeRecord size cap', () => {
 		expect(result.record).toEqual(record);
 	});
 
+	// A zip64 size is read from the extra field, not the 0xffffffff marker, or every zip64 entry
+	// would count as 4 GiB and this would be refused.
 	it('opens a zip64 archive whose 64-bit size is under the cap', () => {
 		const bytes = withPadding(3, { zip64: true });
 
