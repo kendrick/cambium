@@ -575,7 +575,10 @@ const REGIONS_SEED: BrandSeed = {
 	],
 };
 
-/** The issue's bar: 1% of the thumbnail's rendered width or height. */
+/**
+ * The issue's bar, read as an absolute 0.01 on a fraction: 1% of the thumbnail's rendered width or
+ * height for an edge or a size, and 1% relative error for the aspect check.
+ */
 function expectWithinOnePercent(actual: number, expected: number, label: string): void {
 	expect(Math.abs(actual - expected), label).toBeLessThanOrEqual(0.01);
 }
@@ -598,6 +601,9 @@ test('the seed rail shows every reference image above the first seed field, with
 	const strip = page.locator('[data-reference-strip]');
 	const thumbnails = strip.locator('img');
 	await expect(thumbnails).toHaveCount(2);
+	// Visible, so the geometry check below can't pass on a strip collapsed to zero height.
+	await expect(thumbnails.nth(0)).toBeVisible();
+	await expect(thumbnails.nth(1)).toBeVisible();
 	await expect(page.getByRole('dialog')).toHaveCount(0);
 
 	// The issue's own wording, with each tag in the words the picker offered it by.
@@ -623,13 +629,17 @@ test('each key colour with a region outlines it on its own thumbnail, at the sto
 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
-	const withRegions = REGIONS_SEED.keyColors!.flatMap((color, index) =>
-		color.sourceRegion
-			? [{ path: `keyColors.${index}`, imageId: color.sourceImageId, region: color.sourceRegion }]
-			: [],
-	);
-	// Guards the premise: a seed with no regions would pass the loop below vacuously.
-	expect(withRegions).toHaveLength(3);
+	// Spelled out rather than derived from REGIONS_SEED, so the expectation can't share a bug with
+	// the strip's own filter. The paths are the rail's `data-seed-field` names.
+	const withRegions = [
+		{ path: 'keyColors.0', imageId: 'img-1', region: { x: 0.2, y: 0.15, width: 0.3, height: 0.4 } },
+		{
+			path: 'keyColors.1',
+			imageId: 'img-2',
+			region: { x: 0.55, y: 0.1, width: 0.35, height: 0.6 },
+		},
+		{ path: 'keyColors.2', imageId: 'img-1', region: { x: 0.6, y: 0.5, width: 0.25, height: 0.3 } },
+	];
 
 	for (const { path, imageId, region } of withRegions) {
 		const thumbnail = page.locator(`[data-reference-thumbnail="${imageId}"]`);
