@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 
 import { OverrideRejectedError } from '../../app/state/workspace-store';
+import type { ContrastEntry } from '../../core/contrast/check';
 import { toOklchCss } from '../../core/css/oklch-css';
 import { CAMBIUM_NAMESPACE } from '../../core/provenance';
 import { resolveScheme } from '../../core/resolve-scheme';
@@ -66,6 +67,8 @@ function categoryHasOverride(
 
 export type TokenListProps = {
 	tokenSet: TokenSet | null;
+	/** `attributeContrastFailures`' output: the failing pairs each override alone is answerable for. */
+	contrastByOverride: Record<string, ContrastEntry[]>;
 	/**
 	 * The engine result `tokenSet` was built from, kept only to tell the two null cases apart:
 	 * no seed at all versus a seed the engine refused. `tokensFor` in `app/state/workspace-store.ts`
@@ -89,6 +92,7 @@ export type TokenListProps = {
  */
 export function TokenList({
 	tokenSet,
+	contrastByOverride,
 	derived,
 	overrides,
 	overrideIssues,
@@ -185,6 +189,13 @@ export function TokenList({
 					const overridden = Object.hasOwn(overrides, key);
 					const step = Number(entry.alias.slice(entry.alias.lastIndexOf('.') + 1));
 					const role = STEP_ROLES.find((candidate) => candidate.step === step)?.role;
+					// An empty list still mounts the row's live region, which has to exist before the
+					// first verdict for a screen reader to announce it.
+					const contrastFailures = (contrastByOverride[key] ?? []).map((candidate) => ({
+						label: `${candidate.foreground} on ${candidate.background}`,
+						wcag: candidate.wcag,
+						target: candidate.target,
+					}));
 
 					return (
 						<TokenRow
@@ -204,6 +215,8 @@ export function TokenList({
 									: undefined
 							}
 							issues={issuesFor(key)}
+							contrastFailures={contrastFailures}
+							revertLabel={`${token} override`}
 						>
 							<select
 								aria-label={`${token} alias`}

@@ -1,10 +1,12 @@
 'use client';
 
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
 import { useStore } from 'zustand';
 import type { StoreApi } from 'zustand/vanilla';
 
 import type { WorkspaceState } from '../../app/state/workspace-store';
+import { attributeContrastFailures } from '../../core/contrast/attribute';
+import { buildTokenSet } from '../../core/semantic-layer';
 import { RawResponse } from '@/components/workspace/raw-response';
 import { SeedRail } from '@/components/workspace/seed-rail';
 import { TokenList } from '@/components/workspace/token-list';
@@ -41,9 +43,30 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const overrideIssues = useStore(store, (state) => state.overrideIssues);
 	const setOverride = useStore(store, (state) => state.setOverride);
 	const clearOverride = useStore(store, (state) => state.clearOverride);
+	const contrast = useStore(store, (state) => state.contrast);
+	const draftSeed = useStore(store, (state) => state.draftSeed);
 
 	const active =
 		record && activeOrdinal !== null ? (record.versions[activeOrdinal - 1] ?? null) : null;
+
+	// `null` only means no tokens yet (see `ContrastState`), so a non-null report with nothing
+	// failing is a distinct, and much more common, state worth its own message.
+	const failingContrast = contrast?.report.filter((entry) => !entry.passes) ?? [];
+
+	// The store keeps its repaired, pre-override base to itself, so the aliases an override replaced
+	// are rebuilt here from the same ramps and seed. Only aliases are read off it, and repair never
+	// moves one, so skipping the repair pass costs nothing in accuracy.
+	const contrastByOverride = useMemo(() => {
+		if (!tokenSet || !derived?.ok || !draftSeed) return {};
+		// Only alias overrides get a verdict, and rebuilding the baseline is a second full derivation,
+		// so skip it on the common keystroke where no alias is overridden.
+		if (!Object.values(overrides).some((override) => override.kind === 'alias')) return {};
+		return attributeContrastFailures(
+			tokenSet,
+			Object.values(overrides),
+			buildTokenSet(derived.schemes, draftSeed),
+		);
+	}, [tokenSet, derived, draftSeed, overrides]);
 
 	return (
 		<main className="grid min-h-dvh grid-cols-1 gap-6 p-4 md:h-dvh md:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)_auto] md:p-6">
@@ -74,6 +97,7 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 							overrideIssues={overrideIssues}
 							setOverride={setOverride}
 							clearOverride={clearOverride}
+							contrastByOverride={contrastByOverride}
 						/>
 					</section>
 				</div>
@@ -100,9 +124,23 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 							</p>
 						)}
 					</TabsPanel>
-					{/* Empty until #27 fills it. */}
 					<TabsPanel value="accessibility" className="text-muted-foreground p-2 text-sm">
-						The accessibility report is not built yet.
+						{contrast === null ? (
+							<p>
+								There are no tokens to check yet. They show up here once the seed produces a token
+								set.
+							</p>
+						) : failingContrast.length === 0 ? (
+							<p>Every declared pair passes AA in both schemes.</p>
+						) : (
+							<ul className="list-none space-y-1">
+								{failingContrast.map((entry) => (
+									<li key={`${entry.scheme}-${entry.foreground}-${entry.background}`}>
+										{`${entry.scheme}: ${entry.foreground} on ${entry.background}: ${entry.wcag.toFixed(2)}:1, needs ${entry.target}`}
+									</li>
+								))}
+							</ul>
+						)}
 					</TabsPanel>
 					<TabsPanel value="export" className="flex min-h-0 flex-col p-2">
 						{tokenSet ? (

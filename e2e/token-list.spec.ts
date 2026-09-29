@@ -1146,3 +1146,209 @@ test('two cleared fields of one shadow row list as two items, not one', async ({
 	await leaf('offsetY').blur();
 	await expect(issueItems(shadow)).toHaveCount(2);
 });
+
+// 0.04045 is what WCAG 2.2 states; older copies carry 0.03928. No 8-bit channel lands between the
+// two (10/255 sits under both, 11/255 over both), so a screenshot byte decodes the same either way.
+function linearizeChannel(byte: number): number {
+	const channel = byte / 255;
+	return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance([r, g, b]: Rgb): number {
+	return 0.2126 * linearizeChannel(r) + 0.7152 * linearizeChannel(g) + 0.0722 * linearizeChannel(b);
+}
+
+/**
+ * Written from the WCAG formula rather than imported from `core/oklch.ts`'s `renderedContrast`, so
+ * the pixel check below measures the row's printed number against arithmetic the pipeline didn't
+ * supply.
+ */
+function wcagRatio(a: Rgb, b: Rgb): number {
+	const lumA = relativeLuminance(a);
+	const lumB = relativeLuminance(b);
+	const lighter = Math.max(lumA, lumB);
+	const darker = Math.min(lumA, lumB);
+
+	return (lighter + 0.05) / (darker + 0.05);
+}
+
+/**
+ * The preview heading's contrast as the compositor painted it, read from a screenshot of the
+ * heading's own box (criterion 2). The commonest pixel in that box is the surface behind the text.
+ * Glyph edges are antialiased, and a blend of two colours never out-contrasts either one, so the
+ * pixel farthest from the surface is a fully covered stroke: the text colour itself.
+ */
+async function paintedHeadingContrast(page: Page): Promise<number> {
+	const heading = page.locator('[data-preview-app-screen] h3', { hasText: 'Orders' });
+	const png = PNG.sync.read(await heading.screenshot({ animations: 'disabled' }));
+
+	const counts = new Map<string, { rgb: Rgb; count: number }>();
+	for (let offset = 0; offset < png.data.length; offset += 4) {
+		const rgb: Rgb = [png.data[offset]!, png.data[offset + 1]!, png.data[offset + 2]!];
+		const id = rgb.join(',');
+		const seen = counts.get(id);
+		if (seen) seen.count += 1;
+		else counts.set(id, { rgb, count: 1 });
+	}
+
+	const pixels = [...counts.values()];
+	const surface = pixels.reduce((best, pixel) => (pixel.count > best.count ? pixel : best)).rgb;
+
+	return Math.max(...pixels.map((pixel) => wcagRatio(pixel.rgb, surface)));
+}
+
+/** One `[data-contrast-verdict]` line, parsed back into the fields `token-row.tsx` printed it from. */
+function parseVerdictLine(text: string): { label: string; wcag: number; target: number } {
+	const match = /^(.+): ([\d.]+):1, needs ([\d.]+)$/.exec(text.trim());
+	if (!match) throw new Error(`unparsed verdict line "${text}"`);
+
+	return { label: match[1]!, wcag: Number(match[2]), target: Number(match[3]) };
+}
+
+function verdictOf(row: Locator): Locator {
+	return row.locator('[data-contrast-verdict] [data-contrast-line]');
+}
+
+/**
+ * The four declared pairs this seed's `background` -> `brand.9` override breaks, at the two decimals
+ * the row prints. Worked out by running this spec's `SEED` through `BALANCED`,
+ * `withContrastRepairs` and `core/contrast/check.ts` in a scratch script, not read off the row, so
+ * the row can't supply its own expected value. They are still the pipeline's numbers, which is why
+ * criterion 2 is checked against the painted pixels instead of against this table.
+ */
+const BACKGROUND_OVERRIDE_FAILURES = [
+	{ label: 'foreground on background', target: 4.5, wcag: 3.29 },
+	{ label: 'destructive on background', target: 4.5, wcag: 1.45 },
+	{ label: 'ring on background', target: 3, wcag: 1.37 },
+	{ label: 'sidebar-ring on background', target: 3, wcag: 1.37 },
+] as const;
+
+test('setting semantic.background to brand.9 shows the AA fails it causes, agrees with the rendered pixels, and Revert clears it', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const row = page.locator('[data-token="semantic.background"]');
+	const alias = page.getByLabel('background alias', { exact: true });
+	const verdict = row.locator('[data-contrast-verdict] [data-contrast-line]');
+	const revert = row.getByRole('button', { name: 'Revert background override', exact: true });
+
+	await expect(alias).toHaveValue('neutral.1');
+	await expect(verdict).toHaveCount(0);
+
+	await alias.selectOption('brand.9');
+
+	await expect(row).toHaveAttribute('data-overridden', '');
+	await expect(verdict).toHaveCount(BACKGROUND_OVERRIDE_FAILURES.length);
+
+	// The verdict lands inside a polite live region the row already held, so it's announced.
+	await expect(row.getByRole('status')).toContainText('foreground on background');
+	// Revert and Reset would both clear the override, so the row offers only Revert.
+	await expect(row.getByRole('button', { name: 'Reset', exact: true })).toHaveCount(0);
+
+	const lines = (await verdict.allTextContents()).map(parseVerdictLine);
+	expect(lines).toEqual(BACKGROUND_OVERRIDE_FAILURES.map((failure) => ({ ...failure })));
+
+	// Criterion 2: the row's `foreground on background` ratio against what the compositor painted.
+	const printedRatio = lines[0]!.wcag;
+	const paintedRatio = await paintedHeadingContrast(page);
+	expect(Math.abs(paintedRatio - printedRatio)).toBeLessThanOrEqual(0.1);
+
+	await revert.click();
+
+	await expect(row).not.toHaveAttribute('data-overridden', '');
+	await expect(alias).toHaveValue('neutral.1');
+	await expect(alias).toBeFocused();
+	await expect(verdict).toHaveCount(0);
+	await expect.poll(() => paintedHeadingContrast(page)).toBeGreaterThanOrEqual(4.5);
+});
+
+test('a verdict lands only on the row whose override broke the pair, and its Revert clears it', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const foregroundRow = page.locator('[data-token="semantic.foreground"]');
+	const backgroundRow = page.locator('[data-token="semantic.background"]');
+	const foregroundAlias = page.getByLabel('foreground alias', { exact: true });
+	const backgroundAlias = page.getByLabel('background alias', { exact: true });
+
+	// Passes on its own. After the background change below, `foreground on background` fails, but
+	// taking this override back wouldn't fix it: the base foreground fails on `brand.9` too.
+	await foregroundAlias.selectOption('neutral.11');
+	await expect(foregroundRow).toHaveAttribute('data-overridden', '');
+	await expect(verdictOf(foregroundRow)).toHaveCount(0);
+
+	await backgroundAlias.selectOption('brand.9');
+	await expect(verdictOf(backgroundRow)).toHaveCount(BACKGROUND_OVERRIDE_FAILURES.length);
+	await expect(verdictOf(backgroundRow).first()).toHaveText(/^foreground on background: /);
+	await expect(verdictOf(foregroundRow)).toHaveCount(0);
+	await expect(
+		foregroundRow.getByRole('button', { name: 'Revert foreground override', exact: true }),
+	).toHaveCount(0);
+
+	await backgroundRow
+		.getByRole('button', { name: 'Revert background override', exact: true })
+		.click();
+
+	await expect(backgroundAlias).toHaveValue('neutral.1');
+	await expect(backgroundAlias).toBeFocused();
+	await expect(verdictOf(backgroundRow)).toHaveCount(0);
+	await expect(foregroundRow).toHaveAttribute('data-overridden', '');
+	await expect(verdictOf(foregroundRow)).toHaveCount(0);
+	await expect.poll(() => paintedHeadingContrast(page)).toBeGreaterThanOrEqual(4.5);
+});
+
+test('an override that keeps every declared pair at AA shows no verdict', async ({ page }) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const row = page.locator('[data-token="semantic.secondary"]');
+	const swatch = row.locator('[data-swatch]');
+
+	// Not `primary` -> `brand.1`, the shape the earlier re-aliasing scenario uses: `primary-foreground`
+	// is `brand.1` for this seed, so that pair would drop to 1:1. `secondary-foreground` still clears
+	// AA on `neutral.4`, and the paint check below proves the override actually landed.
+	const targetStep = LIGHT.primitives.neutral!.find((step) => step.step === 4)!;
+	const target = await referencePaint(page, swatch, oklchFromFields(targetStep));
+
+	await expect(row.locator('[data-contrast-verdict]')).toHaveCount(0);
+
+	await page.getByLabel('secondary alias', { exact: true }).selectOption('neutral.4');
+
+	await expect(row).toHaveAttribute('data-overridden', '');
+	await expect
+		.poll(async () => paintDistance(await paintedCentre(swatch), target))
+		.toBeLessThanOrEqual(1);
+	await expect(row.locator('[data-contrast-verdict]')).toHaveCount(0);
+});
+
+test('the Accessibility tab lists a failing pair instead of the placeholder', async ({ page }) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const placeholder = page.getByText('The accessibility report is not built yet.', {
+		exact: true,
+	});
+	const panel = page.getByRole('tabpanel', { name: 'Accessibility' });
+
+	await expect(placeholder).toHaveCount(0);
+
+	await page.getByRole('tab', { name: 'Accessibility' }).click();
+	await expect(placeholder).toHaveCount(0);
+
+	await page.getByLabel('background alias', { exact: true }).selectOption('brand.9');
+
+	await expect(panel.getByText('light: foreground on background:', { exact: false })).toBeVisible();
+	await expect(placeholder).toHaveCount(0);
+});
