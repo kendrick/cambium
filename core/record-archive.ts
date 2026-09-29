@@ -13,6 +13,7 @@ import { type BrandRecord, BrandRecordSchema } from './brand-record';
 
 export type ArchiveErrorKind =
 	| 'not-an-archive'
+	| 'too-large'
 	| 'missing-record'
 	| 'unsafe-path'
 	| 'missing-image'
@@ -27,18 +28,25 @@ export type DeserializeResult =
 const RECORD_ENTRY = 'record.json';
 
 /**
+ * fflate allocates each deflated entry's output at the size its central header declares, before
+ * inflating a byte, so a tiny archive can demand gigabytes.
+ */
+const MAX_UNPACKED_BYTES = 64 * 1024 * 1024;
+
+/**
  * Mirrors `AcceptedImageType` in `lib/image-intake.ts`, which is every type intake can store. Core
  * never imports from `lib/`, so a type added there has to be added here too, or an archive of a
  * record holding it fails in `serializeRecord`.
  */
-const EXTENSION_FOR: Record<string, string> = {
-	'image/webp': 'webp',
-	'image/png': 'png',
-	'image/jpeg': 'jpeg',
-};
-// A Map so an extension like `toString` can't resolve to something on Object.prototype.
+const EXTENSION_FOR = new Map([
+	['image/webp', 'webp'],
+	['image/png', 'png'],
+	['image/jpeg', 'jpeg'],
+]);
+// A Map so an extension like `toString` can't resolve to something on Object.prototype, and
+// EXTENSION_FOR is one for the same reason with media types.
 const MEDIA_TYPE_FOR = new Map(
-	Object.entries(EXTENSION_FOR).map(([mediaType, extension]) => [extension, mediaType]),
+	[...EXTENSION_FOR].map(([mediaType, extension]) => [extension, mediaType]),
 );
 
 /**
@@ -97,11 +105,30 @@ export function serializeRecord(record: BrandRecord): Uint8Array {
 }
 
 /**
- * Integrity first, then paths, then content. A damaged archive is reported as damaged whatever it
- * claims to contain, and every entry name is checked before anything is parsed out of
- * `record.json`, so a hostile name is refused in an archive that is otherwise well formed.
+ * Table of contents and size first, then checksums, then paths, then content. The central
+ * directory is walked and its declared sizes summed before `unzipSync` runs, because fflate
+ * allocates from those sizes and an archive refused as too large must never reach it. A damaged
+ * archive is reported as damaged whatever it claims to contain, and every entry name is checked
+ * before anything is parsed out of `record.json`, so a hostile name is refused in an archive that
+ * is otherwise well formed.
  */
 export function deserializeRecord(bytes: Uint8Array): DeserializeResult {
+	const directory = readDirectory(bytes);
+
+	if (!directory) {
+		return fail(
+			'not-an-archive',
+			'This file is not a zip archive, or it is damaged: its table of contents cannot be read, or it lists an entry twice.',
+		);
+	}
+
+	if (directory.unpackedBytes > MAX_UNPACKED_BYTES) {
+		return fail(
+			'too-large',
+			`This archive would unpack to more than ${MAX_UNPACKED_BYTES / (1024 * 1024)} MiB, the most Cambium will open.`,
+		);
+	}
+
 	let entries: Record<string, Uint8Array>;
 
 	try {
@@ -110,9 +137,9 @@ export function deserializeRecord(bytes: Uint8Array): DeserializeResult {
 		return fail('not-an-archive', 'This file is not a zip archive, or it is cut short.');
 	}
 
-	const checksums = readChecksums(bytes);
+	const { checksums } = directory;
 
-	if (!checksums || checksums.size !== Object.keys(entries).length) {
+	if (checksums.size !== Object.keys(entries).length) {
 		return fail(
 			'not-an-archive',
 			'This archive is damaged: its table of contents cannot be read, or it lists an entry twice.',
@@ -277,7 +304,7 @@ function sortKeys(value: unknown): unknown {
  */
 function decodeDataUrl(url: string): { bytes: Uint8Array; extension: string } | null {
 	const match = /^data:([a-z]+\/[a-z]+);base64,([A-Za-z0-9+/]*={0,2})$/.exec(url);
-	const extension = match ? EXTENSION_FOR[match[1]!] : undefined;
+	const extension = match ? EXTENSION_FOR.get(match[1]!) : undefined;
 
 	if (!match || !extension) return null;
 
@@ -304,9 +331,10 @@ function toBase64(bytes: Uint8Array): string {
 /**
  * fflate's `unzipSync` never checks an entry's CRC, so a flipped byte in a stored (uncompressed)
  * image comes back as a different image with no error at all. This reads each entry's CRC from
- * the central directory so `deserializeRecord` can check it. Names decode the way fflate's own
- * reader does, UTF-8 when general-purpose bit 11 is set and Latin-1 otherwise, so the two agree on
- * every key.
+ * the central directory so `deserializeRecord` can check it, and sums the uncompressed sizes
+ * fflate will allocate so it can refuse an archive before fflate touches it. Names decode the way
+ * fflate's own reader does, UTF-8 when general-purpose bit 11 is set and Latin-1 otherwise, so the
+ * two agree on every key.
  *
  * Checking a CRC only helps if this walk sees every entry fflate extracts. A central directory
  * with two entries under one name, where fflate keeps the last, has to reach the duplicate check
@@ -315,7 +343,9 @@ function toBase64(bytes: Uint8Array): string {
  * and the walk ends where the central directory does. A zip64 archive with a locator still
  * imports when it walks cleanly, whether or not its classic fields carry 0xffff markers.
  */
-function readChecksums(bytes: Uint8Array): Map<string, number> | null {
+function readDirectory(
+	bytes: Uint8Array,
+): { checksums: Map<string, number>; unpackedBytes: number } | null {
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	const EOCD = 0x06054b50;
 	const CENTRAL = 0x02014b50;
@@ -337,6 +367,7 @@ function readChecksums(bytes: Uint8Array): Map<string, number> | null {
 
 	let offset = view.getUint32(end + 16, true);
 	let directoryEnd = end;
+	let zip64 = false;
 
 	// Where a locator (the 20 bytes before the classic end record) points at a zip64 end record,
 	// fflate takes the count and offset from that record instead, reading the same low 32 bits
@@ -355,10 +386,12 @@ function readChecksums(bytes: Uint8Array): Map<string, number> | null {
 			count = view.getUint32(zip64End + 32, true);
 			offset = view.getUint32(zip64End + 48, true);
 			directoryEnd = zip64End;
+			zip64 = true;
 		}
 	}
 
 	const checksums = new Map<string, number>();
+	let unpackedBytes = 0;
 
 	for (let i = 0; i < count; i += 1) {
 		if (offset + 46 > directoryEnd || view.getUint32(offset, true) !== CENTRAL) return null;
@@ -376,14 +409,55 @@ function readChecksums(bytes: Uint8Array): Map<string, number> | null {
 
 		if (checksums.has(name)) return null;
 
+		const size = declaredSize(bytes, offset, nameEnd, extraLength, zip64);
+
+		if (size === null) return null;
+
 		checksums.set(name, crc);
+		unpackedBytes += size;
 		offset = nameEnd + extraLength + commentLength;
 	}
 
 	// Stopping short means central entries this walk never saw, and fflate may have extracted them.
 	if (offset !== directoryEnd) return null;
 
-	return checksums;
+	return { checksums, unpackedBytes };
+}
+
+/**
+ * The uncompressed size fflate's `z64hs` reads for one central entry, which is the size it
+ * allocates. In a zip64 archive, a 0xffffffff in any of the three 32-bit fields sends it to the
+ * zip64 extra field (id 1), with the size first there when its own field is the marked one.
+ * fflate walks the extra fields and reads the 8 bytes with no bounds checks, and a byte past the
+ * end of the file reads as 0, so this does too. Where fflate finds no zip64 field it throws, so
+ * this returns null and the archive is refused as damaged.
+ */
+function declaredSize(
+	bytes: Uint8Array,
+	entry: number,
+	extraStart: number,
+	extraLength: number,
+	zip64: boolean,
+): number | null {
+	const byteAt = (at: number) => bytes[at] ?? 0;
+	const u16 = (at: number) => byteAt(at) | (byteAt(at + 1) << 8);
+	const u32 = (at: number) => (u16(at) | (u16(at + 2) << 16)) >>> 0;
+	const MARKER = 0xffffffff;
+
+	const size = u32(entry + 24);
+	const marked = size === MARKER || u32(entry + 20) === MARKER || u32(entry + 42) === MARKER;
+
+	if (!zip64 || !marked) return size;
+
+	const extraEnd = extraStart + extraLength;
+
+	for (let field = extraStart; field + 4 < extraEnd; field += 4 + u16(field + 2)) {
+		if (u16(field) === 1) {
+			return size === MARKER ? u32(field + 4) + u32(field + 8) * 2 ** 32 : size;
+		}
+	}
+
+	return null;
 }
 
 let crcTable: Uint32Array | undefined;

@@ -130,12 +130,35 @@ function twinArchive(): { bytes: Uint8Array; twin: Uint8Array } {
 }
 
 /**
+ * `validBytes` with record.json's central header declaring 0xffffffff uncompressed bytes. The
+ * archive has no zip64 locator, so that's a literal 4 GiB, well past the cap.
+ */
+function oversizedArchive(): Uint8Array {
+	const bytes = validBytes.slice();
+	const view = new DataView(bytes.buffer);
+	const name = strToU8('record.json');
+	const central = 0x02014b50;
+
+	for (let at = 0; at + 46 <= bytes.length; at += 1) {
+		const named = name.every((byte, j) => bytes[at + 46 + j] === byte);
+
+		if (view.getUint32(at, true) === central && named) {
+			view.setUint32(at + 24, 0xffffffff, true);
+			return bytes;
+		}
+	}
+
+	throw new Error('no central header for record.json');
+}
+
+/**
  * One archive per `ArchiveError` kind `deserializeRecord` can return, exercised here only to prove
  * `importRecordArchive` calls `put` zero times on each — the kinds themselves, and the message each
  * one carries, are `core/record-archive.test.ts`'s job.
  */
 const FAILURE_ARCHIVES: Record<ArchiveErrorKind, Uint8Array> = {
 	'not-an-archive': strToU8('this is not a zip archive'),
+	'too-large': oversizedArchive(),
 	'missing-record': rezip(validBytes, (entries) => {
 		delete entries['record.json'];
 	}),

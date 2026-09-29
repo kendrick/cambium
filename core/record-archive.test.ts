@@ -18,6 +18,15 @@ import { repairPinsFor, type SeedPinPath } from './seed-pins';
 import { buildTokenSet } from './semantic-layer';
 import { applyOverrides, type TokenOverride } from './token-overrides';
 
+// A pass-through spy, so a test can show `deserializeRecord` refused an archive without ever
+// handing it to fflate, where the damage the size cap guards against would already be done.
+vi.mock('fflate', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('fflate')>();
+	return { ...actual, unzipSync: vi.fn<typeof actual.unzipSync>(actual.unzipSync) };
+});
+
+const MAX_UNPACKED_BYTES = 64 * 1024 * 1024;
+
 const WEBP_BYTES = Uint8Array.from(
 	atob('UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA=='),
 	(char) => char.charCodeAt(0),
@@ -172,7 +181,6 @@ function setCounts(bytes: Uint8Array, thisDisk: number, total: number): Uint8Arr
 	return copy;
 }
 
-/** Rewrites every occurrence of one name's bytes, in local and central headers alike. */
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
 	let c = n;
 	for (let k = 0; k < 8; k += 1) c = c & 1 ? (0xedb88320 ^ (c >>> 1)) >>> 0 : c >>> 1;
@@ -231,6 +239,7 @@ function twinArchive(): { bytes: Uint8Array; twin: Uint8Array } {
 	return { bytes, twin };
 }
 
+/** Rewrites every occurrence of one name's bytes, in local and central headers alike. */
 function renameEverywhere(archive: Uint8Array, from: string, to: string): Uint8Array {
 	const source = strToU8(from);
 	const target = strToU8(to);
@@ -244,6 +253,100 @@ function renameEverywhere(archive: Uint8Array, from: string, to: string): Uint8A
 
 	return copy;
 }
+
+/**
+ * Rewrites the uncompressed size each named entry's central header declares, leaving the payload
+ * alone, since fflate sizes its output from the central directory and never the local header.
+ * With `zip64`, each named entry's size moves into a zip64 extra field behind the 0xffffffff
+ * marker, and a zip64 end record and locator go in ahead of the end record, the layout an archive
+ * past 4 GiB uses. Expects an archive fflate wrote: no archive comment.
+ */
+function declareSizes(
+	archive: Uint8Array,
+	sizes: Record<string, number>,
+	{ zip64 = false } = {},
+): Uint8Array {
+	const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
+	const end = archive.length - 22;
+	const count = view.getUint16(end + 10, true);
+	const directoryStart = view.getUint32(end + 16, true);
+	const central: number[] = [];
+	let offset = directoryStart;
+
+	for (let i = 0; i < count; i += 1) {
+		const nameLength = view.getUint16(offset + 28, true);
+		const extraLength = view.getUint16(offset + 30, true);
+		const commentLength = view.getUint16(offset + 32, true);
+		const nameEnd = offset + 46 + nameLength;
+		const extraEnd = nameEnd + extraLength;
+		const entry = archive.slice(offset, extraEnd + commentLength);
+		const entryView = new DataView(entry.buffer);
+		const size = sizes[strFromU8(archive.subarray(offset + 46, nameEnd))];
+		offset = extraEnd + commentLength;
+
+		if (size === undefined) {
+			central.push(...entry);
+		} else if (!zip64) {
+			entryView.setUint32(24, size, true);
+			central.push(...entry);
+		} else {
+			const field = new DataView(new ArrayBuffer(12));
+			field.setUint16(0, 1, true);
+			field.setUint16(2, 8, true);
+			field.setBigUint64(4, BigInt(size), true);
+			entryView.setUint32(24, 0xffffffff, true);
+			entryView.setUint16(30, extraLength + 12, true);
+			// Zip puts an entry's extra fields between its name and its comment.
+			const insertAt = 46 + nameLength + extraLength;
+			central.push(
+				...entry.subarray(0, insertAt),
+				...new Uint8Array(field.buffer),
+				...entry.subarray(insertAt),
+			);
+		}
+	}
+
+	const tail: number[] = [];
+
+	if (zip64) {
+		const zip64Tail = new DataView(new ArrayBuffer(56 + 20));
+		const recordAt = directoryStart + central.length;
+		zip64Tail.setUint32(0, 0x06064b50, true);
+		zip64Tail.setBigUint64(4, 44n, true);
+		zip64Tail.setBigUint64(24, BigInt(count), true);
+		zip64Tail.setBigUint64(32, BigInt(count), true);
+		zip64Tail.setBigUint64(40, BigInt(central.length), true);
+		zip64Tail.setBigUint64(48, BigInt(directoryStart), true);
+		zip64Tail.setUint32(56, 0x07064b50, true);
+		zip64Tail.setBigUint64(56 + 8, BigInt(recordAt), true);
+		zip64Tail.setUint32(56 + 16, 1, true);
+		tail.push(...new Uint8Array(zip64Tail.buffer));
+	}
+
+	const endRecord = archive.slice(end);
+	new DataView(endRecord.buffer).setUint32(12, central.length, true);
+
+	return Uint8Array.from([
+		...archive.subarray(0, directoryStart),
+		...central,
+		...tail,
+		...endRecord,
+	]);
+}
+
+/** An archive of `record` plus one small deflated entry declared at `size` bytes. */
+function withPadding(size: number, options?: { zip64?: boolean }): Uint8Array {
+	const bytes = rezip(serializeRecord(record), (entries) => {
+		entries['padding.bin'] = strToU8('pad');
+	});
+	return declareSizes(bytes, { 'padding.bin': size }, options);
+}
+
+/** What every entry but padding.bin really unpacks to, so padding can bring the total to a target. */
+const recordBytes = Object.values(unzipSync(serializeRecord(record))).reduce(
+	(total, contents) => total + contents.length,
+	0,
+);
 
 function flipByte(archive: Uint8Array, offset: number): Uint8Array {
 	const copy = archive.slice();
@@ -702,6 +805,55 @@ describe('deserializeRecord', () => {
 
 			expect(refusal(bytes).kind).toBe('invalid-record');
 		});
+	});
+});
+
+describe('deserializeRecord size cap', () => {
+	it('opens an archive declaring exactly the cap, which fflate really allocates', () => {
+		const bytes = withPadding(MAX_UNPACKED_BYTES - recordBytes);
+
+		expect(unzipSync(bytes)['padding.bin']).toEqual(strToU8('pad'));
+
+		const result = deserializeRecord(bytes);
+
+		if (!result.ok) throw new Error(result.error.message);
+		expect(result.record).toEqual(record);
+	});
+
+	it('refuses an archive declaring one byte over the cap as too-large, without unzipping it', () => {
+		const bytes = withPadding(MAX_UNPACKED_BYTES - recordBytes + 1);
+
+		// Under a thousandth of what it declares, so without the cap fflate would open this happily.
+		expect(bytes.length * 1000).toBeLessThan(MAX_UNPACKED_BYTES);
+		vi.mocked(unzipSync).mockClear();
+
+		const error = refusal(bytes);
+
+		expect(error.kind).toBe('too-large');
+		expect(error.message).toContain('64 MiB');
+		expect(unzipSync).not.toHaveBeenCalled();
+	});
+
+	// A zip64 size is read from the extra field, not the 0xffffffff marker, or every zip64 entry
+	// would count as 4 GiB and this would be refused.
+	it('opens a zip64 archive whose 64-bit size is under the cap', () => {
+		const bytes = withPadding(3, { zip64: true });
+
+		expect(unzipSync(bytes)['padding.bin']).toEqual(strToU8('pad'));
+
+		const result = deserializeRecord(bytes);
+
+		if (!result.ok) throw new Error(result.error.message);
+		expect(result.record).toEqual(record);
+	});
+
+	// The high word is set so a walk that read only the low 32 bits would see 1 byte.
+	it('refuses a zip64 archive whose 64-bit size is over the cap as too-large', () => {
+		const bytes = withPadding(2 ** 32 + 1, { zip64: true });
+		vi.mocked(unzipSync).mockClear();
+
+		expect(refusal(bytes).kind).toBe('too-large');
+		expect(unzipSync).not.toHaveBeenCalled();
 	});
 });
 
