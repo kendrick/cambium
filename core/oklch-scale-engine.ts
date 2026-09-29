@@ -29,8 +29,13 @@ import type { Ramp, RampStep, TokenExtensions } from './token-set';
 /**
  * Persisted on every version as `scaleEngine`, because the same seed under a different engine
  * produces different ramps and a stored token set has to say which one made it.
+ *
+ * `-2`, not `-1`: `cambium-oklch-1` named the engine from #62 on, and #79 and #97 both changed its
+ * ramps without moving it, so a record stamped `-1` can't say which of those outputs it had. The
+ * digest pin starts here, under an id that has only ever meant one output. Records stamped `-1` keep
+ * their stamp, which is honest about them: they came from some earlier engine.
  */
-export const OKLCH_SCALE_ENGINE_ID = 'cambium-oklch-1';
+export const OKLCH_SCALE_ENGINE_ID = 'cambium-oklch-2';
 
 /**
  * Lightness per step, measured as the median across the sixty-two solid Radix scales and rounded.
