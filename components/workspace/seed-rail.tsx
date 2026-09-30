@@ -275,78 +275,84 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 				</Alert>
 			) : null}
 
-			<label className="flex items-center justify-between gap-2 text-sm">
-				Interpretation
-				<span className="flex items-center gap-2">
-					{tuned ? (
-						<span data-tuned-marker className="text-muted-foreground text-xs font-medium">
-							Tuned
+			{/* A preset or a slider re-derives the seed, and with no seed there's nothing for either to
+			    act on. #158 found the live select read as a control that did nothing. */}
+			{seed === null ? null : (
+				<>
+					<label className="flex items-center justify-between gap-2 text-sm">
+						Interpretation
+						<span className="flex items-center gap-2">
+							{tuned ? (
+								<span data-tuned-marker className="text-muted-foreground text-xs font-medium">
+									Tuned
+								</span>
+							) : null}
+							<select
+								ref={presetSelectRef}
+								value={preset}
+								onChange={(event) => selectPreset(event.target.value as Interpretation)}
+								className="bg-background rounded border px-1 py-0.5 text-sm"
+							>
+								{PRESETS.map((option) => (
+									<option key={option} value={option}>
+										{option}
+									</option>
+								))}
+							</select>
 						</span>
-					) : null}
-					<select
-						ref={presetSelectRef}
-						value={preset}
-						onChange={(event) => selectPreset(event.target.value as Interpretation)}
-						className="bg-background rounded border px-1 py-0.5 text-sm"
-					>
-						{PRESETS.map((option) => (
-							<option key={option} value={option}>
-								{option}
-							</option>
-						))}
-					</select>
-				</span>
-			</label>
+					</label>
 
-			<div>
-				{/*
-				 * A button with `aria-expanded` rather than a native `<details>`. `TokenRow`'s own
-				 * expand control (`components/workspace/token-list/token-row.tsx`) took the same route for
-				 * the same reason: `e2e/workspace.spec.ts` finds the raw-response panel's one `<details>`
-				 * with a bare `page.locator('details')`, on the strength of it being the only one on the
-				 * page. A second `<details>` here would turn every one of those into a strict-mode
-				 * violation instead of the element they're after.
-				 */}
-				<button
-					type="button"
-					aria-expanded={advancedOpen}
-					onClick={() => setAdvancedOpen((value) => !value)}
-					className="text-muted-foreground text-xs underline"
-				>
-					Advanced parameters
-				</button>
-				{advancedOpen ? (
-					<div className="mt-2 flex flex-col gap-2 rounded border px-2 py-2">
-						{PARAM_FIELDS.map((field) => {
-							const { min, max, step } = PARAM_RANGES[field];
-							const value = activeParams[field];
+					<div>
+						{/*
+						 * A button with `aria-expanded` rather than a native `<details>`. `TokenRow`'s own
+						 * expand control (`components/workspace/token-list/token-row.tsx`) took the same route for
+						 * the same reason: `e2e/workspace.spec.ts` finds the raw-response panel's one `<details>`
+						 * with a bare `page.locator('details')`, on the strength of it being the only one on the
+						 * page. A second `<details>` here would turn every one of those into a strict-mode
+						 * violation instead of the element they're after.
+						 */}
+						<button
+							type="button"
+							aria-expanded={advancedOpen}
+							onClick={() => setAdvancedOpen((value) => !value)}
+							className="text-muted-foreground text-xs underline"
+						>
+							Advanced parameters
+						</button>
+						{advancedOpen ? (
+							<div className="mt-2 flex flex-col gap-2 rounded border px-2 py-2">
+								{PARAM_FIELDS.map((field) => {
+									const { min, max, step } = PARAM_RANGES[field];
+									const value = activeParams[field];
 
-							return (
-								<label key={field} className="flex flex-col gap-1 text-xs">
-									<span className="flex items-center justify-between gap-2">
-										<span className="text-muted-foreground">{PARAM_LABELS[field]}</span>
-										<span className="font-mono">{value}</span>
-									</span>
-									<input
-										type="range"
-										// `aria-label` pins the accessible name to the field alone. Without it, the
-										// wrapping `<label>`'s content is also the readout span above, and a screen
-										// reader (and `getByLabel`) would read "Neutral tinting 0.25" as the name
-										// rather than the number moving `aria-valuetext` already carries.
-										aria-label={PARAM_LABELS[field]}
-										min={min}
-										max={max}
-										step={step}
-										value={value}
-										aria-valuetext={String(value)}
-										onChange={(event) => tuneParam(field, Number(event.target.value))}
-									/>
-								</label>
-							);
-						})}
+									return (
+										<label key={field} className="flex flex-col gap-1 text-xs">
+											<span className="flex items-center justify-between gap-2">
+												<span className="text-muted-foreground">{PARAM_LABELS[field]}</span>
+												<span className="font-mono">{value}</span>
+											</span>
+											<input
+												type="range"
+												// `aria-label` pins the accessible name to the field alone. Without it, the
+												// wrapping `<label>`'s content is also the readout span above, and a screen
+												// reader (and `getByLabel`) would read "Neutral tinting 0.25" as the name
+												// rather than the number moving `aria-valuetext` already carries.
+												aria-label={PARAM_LABELS[field]}
+												min={min}
+												max={max}
+												step={step}
+												value={value}
+												aria-valuetext={String(value)}
+												onChange={(event) => tuneParam(field, Number(event.target.value))}
+											/>
+										</label>
+									);
+								})}
+							</div>
+						) : null}
 					</div>
-				) : null}
-			</div>
+				</>
+			)}
 
 			{seed === null || record === null ? (
 				<>
