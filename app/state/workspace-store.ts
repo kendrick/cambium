@@ -8,7 +8,7 @@ import {
 	type UnrepairedEntry,
 	withContrastRepairs,
 } from '../../core/contrast/repair';
-import { type ScaleEngine, type ScaleEngineResult } from '../../core/scale-engine';
+import { type ScaleEngine, type ScaleEngineResult, type SchemeName } from '../../core/scale-engine';
 import {
 	BALANCED,
 	EXPRESSIVE,
@@ -16,6 +16,8 @@ import {
 	type InterpretationParams,
 } from '../../core/interpretation';
 import { repairPinsFor, type SeedPinPath } from '../../core/seed-pins';
+import type { Oklch } from '../../core/oklch';
+import { resolveScheme } from '../../core/resolve-scheme';
 import { buildTokenSet } from '../../core/semantic-layer';
 import {
 	applyOverrides,
@@ -231,8 +233,8 @@ type CommitRequest = {
  * disappearing behind the repair that ran before it. `unrepaired` comes from the repair pass on the
  * pre-override set: which pairs it couldn't reach is a question about pins, not about what the user
  * later did to an unrelated token. `repairs` is the repair pass's report, less any entry whose moved
- * step a user override replaced. The export archive's DESIGN.md reads it from here, so it doesn't
- * document a repair the user's own edit has since overwritten.
+ * step, foreground, or background a user override changed. The export archive's DESIGN.md reads it
+ * from here, so it doesn't document a move or a ratio the user's own edit has since overwritten.
  */
 export type ContrastState = {
 	report: ContrastEntry[];
@@ -566,11 +568,14 @@ function tokensFor(
 }
 
 /**
- * A user override that replaces a step the repair moved leaves the entry describing a colour the
- * final set no longer has, and DESIGN.md would ship that ratio next to different token files. The
- * repaired set is the reference rather than `entry.to`, since a step moved twice leaves an earlier
- * entry whose `to` never survived even with no override. Returns `repairs` itself when nothing
- * drops, so the store's `contrast.repairs` keeps its identity for subscribers that compare by it.
+ * DESIGN.md prints each entry's moved step and achieved ratio beside the exported tokens, so an
+ * entry is kept only while the final set paints what the repaired set did: the moved step itself,
+ * and both operands of its pair. An override on either operand (an edited primitive on the side the
+ * repair didn't move, or a re-aliased foreground or background) changes the ratio those tokens
+ * paint even when the moved step is untouched (PR #180 review). The repaired set is the reference
+ * rather than `entry.to` or `entry.achieved`, since a pair moved twice leaves an earlier entry whose
+ * figures never survived even with no override. Returns `repairs` itself when nothing drops, so the
+ * store's `contrast.repairs` keeps its identity for subscribers that compare by it.
  */
 function repairsStillHeld(
 	repairs: RepairEntry[],
@@ -579,14 +584,38 @@ function repairsStillHeld(
 ): RepairEntry[] {
 	if (final === repaired) return repairs;
 
-	const held = repairs.filter((entry) => {
-		const before = repaired.schemes[entry.scheme].primitives[entry.ramp]?.[entry.step - 1];
-		const after = final.schemes[entry.scheme].primitives[entry.ramp]?.[entry.step - 1];
+	const resolved = new Map<string, Record<string, Oklch>>();
+	const resolvedIn = (set: TokenSet, key: 'repaired' | 'final', scheme: SchemeName) => {
+		const cacheKey = `${key}:${scheme}`;
+		let colours = resolved.get(cacheKey);
 
-		return before && after && before.l === after.l && before.c === after.c && before.h === after.h;
+		if (!colours) {
+			colours = resolveScheme(set.schemes[scheme]);
+			resolved.set(cacheKey, colours);
+		}
+
+		return colours;
+	};
+
+	const held = repairs.filter((entry) => {
+		const before = resolvedIn(repaired, 'repaired', entry.scheme);
+		const after = resolvedIn(final, 'final', entry.scheme);
+
+		return (
+			sameColour(
+				repaired.schemes[entry.scheme].primitives[entry.ramp]?.[entry.step - 1],
+				final.schemes[entry.scheme].primitives[entry.ramp]?.[entry.step - 1],
+			) &&
+			sameColour(before[entry.foreground], after[entry.foreground]) &&
+			sameColour(before[entry.background], after[entry.background])
+		);
 	});
 
 	return held.length === repairs.length ? repairs : held;
+}
+
+function sameColour(a: Oklch | undefined, b: Oklch | undefined): boolean {
+	return a !== undefined && b !== undefined && a.l === b.l && a.c === b.c && a.h === b.h;
 }
 
 /**

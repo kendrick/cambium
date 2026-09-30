@@ -1600,16 +1600,24 @@ describe('the workspace store’s contrast repair (#8)', () => {
 	it('keeps the same repairs array across an override edit that reuses the cached repair', () => {
 		const { store } = openWorkspace();
 		const before = store.getState().contrast?.repairs;
-		const mutedAlias = store.getState().tokenSet?.schemes.light.semantic.muted?.alias;
+		// A token outside every repaired pair, so the edit leaves each entry's operands alone and
+		// nothing has cause to drop.
+		const operands = new Set(
+			(before ?? []).flatMap((entry) =>
+				entry.scheme === 'light' ? [entry.foreground, entry.background] : [],
+			),
+		);
+		const semantic = store.getState().tokenSet!.schemes.light.semantic;
+		const token = Object.keys(semantic).find((name) => !operands.has(name));
+		const alias = Object.values(semantic).find(
+			(entry) => token && entry.alias !== semantic[token]!.alias,
+		)?.alias;
 
-		if (!mutedAlias) throw new Error('expected "muted" to resolve in the light scheme');
+		if (!token || !alias) throw new Error('expected a light token outside every repaired pair');
 
-		store.getState().setOverride({
-			kind: 'alias',
-			scheme: 'light',
-			token: 'muted-foreground',
-			alias: mutedAlias,
-		});
+		store.getState().setOverride({ kind: 'alias', scheme: 'light', token, alias });
+
+		expect(store.getState().tokenSet!.schemes.light.semantic[token]!.alias).toBe(alias);
 
 		expect(store.getState().contrast?.repairs).toBe(before);
 	});
@@ -1651,6 +1659,82 @@ describe('the workspace store’s contrast repair (#8)', () => {
 			),
 		).toBe(false);
 		expect(after).toEqual(others);
+	});
+
+	// DESIGN.md prints each entry's pair and achieved ratio beside the exported tokens. An override on
+	// either operand changes the ratio those tokens paint even when the moved step is untouched, so
+	// the entry has to go with it (PR #180 review).
+	describe('drops a repair entry once an override changes either operand of its pair', () => {
+		it('when the primitive on the side the repair did not move is edited', () => {
+			const { store } = openWorkspace();
+			const before = store.getState().contrast?.repairs ?? [];
+			const target = before[0];
+
+			if (!target) throw new Error('expected the default seed to need at least one repair');
+
+			const scheme = store.getState().tokenSet!.schemes[target.scheme];
+			const otherSide = target.moved === 'foreground' ? target.background : target.foreground;
+			const alias = scheme.semantic[otherSide]!.alias;
+			const dot = alias.lastIndexOf('.');
+			const ramp = alias.slice(0, dot);
+			const step = Number(alias.slice(dot + 1));
+			const primitive = scheme.primitives[ramp]![step - 1]!;
+
+			expect(`${ramp}.${step}`).not.toBe(`${target.ramp}.${target.step}`);
+
+			store.getState().setOverride({
+				kind: 'primitive',
+				scheme: target.scheme,
+				ramp,
+				step,
+				l: primitive.l > 0.5 ? primitive.l - 0.25 : primitive.l + 0.25,
+				c: primitive.c,
+				h: primitive.h,
+			});
+
+			// The moved step is untouched, which is the case the review caught being kept.
+			expect(
+				store.getState().tokenSet!.schemes[target.scheme].primitives[target.ramp]![target.step - 1],
+			).toMatchObject(target.to);
+			expect(paintedRatio(store, target)).not.toBe(target.achieved);
+
+			const after = store.getState().contrast?.repairs ?? [];
+
+			expect(after.some((entry) => pairOf(entry) === pairOf(target))).toBe(false);
+		});
+
+		it('when the token on the moved side is re-aliased to another step', () => {
+			const { store } = openWorkspace();
+			const before = store.getState().contrast?.repairs ?? [];
+			const target = before[0];
+
+			if (!target) throw new Error('expected the default seed to need at least one repair');
+
+			const scheme = store.getState().tokenSet!.schemes[target.scheme];
+			const movedToken = target.moved === 'foreground' ? target.foreground : target.background;
+			const moved = scheme.primitives[target.ramp]![target.step - 1]!;
+			const elsewhere = scheme.primitives[target.ramp]!.find(
+				(candidate) => Math.abs(candidate.l - moved.l) > 0.2,
+			);
+
+			if (!elsewhere) throw new Error(`expected a distant step in ${target.ramp}`);
+
+			store.getState().setOverride({
+				kind: 'alias',
+				scheme: target.scheme,
+				token: movedToken,
+				alias: `${target.ramp}.${elsewhere.step}`,
+			});
+
+			expect(
+				store.getState().tokenSet!.schemes[target.scheme].primitives[target.ramp]![target.step - 1],
+			).toMatchObject(target.to);
+			expect(paintedRatio(store, target)).not.toBe(target.achieved);
+
+			const after = store.getState().contrast?.repairs ?? [];
+
+			expect(after.some((entry) => pairOf(entry) === pairOf(target))).toBe(false);
+		});
 	});
 
 	it('keeps the same repairs array when a primitive override lands on a step no repair moved', () => {
@@ -2230,3 +2314,21 @@ describe('selecting a preset reaches no network (#37)', () => {
 		},
 	);
 });
+
+/** A contrast pair as DESIGN.md names it: one scheme, one foreground on one background. */
+function pairOf(entry: { scheme: string; foreground: string; background: string }) {
+	return `${entry.scheme}:${entry.foreground}/${entry.background}`;
+}
+
+function paintedRatio(
+	store: ReturnType<typeof openWorkspace>['store'],
+	entry: { scheme: string; foreground: string; background: string },
+) {
+	const measured = checkContrast(store.getState().tokenSet!).find(
+		(candidate) => pairOf(candidate) === pairOf(entry),
+	);
+
+	if (!measured) throw new Error(`expected ${pairOf(entry)} to be measured`);
+
+	return measured.wcag;
+}
