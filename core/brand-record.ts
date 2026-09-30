@@ -155,8 +155,10 @@ export const RECORD_NAME_MAX_LENGTH = 100;
  * stored text, not a claim about URLs.
  *
  * `name` is what the person calls the brand in the library, trimmed. It's optional rather than
- * nullable, so a record with no name has exactly one spelling: the key is absent. Renaming is a
- * metadata-only write, so it moves `revision` like any other commit.
+ * nullable, so a record with no name has exactly one spelling: the key is absent. It's
+ * `exactOptional` because a plain `optional` also takes a `name` key holding `undefined`, which
+ * IndexedDB keeps and the JSON archive drops. Renaming is a metadata-only write, so it moves
+ * `revision` like any other commit.
  *
  * `incarnation` tells one life of an id from the next. Storage mints it on insert and carries it
  * through every commit, and no producer sets it. `RecordStore.put` refuses a write carrying an
@@ -176,7 +178,7 @@ export const BrandRecordSchema = z
 		schemaVersion: z.literal(SCHEMA_VERSION),
 		revision: z.number().int().positive(),
 		brandUrl: z.string().trim().min(1).max(BRAND_URL_MAX_LENGTH).nullable(),
-		name: z.string().trim().min(1).max(RECORD_NAME_MAX_LENGTH).optional(),
+		name: z.string().trim().min(1).max(RECORD_NAME_MAX_LENGTH).exactOptional(),
 		incarnation: z.uuid().optional(),
 		images: z.array(ReferenceImageSchema),
 		versions: z.array(BrandVersionSchema),

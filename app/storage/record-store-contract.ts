@@ -248,6 +248,15 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 			expect(await store.get(withSmuggledKey.id)).toBeNull();
 		});
 
+		// An unnamed record has one stored form, with no `name` key. Structured clone keeps an own
+		// `name: undefined`, so a store that took one would hold a spelling the archive can't carry.
+		it('rejects a record whose name key holds undefined', async () => {
+			const unnamedByValue = { ...makeRecord(), name: undefined };
+
+			await expect(store.put(unnamedByValue)).rejects.toThrow(Error);
+			expect(await store.get(unnamedByValue.id)).toBeNull();
+		});
+
 		// Storage decides the revision, not the caller. An insert starts at `FIRST_REVISION` whatever
 		// number the record arrived carrying, and each accepted commit moves it by one. A store that
 		// took the caller's number instead would let a record land at 7 in an empty store, and every

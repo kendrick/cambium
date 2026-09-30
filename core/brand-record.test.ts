@@ -619,6 +619,15 @@ describe('BrandRecordSchema name and incarnation', () => {
 		expect(result.error?.issues[0]?.path).toEqual(['name']);
 	});
 
+	// An own `name: undefined` would reach IndexedDB with the key present and leave the archive
+	// without it, so one unnamed record would have two spellings depending on who read it.
+	it('refuses a name key holding undefined', () => {
+		const result = BrandRecordSchema.safeParse({ ...record, name: undefined });
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['name']);
+	});
+
 	it('refuses a name longer than RECORD_NAME_MAX_LENGTH', () => {
 		const longest = 'a'.repeat(RECORD_NAME_MAX_LENGTH);
 
