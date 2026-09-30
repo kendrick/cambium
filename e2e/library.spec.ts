@@ -270,6 +270,69 @@ test('deleting a record removes it from the library and frees what it held', asy
 	await expect(usage).toHaveAttribute('data-storage-usage', String(measured));
 });
 
+type EstimateHold = { armed: boolean; held: boolean; release: (() => void) | null };
+
+/**
+ * Wraps `StorageManager.prototype.estimate` so that, once `estimateHold.armed` is set, the next call
+ * stays pending until the scenario calls `estimateHold.release`. Every library refresh awaits that
+ * call, so holding one lets a scenario make an earlier refresh settle after a later one.
+ */
+async function installEstimateHold(page: Page): Promise<void> {
+	await page.addInitScript(() => {
+		const proto = StorageManager.prototype;
+		const original = proto.estimate;
+		const hold: EstimateHold = { armed: false, held: false, release: null };
+		(window as unknown as { estimateHold: EstimateHold }).estimateHold = hold;
+
+		proto.estimate = function (this: StorageManager) {
+			const answer = original.call(this);
+			if (!hold.armed) return answer;
+
+			hold.armed = false;
+			hold.held = true;
+			return new Promise((resolve) => {
+				hold.release = () => resolve(answer);
+			});
+		};
+	});
+}
+
+const estimateHeld = (page: Page) =>
+	page.evaluate(() => (window as unknown as { estimateHold: EstimateHold }).estimateHold.held);
+
+test('a refresh overtaken by a later one leaves a deleted record deleted', async ({ page }) => {
+	await installEstimateHold(page);
+	const renamed = stored(uiWikipedia, { name: 'Alpha' });
+	const deleted = stored(photoWindow, { name: 'Bravo' });
+	await seedRows(page, [renamed, deleted]);
+
+	await page.evaluate(() => {
+		(window as unknown as { estimateHold: EstimateHold }).estimateHold.armed = true;
+	});
+
+	// The rename's write lands, then its refresh reads both rows and stalls on the held estimate.
+	const item = row(page, renamed.id);
+	await item.getByRole('button', { name: 'Rename Alpha' }).click();
+	await item.getByRole('textbox', { name: 'Name for Alpha' }).fill('Alpha Two');
+	await item.getByRole('button', { name: 'Save name' }).click();
+	await expect.poll(() => estimateHeld(page)).toBe(true);
+
+	await page.getByRole('button', { name: 'Delete Bravo' }).click();
+	await page.getByRole('dialog').getByRole('button', { name: 'Delete brand' }).click();
+	await expect(row(page, deleted.id)).toHaveCount(0);
+
+	await page.evaluate(() =>
+		(window as unknown as { estimateHold: EstimateHold }).estimateHold.release?.(),
+	);
+
+	// The rename form closes only once its refresh has settled, so from here the stale result has
+	// either landed or been dropped.
+	await expect(item.getByRole('textbox')).toHaveCount(0);
+	await expect(row(page, deleted.id)).toHaveCount(0);
+	await expect(item.locator('[data-library-name]')).toHaveText('Alpha Two');
+	expect((await readRows(page)).map((held) => held.id)).toEqual([renamed.id]);
+});
+
 test('deleting the last record brings back the first-run state', async ({ page }) => {
 	const only = stored(photoWindow, { name: 'Only' });
 	await seedRows(page, [only]);

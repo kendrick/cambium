@@ -72,9 +72,11 @@ export function RecordLibrary({ firstRun }: { firstRun?: ReactNode }) {
 	const headingId = useId();
 	const [listing, setListing] = useState<Listing>({ kind: 'loading' });
 	const live = useRef(true);
+	const latestRefresh = useRef(0);
 	const headingRef = useRef<HTMLHeadingElement>(null);
 
 	const refresh = useCallback(async () => {
+		const call = ++latestRefresh.current;
 		let next: Listing;
 
 		try {
@@ -89,7 +91,10 @@ export function RecordLibrary({ firstRun }: { firstRun?: ReactNode }) {
 			next = { kind: 'unavailable' };
 		}
 
-		if (live.current) setListing(next);
+		// Refreshes overlap, and the last to settle isn't always the last to start. A rename's refresh
+		// can read the rows before a delete and settle after the delete's refresh, which would put the
+		// deleted row back. So only the newest refresh's result lands.
+		if (live.current && call === latestRefresh.current) setListing(next);
 	}, []);
 
 	// Built on the copy the list read, so `put` refuses it if another tab wrote since.
