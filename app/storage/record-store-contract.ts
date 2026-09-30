@@ -420,7 +420,8 @@ export function testRecordStoreContract(createStore: () => RecordStore | Promise
 		 *
 		 * The self-computed revision above is the same limit reached by a caller that increments;
 		 * this one needs no increment at all. It stays dormant while every insert mints a fresh id,
-		 * which `components/landing/upload-form.tsx` does. The incarnation doesn't close this. A
+		 * which `save` in `components/landing/upload-form.tsx`, `importRecordArchive` and
+		 * `openDemoRecord` all do. The incarnation doesn't close this. A
 		 * caller's own inserted object carries none, and a write carrying none is allowed through to
 		 * the revision check, so an insert under a taken id still reads as a commit. Delete this test
 		 * if `put` gains a way to tell an insert from a commit, and assert the refusal in its place.

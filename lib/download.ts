@@ -7,7 +7,20 @@ import type { ExportArtifact } from '../core/export/artifacts';
  * the only thing that proves it fires, per `docs/agents/testing.md`'s "no browser tier in Vitest".
  */
 export function downloadFile({ filename, mediaType, contents }: ExportArtifact): void {
-	const url = URL.createObjectURL(new Blob([contents], { type: mediaType }));
+	downloadBlob(filename, new Blob([contents], { type: mediaType }));
+}
+
+/** For the export archive, whose bytes `buildExportArchive` has already produced. */
+export function downloadBytes(
+	filename: string,
+	mediaType: string,
+	bytes: Uint8Array<ArrayBuffer>,
+): void {
+	downloadBlob(filename, new Blob([bytes], { type: mediaType }));
+}
+
+function downloadBlob(filename: string, blob: Blob): void {
+	const url = URL.createObjectURL(blob);
 	const anchor = document.createElement('a');
 
 	anchor.href = url;

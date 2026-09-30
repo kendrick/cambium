@@ -224,7 +224,10 @@ test('the keyed path: upload, generate, edit, pin, and download', async ({ page 
 
 		await page.getByRole('tab', { name: 'Export' }).click();
 
-		const downloadButtons = page.getByRole('button', { name: /^Download / });
+		// The pane has a button per archive file plus one for the archive. This step reads only the two DTCG documents and the stylesheet, picked by name suffix for the same reason the lookups below are.
+		const downloadButtons = page.getByRole('button', {
+			name: /^Download (.+-)?(light\.tokens\.json|dark\.tokens\.json|tokens\.css)$/,
+		});
 		await expect(downloadButtons).toHaveCount(3);
 
 		const files: Record<string, string> = {};

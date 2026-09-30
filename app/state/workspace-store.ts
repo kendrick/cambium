@@ -3,8 +3,12 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { BrandRecord, BrandVersion } from '../../core/brand-record';
 import type { BrandSeed } from '../../core/brand-seed';
 import { checkContrast, type ContrastEntry } from '../../core/contrast/check';
-import { type UnrepairedEntry, withContrastRepairs } from '../../core/contrast/repair';
-import { type ScaleEngine, type ScaleEngineResult } from '../../core/scale-engine';
+import {
+	type RepairEntry,
+	type UnrepairedEntry,
+	withContrastRepairs,
+} from '../../core/contrast/repair';
+import { type ScaleEngine, type ScaleEngineResult, type SchemeName } from '../../core/scale-engine';
 import {
 	BALANCED,
 	EXPRESSIVE,
@@ -12,6 +16,8 @@ import {
 	type InterpretationParams,
 } from '../../core/interpretation';
 import { repairPinsFor, type SeedPinPath } from '../../core/seed-pins';
+import type { Oklch } from '../../core/oklch';
+import { resolveScheme } from '../../core/resolve-scheme';
 import { buildTokenSet } from '../../core/semantic-layer';
 import {
 	applyOverrides,
@@ -226,11 +232,14 @@ type CommitRequest = {
  * user override that re-breaks a pair a repair already fixed shows up as a failing entry instead of
  * disappearing behind the repair that ran before it. `unrepaired` comes from the repair pass on the
  * pre-override set: which pairs it couldn't reach is a question about pins, not about what the user
- * later did to an unrelated token.
+ * later did to an unrelated token. `repairs` is the repair pass's report, less any entry whose moved
+ * step, foreground, or background a user override changed. The export archive's DESIGN.md reads it
+ * from here, so it doesn't document a move or a ratio the user's own edit has since overwritten.
  */
 export type ContrastState = {
 	report: ContrastEntry[];
 	unrepaired: UnrepairedEntry[];
+	repairs: RepairEntry[];
 };
 
 export type WorkspaceState = {
@@ -490,6 +499,7 @@ const repairCache = new WeakMap<
 		pins: SeedPinPath[];
 		repaired: TokenSet;
 		unrepaired: UnrepairedEntry[];
+		repairs: RepairEntry[];
 	}
 >();
 
@@ -498,7 +508,7 @@ function repairedBase(
 	seed: BrandSeed,
 	params: InterpretationParams,
 	pins: SeedPinPath[],
-): { repaired: TokenSet; unrepaired: UnrepairedEntry[] } {
+): { repaired: TokenSet; unrepaired: UnrepairedEntry[]; repairs: RepairEntry[] } {
 	const cached = repairCache.get(derived);
 
 	if (
@@ -512,8 +522,8 @@ function repairedBase(
 
 	const base = buildTokenSet(derived.schemes, seed, params);
 	const pinned = repairPinsFor(seed, pins);
-	const { tokenSet, unrepaired } = withContrastRepairs(base, { pinned });
-	const result = { seed, params, pins, repaired: tokenSet, unrepaired };
+	const { tokenSet, unrepaired, report } = withContrastRepairs(base, { pinned });
+	const result = { seed, params, pins, repaired: tokenSet, unrepaired, repairs: report };
 
 	repairCache.set(derived, result);
 
@@ -540,13 +550,65 @@ function tokensFor(
 		return { tokenSet: null, overrideIssues: {}, contrast: null };
 	}
 
-	const { repaired, unrepaired } = repairedBase(derived, seed, params, pins);
+	const { repaired, unrepaired, repairs } = repairedBase(derived, seed, params, pins);
 	const { tokenSet, overrideIssues } =
 		Object.keys(overrides).length === 0
 			? { tokenSet: repaired, overrideIssues: {} }
 			: withOverrides(repaired, overrides);
 
-	return { tokenSet, overrideIssues, contrast: { report: checkContrast(tokenSet), unrepaired } };
+	return {
+		tokenSet,
+		overrideIssues,
+		contrast: {
+			report: checkContrast(tokenSet),
+			unrepaired,
+			repairs: repairsStillHeld(repairs, repaired, tokenSet),
+		},
+	};
+}
+
+/**
+ * DESIGN.md prints each entry's moved step and achieved ratio beside the exported tokens, so an entry is kept only while the final set paints what the repaired set did: the moved step itself, and both operands of its pair. An override on either operand (an edited primitive on the side the repair didn't move, or a re-aliased foreground or background) changes the ratio those tokens paint even when the moved step is untouched (PR #180 review). The repaired set is the reference rather than `entry.to` or `entry.achieved`, since a pair moved twice leaves an earlier entry whose figures never survived even with no override. Returns `repairs` itself when nothing drops, so the store's `contrast.repairs` keeps its identity for subscribers that compare by it.
+ */
+function repairsStillHeld(
+	repairs: RepairEntry[],
+	repaired: TokenSet,
+	final: TokenSet,
+): RepairEntry[] {
+	if (final === repaired) return repairs;
+
+	const resolved = new Map<string, Record<string, Oklch>>();
+	const resolvedIn = (set: TokenSet, key: 'repaired' | 'final', scheme: SchemeName) => {
+		const cacheKey = `${key}:${scheme}`;
+		let colours = resolved.get(cacheKey);
+
+		if (!colours) {
+			colours = resolveScheme(set.schemes[scheme]);
+			resolved.set(cacheKey, colours);
+		}
+
+		return colours;
+	};
+
+	const held = repairs.filter((entry) => {
+		const before = resolvedIn(repaired, 'repaired', entry.scheme);
+		const after = resolvedIn(final, 'final', entry.scheme);
+
+		return (
+			sameColour(
+				repaired.schemes[entry.scheme].primitives[entry.ramp]?.[entry.step - 1],
+				final.schemes[entry.scheme].primitives[entry.ramp]?.[entry.step - 1],
+			) &&
+			sameColour(before[entry.foreground], after[entry.foreground]) &&
+			sameColour(before[entry.background], after[entry.background])
+		);
+	});
+
+	return held.length === repairs.length ? repairs : held;
+}
+
+function sameColour(a: Oklch | undefined, b: Oklch | undefined): boolean {
+	return a !== undefined && b !== undefined && a.l === b.l && a.c === b.c && a.h === b.h;
 }
 
 /**

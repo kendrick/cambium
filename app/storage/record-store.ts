@@ -58,8 +58,9 @@ import { type BrandRecord, FIRST_REVISION } from '../../core/brand-record';
  * A write carrying no incarnation skips that check and goes on to the revision check. That is the
  * limit left open. Such a write can still commit over a recreated id or bring a deleted record back.
  * Two kinds of object carry none. One is the object an inserting caller built itself, since storage
- * mints the incarnation on the way in. Only `save` in `components/landing/upload-form.tsx` and
- * `importRecordArchive` hold one, and neither writes it twice. The other is any copy of a record
+ * mints the incarnation on the way in. Only `save` in `components/landing/upload-form.tsx`,
+ * `importRecordArchive` and `openDemoRecord` in `app/demo/open-demo-record.ts` hold one, and none
+ * of them writes it twice. The other is any copy of a record
  * stored before the field existed, read through `get`, `list` or `listStoredRows` in any tab, the
  * library's and the workspace's included. That record has no incarnation until its first commit
  * since the field arrived, which stamps it one.
@@ -140,9 +141,9 @@ export type RecordStore = {
  * separate `putIfUnchanged` method". A field on the record that marks an insert is another way.
  * `incarnation` isn't that field. A caller's own inserted object carries none, and a write carrying
  * none goes on to the revision check, so an insert under a taken id still reads as a commit. The
- * limit is dormant because the one product path that inserts, `save` in
- * `components/landing/upload-form.tsx`, mints a fresh id with `crypto.randomUUID()` on every call,
- * so no insert reuses an id. The contract suite pins both the changed insert and the identical
+ * limit is dormant because every product path that inserts (`save` in
+ * `components/landing/upload-form.tsx`, `importRecordArchive` and `openDemoRecord`) mints a fresh
+ * id on every call, so no insert reuses an id. The contract suite pins both the changed insert and the identical
  * resend as known limits.
  *
  * The history comparison does a job the revision cannot, which is why #67's rule stays on top of

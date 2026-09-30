@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 import type { Download, Page } from '@playwright/test';
+import { strFromU8, unzipSync } from 'fflate';
 
 import { DATABASE_NAME, RECORD_STORE_NAME } from '../app/storage/indexed-db-record-store';
 import {
@@ -14,10 +15,11 @@ import type { BrandSeed } from '../core/brand-seed';
 import { withContrastRepairs } from '../core/contrast/repair';
 import { toStylesheet } from '../core/css/stylesheet';
 import { serializeDtcg } from '../core/dtcg/serialize';
+import { exportArchiveEntries } from '../core/export/archive';
 import { exportArtifacts, type ExportArtifact } from '../core/export/artifacts';
 import { BALANCED } from '../core/interpretation';
 import { createOklchScaleEngine } from '../core/oklch-scale-engine';
-import { defaultSeedPins } from '../core/seed-pins';
+import { defaultSeedPins, repairPinsFor } from '../core/seed-pins';
 import { buildTokenSet } from '../core/semantic-layer';
 import { applyOverrides, type TokenOverride } from '../core/token-overrides';
 
@@ -60,11 +62,11 @@ if (!DERIVED.ok) {
 const RAW_TOKEN_SET = buildTokenSet(DERIVED.schemes, SEED, BALANCED);
 
 /**
- * The set the workspace store actually paints (`repairedBase` in `app/state/workspace-store.ts`):
- * derive, then repair contrast. `exportArtifacts` below runs on this token set and never on the
- * page's own copy, so a broken download can't grade itself against its own wrong answer.
+ * The set and the report the workspace store holds (`repairedBase` in `app/state/workspace-store.ts`): derive, then repair contrast with the store's own pinned set. One call gives both, so the DESIGN.md checked below documents the run the page paints. Everything expected here is built from these and never from the page's own copy, so a broken download can't grade itself against its own wrong answer.
  */
-const TOKEN_SET = withContrastRepairs(RAW_TOKEN_SET).tokenSet;
+const { tokenSet: TOKEN_SET, report: REPAIRS } = withContrastRepairs(RAW_TOKEN_SET, {
+	pinned: repairPinsFor(SEED, defaultSeedPins(SEED)),
+});
 
 /**
  * `core/export/artifacts.test.ts` documents this exact seed as one whose light `brand.1` moves
@@ -84,6 +86,55 @@ if (
  * corrupts `exportArtifacts`' own output can't grade itself as correct against itself.
  */
 const ADAPTER_ORACLE = { ...serializeDtcg(TOKEN_SET), css: toStylesheet(TOKEN_SET) };
+
+/**
+ * Every step repair moved, found by comparing the raw and repaired sets channel by channel rather than by reading `REPAIRS`. DESIGN.md has to document these, so the check below doesn't take the report's own word for what moved.
+ */
+const MOVED_STEPS = (['light', 'dark'] as const).flatMap((scheme) =>
+	Object.entries(RAW_TOKEN_SET.schemes[scheme].primitives).flatMap(([ramp, steps]) =>
+		steps.flatMap((before, index) => {
+			const after = TOKEN_SET.schemes[scheme].primitives[ramp]![index]!;
+
+			return before.l === after.l && before.c === after.c && before.h === after.h
+				? []
+				: [{ scheme, step: `${ramp}.${index + 1}` }];
+		}),
+	),
+);
+
+if (MOVED_STEPS.length === 0) {
+	throw new Error(
+		'fixture seed no longer moves a step under repair; DESIGN.md would say none were applied',
+	);
+}
+
+/** The rows under DESIGN.md's `## Contrast repairs` table, header and rule dropped, split into cells. */
+function repairRows(design: string): string[][] {
+	return design
+		.slice(design.indexOf('## Contrast repairs'))
+		.split('\n')
+		.filter((line) => line.startsWith('| '))
+		.slice(2)
+		.map((line) => line.slice(2, -2).split(' | '));
+}
+
+/** Every archive entry, computed here from the fixture rather than read back from the page. */
+const ENTRIES = exportArchiveEntries({ tokens: TOKEN_SET, seed: SEED, repairs: REPAIRS });
+
+/** #15's documented layout, typed out, with the name and type each file downloads as. */
+const ARCHIVE_FILES = [
+	['DESIGN.md', 'acme.example-DESIGN.md', 'text/markdown'],
+	['tokens/dark.tokens.json', 'acme.example-dark.tokens.json', 'application/design-tokens+json'],
+	['tokens/light.tokens.json', 'acme.example-light.tokens.json', 'application/design-tokens+json'],
+	['tokens/theme.css', 'acme.example-theme.css', 'text/css'],
+	['tokens/tokens.css', 'acme.example-tokens.css', 'text/css'],
+	['unbranded-ds/theme.dark.json', 'acme.example-theme.dark.json', 'application/json'],
+	['unbranded-ds/theme.light.json', 'acme.example-theme.light.json', 'application/json'],
+	['unbranded-ds/themes/theme/brand/dark.json', 'acme.example-dark.json', 'application/json'],
+	['unbranded-ds/themes/theme/brand/light.json', 'acme.example-light.json', 'application/json'],
+] as const;
+
+const ARCHIVE_PATHS = ARCHIVE_FILES.map(([path]) => path);
 
 /**
  * One record per scenario, so a scenario that mutates its own overrides through the token list
@@ -366,4 +417,146 @@ test('a download whose click throws still revokes its object URL, and the panel 
 			}),
 		)
 		.toBe(true);
+});
+
+test('lists every archive file with a preview of exactly the bytes its own download writes', async ({
+	page,
+}) => {
+	await openExportTab(page, buildRecord('acme.example'));
+	await spyOnBlobTypes(page);
+
+	for (const [path, filename, mediaType] of ARCHIVE_FILES) {
+		// oxlint-disable-next-line no-await-in-loop -- one disclosure and one download at a time
+		await page.getByText(path, { exact: true }).click();
+
+		const preview = page.locator(`[data-export-preview="${path}"]`);
+
+		// oxlint-disable-next-line no-await-in-loop
+		await expect(preview).toBeVisible();
+		// textContent, not toHaveText, which would normalise the whitespace the bytes carry.
+		// oxlint-disable-next-line no-await-in-loop
+		expect(await preview.evaluate((node) => node.textContent), path).toBe(ENTRIES[path]);
+
+		// oxlint-disable-next-line no-await-in-loop
+		const { download, bytes, blobType } = await downloadArtifact(page, filename);
+
+		expect(download.suggestedFilename(), path).toBe(filename);
+		expect(blobType, path).toBe(mediaType);
+		expect(bytes.equals(Buffer.from(ENTRIES[path]!, 'utf-8')), path).toBe(true);
+		// The requirement itself: the preview is exactly what this file's own download wrote.
+		// oxlint-disable-next-line no-await-in-loop
+		expect(bytes.toString('utf-8'), path).toBe(await preview.evaluate((node) => node.textContent));
+	}
+});
+
+test('downloads the complete archive, built in the page with no request, holding every file byte for byte', async ({
+	page,
+}) => {
+	await openExportTab(page, buildRecord('acme.example'));
+	await spyOnBlobTypes(page);
+
+	const requests: string[] = [];
+	page.on('request', (request) => {
+		if (!/^(blob|data):/.test(request.url())) requests.push(request.url());
+	});
+
+	const button = page.getByRole('button', {
+		name: 'Download acme.example-export.zip',
+		exact: true,
+	});
+	const [download] = await Promise.all([page.waitForEvent('download'), button.click()]);
+	const path = await download.path();
+
+	if (path === null) throw new Error('the archive download produced no saved file');
+
+	expect(download.suggestedFilename()).toBe('acme.example-export.zip');
+	expect(await lastBlobType(page)).toBe('application/zip');
+
+	// fflate's reader, never buildExportArchive, so the archive isn't graded by its own builder.
+	const unzipped = unzipSync(new Uint8Array(await readFile(path)));
+
+	expect(Object.keys(unzipped)).toEqual(ARCHIVE_PATHS);
+
+	for (const entry of ARCHIVE_PATHS) {
+		expect(strFromU8(unzipped[entry]!), entry).toBe(ENTRIES[entry]);
+	}
+
+	expect(JSON.parse(strFromU8(unzipped['tokens/light.tokens.json']!))).toEqual(
+		ADAPTER_ORACLE.light,
+	);
+	expect(JSON.parse(strFromU8(unzipped['tokens/dark.tokens.json']!))).toEqual(ADAPTER_ORACLE.dark);
+	expect(strFromU8(unzipped['tokens/tokens.css']!)).toBe(ADAPTER_ORACLE.css);
+
+	// The repairs reached the archive as the reader of DESIGN.md sees them: one row per moved step, under the right scheme, with the moved steps found by diffing the two sets rather than read off the report.
+	const design = strFromU8(unzipped['DESIGN.md']!);
+	const rows = repairRows(design);
+
+	expect(design).not.toContain('No repairs were applied.');
+	for (const { scheme, step } of MOVED_STEPS) {
+		expect(
+			rows.some(([rowScheme, , moved]) => rowScheme === scheme && moved === step),
+			`${scheme} ${step}`,
+		).toBe(true);
+	}
+
+	expect(requests).toEqual([]);
+});
+
+// The listing lags an edit behind `useDeferredValue` while the adapters rerun. A per-file download clicked inside that window has to write the edited tokens, as the archive does, not the stale listing's (PR #180 review).
+test('a per-file download clicked before the listing catches up with an edit still writes the edited tokens', async ({
+	page,
+}) => {
+	await openExportTab(page, buildRecord(null));
+
+	const override: TokenOverride = {
+		kind: 'alias',
+		scheme: 'light',
+		token: 'primary',
+		alias: 'brand.1',
+	};
+	const applied = applyOverrides(TOKEN_SET, [override]);
+	if (!applied.ok) throw new Error(`fixture override refused: ${JSON.stringify(applied.issues)}`);
+
+	const [expectedLight] = exportArtifacts(applied.tokenSet, { brandUrl: null });
+
+	await page.getByRole('button', { name: 'Edit semantic.primary', exact: true }).click();
+
+	const select = await page.getByLabel('primary alias', { exact: true }).elementHandle();
+	const button = await page
+		.getByRole('button', { name: 'Download light.tokens.json', exact: true })
+		.elementHandle();
+
+	if (!select || !button) throw new Error('expected the alias select and the download button');
+
+	// The edit and the click share one task, so the click lands after React commits the edit's urgent render (a microtask) and before the deferred listing's render (a scheduler task). The preview's `primary` at the click is the evidence the window was open rather than closed.
+	const [download, previewPrimary] = await Promise.all([
+		page.waitForEvent('download'),
+		page.evaluate(
+			async ([element, target]) => {
+				(element as HTMLSelectElement).value = 'brand.1';
+				element.dispatchEvent(new Event('change', { bubbles: true }));
+				await Promise.resolve();
+
+				const preview = document.querySelector('[data-export-preview="tokens/light.tokens.json"]');
+				const primary: unknown = JSON.parse(preview?.textContent ?? '{}')?.color?.semantic?.primary
+					?.$value;
+
+				(target as HTMLButtonElement).click();
+
+				return primary;
+			},
+			[select, button] as const,
+		),
+	]);
+
+	expect(previewPrimary).toBe('{color.primitive.brand.9}');
+
+	const path = await download.path();
+	if (path === null) throw new Error('the light download produced no saved file');
+	const bytes = await readFile(path);
+
+	expect(JSON.parse(bytes.toString('utf-8')).color.semantic.primary.$value).toBe(
+		'{color.primitive.brand.1}',
+	);
+	expect(bytes.equals(Buffer.from(expectedLight!.contents, 'utf-8'))).toBe(true);
 });

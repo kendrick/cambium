@@ -345,13 +345,18 @@ export function repairContrast(tokenSet: TokenSet, options: RepairOptions = {}):
 	return { overrides: [...moves.values()], unrepaired, report: finalReport };
 }
 
-export type ContrastRepairedTokenSet = { tokenSet: TokenSet; unrepaired: UnrepairedEntry[] };
+export type ContrastRepairedTokenSet = {
+	tokenSet: TokenSet;
+	unrepaired: UnrepairedEntry[];
+	report: RepairEntry[];
+};
 
 /**
- * Runs `repairContrast` and applies its overrides in one call, so every caller that wants the
- * repaired set itself—rather than the moves that produce it—builds it the same way. The workspace
- * store and both e2e fixtures go through here for that reason: a fixture that composed the two
- * calls on its own could drift from what the store actually paints.
+ * Runs `repairContrast` and applies its overrides in one call, returning the repaired set and the
+ * moves that produced it, so every caller builds the set the same way. The workspace store keeps
+ * both, and the export archive documents the moves in `DESIGN.md`. A caller that wants only the
+ * set, like both e2e fixtures, ignores `report` but still goes through here: a fixture that
+ * composed the two calls on its own could drift from what the store actually paints.
  *
  * `options` only ever forwards to `repairContrast`, so a caller with nothing to say about pins
  * stays on `defaultPins`, as the CLI does by passing no argument. The workspace store is the one
@@ -366,12 +371,12 @@ export function withContrastRepairs(
 	tokenSet: TokenSet,
 	options: RepairOptions = {},
 ): ContrastRepairedTokenSet {
-	const { overrides, unrepaired } = repairContrast(tokenSet, options);
+	const { overrides, unrepaired, report } = repairContrast(tokenSet, options);
 	const applied = applyOverrides(tokenSet, overrides);
 
 	if (!applied.ok) {
 		throw new Error(`contrast repair produced an override the base could not take: ${applied.key}`);
 	}
 
-	return { tokenSet: applied.tokenSet, unrepaired };
+	return { tokenSet: applied.tokenSet, unrepaired, report };
 }
