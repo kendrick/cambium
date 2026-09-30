@@ -19,6 +19,14 @@ const GeneratePanel = lazy(() =>
 	})),
 );
 
+// Lazy for the same reason. The library reaches `idb`, zod and the scale engine, and `/` has no
+// first-load room for any of them.
+const RecordLibrary = lazy(() =>
+	import('@/components/landing/record-library').then((module) => ({
+		default: module.RecordLibrary,
+	})),
+);
+
 /**
  * Four outcomes rather than two, because each one licenses a different sentence and the wrong
  * sentence here is expensive.
@@ -133,7 +141,14 @@ function LandingOutcome({ onKeyStored }: { onKeyStored: (stored: boolean) => voi
 	}, [recordId]);
 
 	if (!recordId) {
-		return <UploadForm onSaved={onSaved} />;
+		return (
+			<div className="flex w-full flex-col gap-10">
+				<Suspense fallback={null}>
+					<RecordLibrary />
+				</Suspense>
+				<UploadForm onSaved={onSaved} />
+			</div>
+		);
 	}
 
 	// Reading the record back rather than trusting the id in the address bar. A URL somebody pasted

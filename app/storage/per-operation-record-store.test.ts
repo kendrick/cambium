@@ -94,8 +94,8 @@ describe('createPerOperationRecordStore connection lifetime', () => {
 		);
 		const record = makeRecord();
 
-		await store.put(record);
-		expect(await store.get(record.id)).toEqual(record);
+		const stored = await store.put(record);
+		expect(await store.get(record.id)).toEqual(stored);
 
 		expect(await deleteReportsBlocked()).toBe(false);
 	});

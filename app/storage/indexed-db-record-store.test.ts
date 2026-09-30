@@ -21,6 +21,7 @@ import {
 	RECORD_STORE_NAME,
 	closeIndexedDbRecordStore,
 	createIndexedDbRecordStore,
+	listStoredRows,
 } from './indexed-db-record-store';
 import { testRecordStoreContract } from './record-store-contract';
 
@@ -112,7 +113,7 @@ describe('createIndexedDbRecordStore persistence', () => {
 	it('keeps a record and its images after the connection closes and another opens', async () => {
 		const record = makeRecordWithImage();
 		const store = await createIndexedDbRecordStore();
-		await store.put(record);
+		const stored = await store.put(record);
 
 		closeIndexedDbRecordStore(store);
 
@@ -124,8 +125,8 @@ describe('createIndexedDbRecordStore persistence', () => {
 
 		const reopened = await createIndexedDbRecordStore();
 
-		expect(await reopened.get(record.id)).toEqual(record);
-		expect(await reopened.list()).toEqual([record]);
+		expect(await reopened.get(record.id)).toEqual(stored);
+		expect(await reopened.list()).toEqual([stored]);
 	});
 
 	// Reading rejects rather than skipping or repairing. A mismatch that read as an empty list would
@@ -160,5 +161,56 @@ describe('createIndexedDbRecordStore persistence', () => {
 		await store.delete(record.id);
 
 		expect(persist).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * The library's read. `list` rejects on the first row that won't parse, which would hide every
+ * brand behind one saved by a different build.
+ */
+describe('listStoredRows', () => {
+	beforeEach(installFakeIndexedDb);
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('parses each row on its own and names the ones it cannot read', async () => {
+		const store = await createIndexedDbRecordStore();
+		const readable = await store.put(makeRecordWithImage());
+		closeIndexedDbRecordStore(store);
+
+		// Raw, because `put` is what refuses a row the schema rejects.
+		const seeding = await openDB(DATABASE_NAME);
+		const unreadableId = crypto.randomUUID();
+		await seeding.put(RECORD_STORE_NAME, {
+			...makeRecordWithImage(),
+			id: unreadableId,
+			schemaVersion: 10,
+		});
+		seeding.close();
+
+		const rows = await listStoredRows();
+
+		expect(rows).toHaveLength(2);
+		expect(rows).toContainEqual({ kind: 'readable', record: readable });
+		expect(rows).toContainEqual({ kind: 'unreadable', id: unreadableId });
+	});
+
+	it('resolves an empty list from a database nothing has written to', async () => {
+		await expect(listStoredRows()).resolves.toEqual([]);
+	});
+
+	// A connection left open would block the next tab's upgrade, and the e2e wipe.
+	it('closes its connection before it settles', async () => {
+		await listStoredRows();
+
+		const blocked = await new Promise<boolean>((resolve) => {
+			const request = indexedDB.deleteDatabase(DATABASE_NAME);
+			request.addEventListener('blocked', () => resolve(true));
+			request.addEventListener('success', () => resolve(false));
+		});
+
+		expect(blocked).toBe(false);
 	});
 });

@@ -153,3 +153,41 @@ export async function createIndexedDbRecordStore(): Promise<RecordStore> {
 export function closeIndexedDbRecordStore(store: RecordStore): void {
 	openConnections.get(store)?.close();
 }
+
+export type StoredRow =
+	| { kind: 'readable'; record: BrandRecord }
+	| { kind: 'unreadable'; id: string };
+
+/**
+ * Every stored row, parsed one at a time. A row that fails `BrandRecordSchema` comes back as
+ * `unreadable`, named by its key.
+ *
+ * `list` parses the whole set and rejects on the first failure, so one record saved by a different
+ * build would hide every other brand from the library. That is right for `RecordStore` and wrong
+ * here.
+ *
+ * Sits beside `RecordStore` like `closeIndexedDbRecordStore`, because #36 rules out widening the
+ * interface. Opens its own connection and closes it before settling, so an idle library page never
+ * blocks another tab's upgrade or a database delete.
+ */
+export async function listStoredRows(): Promise<StoredRow[]> {
+	const store = await createIndexedDbRecordStore();
+	const database = openConnections.get(store);
+
+	if (!database) throw new Error('createIndexedDbRecordStore registered no connection');
+
+	try {
+		const tx = database.transaction(RECORD_STORE_NAME, 'readonly');
+		const [keys, rows] = await Promise.all([tx.store.getAllKeys(), tx.store.getAll(), tx.done]);
+
+		return rows.map((row, index): StoredRow => {
+			const parsed = BrandRecordSchema.safeParse(row);
+
+			return parsed.success
+				? { kind: 'readable', record: parsed.data }
+				: { kind: 'unreadable', id: String(keys[index]) };
+		});
+	} finally {
+		closeIndexedDbRecordStore(store);
+	}
+}

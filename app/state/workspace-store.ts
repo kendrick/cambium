@@ -130,8 +130,10 @@ export class CommitAbandonedError extends Error {
  * copy loaded through a separate `get` is a different object holding the same old history and
  * nothing here recognises it. It still carries the revision it was read at, so `put` refuses it,
  * and refuses a stale commit from a second tab on the same grounds. Both hold while the record is
- * still stored. After a `delete`, `put` takes a stale commit as an insert, as the module docblock
- * in `app/storage/record-store.ts` describes.
+ * still stored. After a `delete`, `put` refuses a stale copy that carries an incarnation, since
+ * taking it as an insert would bring the record back. A copy with no incarnation, read from a
+ * record stored before the field existed and not committed since, still goes in as an insert. The
+ * module docblock in `app/storage/record-store.ts` calls that the limit left open.
  *
  * Typed for the same reason as `RecordStampedAheadError`: the caller has a specific recovery, which
  * is to reload the record and commit again, and it can only choose it if it can tell this apart
@@ -355,17 +357,21 @@ export type WorkspaceStoreOptions = {
 	 * the engine statically instead was 196.5 kB. Part of that 7.8 kB gap was culori, which this
 	 * store now brings on its own, so the gap overstates what a static engine import adds today.
 	 *
-	 * `pnpm test:bundle` cannot measure it either way. The landing route is a Server Component today,
-	 * so the engine runs at build time, reaches no client chunk, and the budget stays green no matter
-	 * what this file imports. The guard is the import list, in `workspace-store.test.ts`.
+	 * `pnpm test:bundle`'s first-load figure can't catch a static engine import here either.
+	 * `app/page.tsx` stays a Server Component, and the engine reaches `/` only through lazy client
+	 * chunks: `record-library.tsx` creates one to paint each brand's palette, and the generate panel
+	 * imports it dynamically. Those chunks count toward the total-JS budget, not first load, so the
+	 * guard is the import list, in `workspace-store.test.ts`.
 	 *
-	 * #8's contrast repair rides the same lazy chunk. `core/contrast/check.ts` reaches `chroma-js`'s
-	 * APCA module, but this store is only ever reached through the same dynamic
-	 * `import('../../app/state/workspace-store')` in `workspace-route.tsx` that already carries the
-	 * engine and culori, and the landing route never imports this file at all. Nothing about that
-	 * import graph is unconditional the way `engine` is, so it needs no injection seam of its own.
-	 * `pnpm test:bundle`'s total-JS budget is what catches `chroma-js` growing the shipped bundle,
-	 * since first load stays unaffected either way.
+	 * #8's contrast repair rides the same lazy chunks. `core/contrast/check.ts` reaches `chroma-js`'s
+	 * APCA module, and each route reaches this store only through a dynamic import that also loads
+	 * the engine. The workspace route uses `import('../../app/state/workspace-store')` in
+	 * `workspace-route.tsx`. The landing route has two paths. `landing-route.tsx` loads
+	 * `record-library.tsx`, which imports `tokenSetForVersion` from here, through `lazy()`. The lazy
+	 * generate panel loads `app/generation/generate.ts`, which imports this store, by dynamic import.
+	 * Since no first-load chunk imports this file, `chroma-js` stays out of first load without an
+	 * injection seam of its own. `pnpm test:bundle`'s total-JS budget is what catches `chroma-js`
+	 * growing the shipped bundle.
 	 */
 	engine: ScaleEngine;
 	now?: () => string;
@@ -597,6 +603,17 @@ function workspaceFor(
 		draftPins: pins,
 		...derivation(engine, draftSeed, PRESET_PARAMS[preset], overrides, pins),
 	};
+}
+
+/**
+ * The token set a version shows once the workspace opens it: derived, repaired, then the version's
+ * own overrides. The library's palette strip calls this instead of composing those steps itself, so
+ * the strip and the workspace can't disagree about a record's colours (the divergent mirror in
+ * `docs/agents/testing.md`'s #75 row). Null where the workspace shows no tokens either: no seed, or
+ * a seed the engine refuses.
+ */
+export function tokenSetForVersion(engine: ScaleEngine, version: BrandVersion): TokenSet | null {
+	return workspaceFor(engine, version).tokenSet;
 }
 
 function versionAt(record: BrandRecord, ordinal: number | null): BrandVersion | null {

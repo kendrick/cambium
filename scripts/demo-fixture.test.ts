@@ -247,6 +247,7 @@ describe('fixture:demo CLI', () => {
 			const record = JSON.parse(await readFile(join(outDir, 'source.json'), 'utf8'));
 
 			expect(() => BrandRecordSchema.parse(record)).not.toThrow();
+			expect(record).not.toHaveProperty('incarnation');
 			expect(record.images).toHaveLength(1);
 			expect(record.images[0].tag).toBe('photo');
 			expect(record.versions).toHaveLength(1);

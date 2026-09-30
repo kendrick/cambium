@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { BrandRecordSchema, SCHEMA_VERSION } from './brand-record';
+import { BrandRecordSchema, RECORD_NAME_MAX_LENGTH, SCHEMA_VERSION } from './brand-record';
 import { derived } from './provenance';
 import type { TokenOverride } from './token-overrides';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
@@ -591,5 +591,61 @@ describe('BrandRecordSchema pins', () => {
 
 		expect(result.success).toBe(false);
 		expect(result.error?.issues[0]?.path).toEqual(['versions', 0, 'pins', 0]);
+	});
+});
+
+describe('BrandRecordSchema name and incarnation', () => {
+	const INCARNATION = '0b6f3f7e-5f0a-4c1e-9a53-2f6d1c1e8a41';
+
+	// Every record saved before #39 carries neither field, and ruling A2 keeps them readable at 1.
+	it('parses a record carrying neither field', () => {
+		const parsed = BrandRecordSchema.parse(record);
+
+		expect(parsed).not.toHaveProperty('name');
+		expect(parsed).not.toHaveProperty('incarnation');
+	});
+
+	it('keeps a name, trimmed', () => {
+		expect(BrandRecordSchema.parse({ ...record, name: '  Acme Coffee  ' }).name).toBe(
+			'Acme Coffee',
+		);
+	});
+
+	// Clearing a name drops the key, so an empty string can only be a writer that forgot to.
+	it.each(['', '   '])('refuses the name %j', (name) => {
+		const result = BrandRecordSchema.safeParse({ ...record, name });
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['name']);
+	});
+
+	// An own `name: undefined` would reach IndexedDB with the key present and leave the archive
+	// without it, so one unnamed record would have two spellings depending on who read it.
+	it('refuses a name key holding undefined', () => {
+		const result = BrandRecordSchema.safeParse({ ...record, name: undefined });
+
+		expect(result.success).toBe(false);
+		expect(result.error?.issues[0]?.path).toEqual(['name']);
+	});
+
+	it('refuses a name longer than RECORD_NAME_MAX_LENGTH', () => {
+		const longest = 'a'.repeat(RECORD_NAME_MAX_LENGTH);
+
+		expect(BrandRecordSchema.safeParse({ ...record, name: longest }).success).toBe(true);
+		expect(BrandRecordSchema.safeParse({ ...record, name: `${longest}a` }).success).toBe(false);
+	});
+
+	it('keeps an incarnation that is a uuid and refuses one that is not', () => {
+		expect(BrandRecordSchema.parse({ ...record, incarnation: INCARNATION }).incarnation).toBe(
+			INCARNATION,
+		);
+		expect(BrandRecordSchema.safeParse({ ...record, incarnation: 'first' }).success).toBe(false);
+	});
+
+	it('takes both fields without moving the schema version', () => {
+		const parsed = BrandRecordSchema.parse({ ...record, name: 'Acme', incarnation: INCARNATION });
+
+		expect(parsed.schemaVersion).toBe(1);
+		expect(SCHEMA_VERSION).toBe(1);
 	});
 });

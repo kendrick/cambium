@@ -7,6 +7,9 @@ import { type BrandRecord, BrandRecordSchema } from './brand-record';
  * each image's `downscaled` in `record.json` holding that path instead of the data URL. Images go
  * in as decoded bytes, which saves the third that base64 adds.
  *
+ * `record.json` carries every field the record does, `name` and `incarnation` included. Import
+ * drops the incarnation (`app/storage/record-import.ts`), because an imported record is a new one.
+ *
  * Everything here runs on `Uint8Array`, so the browser can build and read an archive with no
  * server, and the headless CLI can too.
  */

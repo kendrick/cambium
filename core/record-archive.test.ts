@@ -492,6 +492,28 @@ function reverseKeys(value: unknown): unknown {
 	return Object.fromEntries(entries.reverse());
 }
 
+// Assigning `undefined` to a `process.env` key stores the string "undefined", and Node reads that
+// as an unknown zone and runs UTC, so every later test in the worker would inherit it.
+function restoreTimeZone(original: string | undefined): void {
+	if (original === undefined) delete process.env.TZ;
+	else process.env.TZ = original;
+}
+
+describe('restoreTimeZone', () => {
+	it('puts an unset TZ back to unset rather than to the string "undefined"', () => {
+		const original = process.env.TZ;
+
+		try {
+			process.env.TZ = 'Asia/Tokyo';
+			restoreTimeZone(undefined);
+
+			expect('TZ' in process.env).toBe(false);
+		} finally {
+			restoreTimeZone(original);
+		}
+	});
+});
+
 describe('serializeRecord', () => {
 	it('writes record.json plus one images/<index>.<ext> entry per image, and nothing else', () => {
 		const entries = unzipSync(serializeRecord(record));
@@ -545,7 +567,7 @@ describe('serializeRecord', () => {
 
 			expect(west).toEqual(east);
 		} finally {
-			process.env.TZ = original;
+			restoreTimeZone(original);
 		}
 	});
 
@@ -1111,5 +1133,38 @@ describe('record-archive purity', () => {
 		const result = deserializeRecord(serializeRecord(record));
 
 		expect(result.ok).toBe(true);
+	});
+});
+
+describe('name and incarnation', () => {
+	const named: BrandRecord = {
+		...record,
+		name: 'Acme Coffee',
+		incarnation: '0b6f3f7e-5f0a-4c1e-9a53-2f6d1c1e8a41',
+	};
+
+	// Read out of record.json directly, since a later version opening this archive reads the JSON,
+	// not the schema that wrote it.
+	it('writes both into record.json', () => {
+		const json = JSON.parse(strFromU8(unzipSync(serializeRecord(named))['record.json']!));
+
+		expect(json.name).toBe('Acme Coffee');
+		expect(json.incarnation).toBe(named.incarnation);
+	});
+
+	it('reads both back', () => {
+		const result = deserializeRecord(serializeRecord(named));
+		if (!result.ok) throw new Error(result.error.message);
+
+		expect(result.record).toEqual(named);
+	});
+
+	// Archives exported before #39 carry neither key. They have to keep opening.
+	it('leaves both out of an archive of a record that has neither, and reads it back', () => {
+		const json = JSON.parse(strFromU8(unzipSync(serializeRecord(record))['record.json']!));
+
+		expect(json).not.toHaveProperty('name');
+		expect(json).not.toHaveProperty('incarnation');
+		expect(deserializeRecord(serializeRecord(record))).toEqual({ ok: true, record });
 	});
 });

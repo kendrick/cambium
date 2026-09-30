@@ -313,7 +313,10 @@ async function main() {
 	// A second parse right before the bytes hit disk, matching the plan's decision: `put` already
 	// parsed on the way in, but this is the one line standing between a bug in that return path and
 	// an invalid record reaching a file.
-	const finalRecord = BrandRecordSchema.parse(saved.record);
+	// A fixture is a template for a new record, like an imported archive: storage mints the
+	// `incarnation` on insert and refuses an insert that carries one.
+	const { incarnation: _incarnation, ...template } = saved.record;
+	const finalRecord = BrandRecordSchema.parse(template);
 	const stem = basename(imagePath, extname(imagePath));
 	const recordPath = `${outDir}/${stem}.json`;
 	const rawPath = `${outDir}/${stem}.raw.json`;

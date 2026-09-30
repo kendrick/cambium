@@ -405,7 +405,9 @@ describe('the workspace store', () => {
 			tokenSet: null,
 			scaleEngine: OKLCH_SCALE_ENGINE_ID,
 		});
-		expect(recordStore.puts).toEqual([next]);
+		// `puts` holds what the workspace proposed. The record was never stored, so storage minted the
+		// incarnation `next` carries, and the proposal had none to send.
+		expect(recordStore.puts).toEqual([{ ...next, incarnation: undefined }]);
 		expect(store.getState().activeOrdinal).toBe(2);
 	});
 

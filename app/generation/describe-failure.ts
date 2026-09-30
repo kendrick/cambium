@@ -1,5 +1,6 @@
 import type { SeedParseIssue } from '../../core/parse-seed';
 import type { SeedRepair } from '../readers/anthropic-reader';
+import { StaleRecordWriteError } from '../storage/record-store';
 
 import type { GenerationFailure, GenerationFailureKind, ReaderFailure } from './generate';
 
@@ -161,6 +162,22 @@ export function describeFailure(
 				...withRequestId(failure.requestId),
 			};
 		case 'stale-record-write':
+			// `GeneratePanel`'s save-again re-reads the record by id before it commits. Once another tab
+			// deletes the record, that read finds nothing, so the button would only swap this message for
+			// the unexpected-failure one.
+			if (
+				failure.error instanceof StaleRecordWriteError &&
+				failure.error.incarnation === 'deleted'
+			) {
+				return {
+					kind: failure.kind,
+					message:
+						"The new version is ready, but this brand was deleted in another tab or window, so there's no saved copy to add it to.",
+					recovery: 'none',
+					...withRequestId(failure.requestId),
+				};
+			}
+
 			return {
 				kind: failure.kind,
 				message:
