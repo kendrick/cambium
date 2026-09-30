@@ -492,6 +492,28 @@ function reverseKeys(value: unknown): unknown {
 	return Object.fromEntries(entries.reverse());
 }
 
+// Assigning `undefined` to a `process.env` key stores the string "undefined", and Node reads that
+// as an unknown zone and runs UTC, so every later test in the worker would inherit it.
+function restoreTimeZone(original: string | undefined): void {
+	if (original === undefined) delete process.env.TZ;
+	else process.env.TZ = original;
+}
+
+describe('restoreTimeZone', () => {
+	it('puts an unset TZ back to unset rather than to the string "undefined"', () => {
+		const original = process.env.TZ;
+
+		try {
+			process.env.TZ = 'Asia/Tokyo';
+			restoreTimeZone(undefined);
+
+			expect('TZ' in process.env).toBe(false);
+		} finally {
+			restoreTimeZone(original);
+		}
+	});
+});
+
 describe('serializeRecord', () => {
 	it('writes record.json plus one images/<index>.<ext> entry per image, and nothing else', () => {
 		const entries = unzipSync(serializeRecord(record));
@@ -545,7 +567,7 @@ describe('serializeRecord', () => {
 
 			expect(west).toEqual(east);
 		} finally {
-			process.env.TZ = original;
+			restoreTimeZone(original);
 		}
 	});
 
