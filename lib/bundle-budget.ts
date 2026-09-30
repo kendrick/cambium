@@ -26,9 +26,15 @@
  * #29 the DTCG and stylesheet adapters the chunk doesn't load yet, #25 an editor for every seed
  * field. Each PR states its measured delta. First-load stays at 200 kB.
  *
+ * Total rose again, from 500 kB to 530 kB, for wave 2 (ADR-0009). `main` measured 476.3 kB, and
+ * #40 and #158 merged measure 513.4 kB. #158's 17.9 kB is mostly a second copy of the generate
+ * panel and its nested chunks, because Turbopack builds one chunk tree per dynamic-import path and
+ * the landing and the workspace each lazy-load the panel. The merged build has about 16.6 kB of
+ * headroom under 530 kB. First-load stays at 200 kB.
+ *
  * These live in TypeScript rather than JSON so they are typechecked, greppable, and can carry
  * this comment.
  */
 export const FIRST_LOAD_BUDGET_BYTES = 200_000;
 
-export const TOTAL_JS_BUDGET_BYTES = 500_000;
+export const TOTAL_JS_BUDGET_BYTES = 530_000;

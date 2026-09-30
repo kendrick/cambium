@@ -658,8 +658,11 @@ test('a saved record links to its workspace, which opens reporting no versions y
 	// resolves at all—nothing below is `<dl>`, a token row, or a `<details>` either. This asserts
 	// the shell itself actually mounted for this record before reading what it left out: the rail
 	// is the structural marker `components/workspace/shell.tsx` always renders once a record loads,
-	// with or without versions.
-	await expect(page.getByRole('complementary', { name: 'Seed and tokens' })).toBeVisible();
+	// with or without versions. This record has an image and no version, so the rail also holds
+	// the First version section and is named for all three.
+	await expect(
+		page.getByRole('complementary', { name: 'Seed, first version and tokens', exact: true }),
+	).toBeVisible();
 
 	// No versions yet: `components/workspace/seed-rail.tsx` renders no `<dl>` when the seed is null,
 	// `components/workspace/token-list.tsx` renders no list rows when `derived` is null, and
@@ -761,4 +764,45 @@ test('the output section is headed by an h2', async ({ page }) => {
 	await expect(
 		page.getByRole('region', { name: 'Output' }).getByRole('heading', { level: 2, name: 'Output' }),
 	).toBeVisible();
+});
+
+/**
+ * The rail has to be on screen before absence means anything: every assertion below also passes
+ * while `WorkspaceRoute` is still on its loading state.
+ */
+async function openSettledWorkspace(page: Page, record: BrandRecord): Promise<void> {
+	await seedWorkspaceRecord(page, record);
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+	await expect(page.getByRole('region', { name: 'Seed' })).toBeVisible();
+}
+
+test('a record with no versions renders no preset select and no parameter sliders', async ({
+	page,
+}) => {
+	await openSettledWorkspace(page, buildEmptyRecord());
+
+	await expect(page.getByLabel('Interpretation')).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Advanced parameters' })).toHaveCount(0);
+});
+
+// Separates "no seed" from "no versions": a rail keyed on `versions.length === 0` passes the
+// scenario above and fails this one. `BrandVersionSchema.seed` is nullable, so this record is valid.
+test('a version whose seed is null renders no preset select either', async ({ page }) => {
+	const record = buildRecordWithOneVersion();
+	const [version] = record.versions;
+	if (!version) throw new Error('the fixture record carries no version');
+	record.versions = [{ ...version, seed: null, pins: [] }];
+
+	await openSettledWorkspace(page, BrandRecordSchema.parse(record));
+
+	await expect(page.getByLabel('Interpretation')).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Advanced parameters' })).toHaveCount(0);
+});
+
+test('a record with a version still renders the preset select', async ({ page }) => {
+	await openSettledWorkspace(page, buildRecordWithOneVersion());
+
+	// By value, not by option text: #159 changes the labels, not the values.
+	await expect(page.getByLabel('Interpretation')).toBeVisible();
+	await expect(page.getByLabel('Interpretation')).toHaveValue('balanced');
 });

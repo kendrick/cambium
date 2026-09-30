@@ -6,7 +6,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { RECORD_PARAM } from '@/components/stored-record';
 import { Button } from '@/components/ui/button';
 
-import type { ReferenceImage } from '../../../core/brand-record';
+import type { BrandRecord, ReferenceImage } from '../../../core/brand-record';
 import type { CostEstimate, ImageDimensions } from '../../../app/generation/cost-estimate';
 import type { FailureDescriptor } from '../../../app/generation/describe-failure';
 import type { HeldSeed } from '../../../app/generation/generate';
@@ -22,6 +22,12 @@ export type GeneratePanelProps = {
 	images: ReferenceImage[];
 	/** Told whether a key is now in session storage, so the route's indicator stays true. */
 	onKeyStored: (stored: boolean) => void;
+	/**
+	 * Takes the committed record instead of the default push to its workspace. The workspace passes
+	 * this because pushing the URL it's already on reruns nothing: `WorkspaceRoute` reads a record
+	 * once per id, so the new version would stay hidden until a reload.
+	 */
+	onGenerated?: (record: BrandRecord) => void;
 };
 
 /**
@@ -80,7 +86,7 @@ async function measure(dataUrl: string): Promise<{ width: number; height: number
 	}
 }
 
-export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelProps) {
+export function GeneratePanel({ recordId, images, onKeyStored, onGenerated }: GeneratePanelProps) {
 	const router = useRouter();
 	const [estimate, setEstimate] = useState<Estimate>({ kind: 'pending' });
 	const [running, setRunning] = useState(false);
@@ -93,7 +99,8 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 	 * next render, so two clicks in one tick would both start a run, and the second would commit a
 	 * second version behind the first. This flips synchronously.
 	 *
-	 * Left set after a success, because the route is navigating away and a version already landed.
+	 * Left set after a success, because the panel is on its way out: the landing route navigates away,
+	 * and the workspace opens the new version, which unmounts it. A version already landed either way.
 	 */
 	const inFlight = useRef(false);
 
@@ -105,7 +112,8 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 	 */
 	const [abort, setAbort] = useState<AbortController | null>(null);
 
-	// A run that finishes after the person left the page mustn't drag them to the workspace.
+	// A run that finishes after the person left the page mustn't drag them to the workspace, or hand a
+	// record to one that's gone.
 	const mounted = useRef(true);
 	useEffect(() => {
 		mounted.current = true;
@@ -272,7 +280,10 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 			}
 
 			if (result.ok) {
-				if (mounted.current) router.push(`/workspace?${RECORD_PARAM}=${result.record.id}`);
+				if (mounted.current) {
+					if (onGenerated) onGenerated(result.record);
+					else router.push(`/workspace?${RECORD_PARAM}=${result.record.id}`);
+				}
 				return;
 			}
 
