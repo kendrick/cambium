@@ -806,3 +806,74 @@ test('a record with a version still renders the preset select', async ({ page })
 	await expect(page.getByLabel('Interpretation')).toBeVisible();
 	await expect(page.getByLabel('Interpretation')).toHaveValue('balanced');
 });
+
+/**
+ * Names of the tab lists in the workspace's own chrome. The preview's sample gallery renders a
+ * "Sample range" tab list of its own, which is the consumer's UI rather than the workspace's, so
+ * anything inside `[data-preview]` is skipped.
+ */
+async function workspaceTabLists(page: Page): Promise<string[]> {
+	return page
+		.locator('main [role="tablist"]')
+		.evaluateAll((lists) =>
+			lists
+				.filter((list) => !list.closest('[data-preview]'))
+				.map((list) => list.getAttribute('aria-label') ?? ''),
+		);
+}
+
+type Box = { x: number; y: number; width: number; height: number };
+
+function rounded({ x, y, width, height }: Box): Box {
+	return {
+		x: Math.round(x),
+		y: Math.round(y),
+		width: Math.round(width),
+		height: Math.round(height),
+	};
+}
+
+/**
+ * `components/workspace/shell.tsx`'s desktop layout at 1440 × 900, measured on 06ec569 before
+ * #157 rebuilt the narrow layout. #157 had to leave this one alone, so the boxes come from the
+ * unchanged tree, not from the grid classes that produce them: a figure worked out from those
+ * classes would only check the code against itself. All four are set by the `h-dvh` grid and the
+ * closed `<details>`, not by what the columns hold.
+ */
+const DESKTOP_LAYOUT_BEFORE_157 = {
+	rail: { x: 24, y: 24, width: 384, height: 808 },
+	output: { x: 432, y: 24, width: 984, height: 808 },
+	rawResponse: { x: 24, y: 856, width: 1392, height: 20 },
+	documentHeight: 900,
+};
+
+test.describe('at 1440 × 900', () => {
+	test.use({ viewport: { width: 1440, height: 900 } });
+
+	test('the layout is the one from before the phone tab set, with no workspace-level tab list', async ({
+		page,
+	}) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+		await expect(
+			page.getByRole('region', { name: 'Tokens' }).getByRole('listitem').first(),
+		).toBeVisible();
+		await expect(page.locator('[data-preview]')).toBeVisible();
+		await page.evaluate(() => document.fonts.ready);
+
+		const measured = {
+			rail: rounded(await requireBox(page.getByRole('complementary', { name: 'Seed and tokens' }))),
+			output: rounded(await requireBox(page.getByRole('region', { name: 'Output' }))),
+			rawResponse: rounded(await requireBox(page.locator('details'))),
+			documentHeight: await page.evaluate(() => document.documentElement.scrollHeight),
+		};
+
+		expect(measured).toEqual(DESKTOP_LAYOUT_BEFORE_157);
+		expect(await workspaceTabLists(page)).toEqual(['Output']);
+		// The list keeps scrolling inside its own column here. Only the narrow layout hands that to
+		// the page.
+		await expect(page.getByRole('region', { name: 'Tokens' })).toHaveCSS('overflow-y', 'auto');
+	});
+});
