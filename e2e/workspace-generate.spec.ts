@@ -171,6 +171,52 @@ test('a record with no versions generates its first version from the workspace, 
 	).toBeVisible();
 });
 
+test('a first-version generate still lands in the workspace when the viewport crosses md while the request is in flight', async ({
+	page,
+}) => {
+	await serveFontTable(page);
+	const recordId = await saveOneRecord(page);
+
+	// A phone rotated mid-request: it starts under 768px, where the Seed tab holds Generate.
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.goto(`/workspace?record=${recordId}`);
+	await waitForGenerateReady(page);
+
+	const hold: { release?: () => void } = {};
+	const held = new Promise<void>((resolve) => {
+		hold.release = resolve;
+	});
+	const sent = await mockAnthropic(page, async (body) => {
+		await held;
+		return { status: 200, body: successResponseBody(imageIdFromRequest(body)) };
+	});
+
+	await generateWithFreshKey(page, TEST_KEY);
+	await expect.poll(() => sent.length).toBe(1);
+
+	// Two frames after the resize, so React has handled the media query change before the
+	// response lands, and a layout swap it triggers can't race the reply.
+	await page.setViewportSize({ width: 1024, height: 844 });
+	await page.evaluate(
+		() =>
+			new Promise<void>((resolve) => {
+				requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+			}),
+	);
+	// Still the phone layout at 1024px. The hold, not the reply, is what keeps the panel mounted.
+	await expect(page.getByRole('tablist', { name: 'Workspace' })).toHaveCount(1);
+	hold.release?.();
+
+	const brandSwatch = page.locator('[data-seed-field="keyColors.0"] .font-mono');
+	await expect(brandSwatch).toBeVisible();
+	expect(await storedVersionCount(page, recordId)).toBe(1);
+	// Paid for once, so offering Generate again would charge for a version the record already has.
+	await expect(generateButton(page)).toHaveCount(0);
+	expect(sent).toHaveLength(1);
+	// With a version in hand the layout goes back to following the viewport.
+	await expect(page.getByRole('tablist', { name: 'Output' })).toBeVisible();
+});
+
 test('on a short md window the first-version section scrolls inside the rail rather than painting over the seed and tokens', async ({
 	page,
 }) => {

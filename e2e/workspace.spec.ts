@@ -1136,6 +1136,33 @@ test.describe('at 390 × 844', () => {
 				.toBe(true);
 		}
 	});
+
+	test('every phone tab keeps its headings in order, with no level skipped under the page h1', async ({
+		page,
+	}) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+		const bar = page.getByRole('tablist', { name: 'Workspace' });
+
+		for (const name of PHONE_TABS) {
+			// oxlint-disable-next-line no-await-in-loop -- one tab at a time: axe reads only the panel the click just opened
+			await bar.getByRole('tab', { name }).click();
+			// oxlint-disable-next-line no-await-in-loop
+			await expect.poll(() => visibleWorkspacePanels(page), { message: name }).toEqual([name]);
+			// Preview's headings live in a lazy chunk. Axe run on its fallback would see no h3 to skip to.
+			if (name === 'Preview') {
+				// oxlint-disable-next-line no-await-in-loop
+				await expect(page.locator('[data-preview]')).toBeVisible();
+			}
+
+			const { violations } =
+				// oxlint-disable-next-line no-await-in-loop
+				await new AxeBuilder({ page }).include('main').withRules(['heading-order']).analyze();
+			expect(violations, name).toEqual([]);
+		}
+	});
 });
 
 test('the tab set and the page-scrolling token list switch at the same width', async ({ page }) => {

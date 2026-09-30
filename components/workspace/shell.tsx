@@ -79,7 +79,14 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const contrast = useStore(store, (state) => state.contrast);
 	const draftSeed = useStore(store, (state) => state.draftSeed);
 
-	const narrow = useNarrowViewport();
+	const viewportNarrow = useNarrowViewport();
+	// Swapping layouts unmounts FirstVersion, and its panel drops the reply of a generate still in
+	// flight. The paid version lands in IndexedDB but never reaches the store, and Generate comes
+	// back on a record that already has one. So the layout holds still until the first version
+	// exists, then catches up with the viewport. It's state set during render, not an effect, so
+	// the catch-up never paints a stale frame.
+	const [narrow, setNarrow] = useState(viewportNarrow);
+	if (narrow !== viewportNarrow && !showsFirstVersion(record)) setNarrow(viewportNarrow);
 	// A phone opens on Seed, the first tab and where the stacked page used to start. Desktop keeps
 	// opening Output on Preview.
 	const [tab, setTab] = useState<WorkspaceTab>(() => (narrow ? 'seed' : 'preview'));
@@ -131,7 +138,8 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	// Built once and placed by whichever layout is mounted. Only one layout mounts at a time, so
 	// each panel, id, ref, lazy chunk and scheme control exists once in the DOM at any width. It
 	// also means crossing 768px, on a rotated tablet or a resized window, remounts everything, so
-	// the token filter, open categories and a generate in flight don't survive it.
+	// the token filter and open categories don't survive it. The one exception is a record still
+	// waiting on its first version: the layout holds until it has one, so a generate in flight does.
 	const seedColumn = (
 		<>
 			{/* The seed's field list scrolls inside half the rail at most from md up, so a fully stated
@@ -169,7 +177,9 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 		<SchemeControl scheme={scheme} onSchemeChange={setScheme} />
 	) : null;
 
-	function outputPanels(padding: string) {
+	// `heading` is for the phone layout, where no Output h2 sits above the panels. Without one there,
+	// Preview jumps from the page h1 straight to the gallery's h3s and axe flags heading-order.
+	function outputPanels(padding: string, heading = false) {
 		return (
 			<>
 				<TabsPanel
@@ -179,6 +189,7 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 					}}
 					className={cn('flex min-h-0 flex-col', padding)}
 				>
+					{heading ? <h2 className="sr-only">Preview</h2> : null}
 					{tokenSet ? (
 						<Suspense fallback={PREVIEW_LOADING}>
 							<Preview tokenSet={tokenSet} scheme={scheme} />
@@ -197,6 +208,7 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 					}}
 					className={cn('text-muted-foreground text-sm', padding)}
 				>
+					{heading ? <h2 className="sr-only">Accessibility</h2> : null}
 					{contrast === null ? (
 						<p>
 							There are no tokens to check yet. They show up here once the seed produces a token
@@ -221,6 +233,7 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 					}}
 					className={cn('flex min-h-0 flex-col', padding)}
 				>
+					{heading ? <h2 className="sr-only">Export</h2> : null}
 					{tokenSet ? (
 						<Suspense fallback={EXPORT_LOADING}>
 							<ExportPanel store={store} />
@@ -328,7 +341,7 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 				<TabsPanel value="tokens" keepMounted className="flex flex-col p-4">
 					{tokensColumn}
 				</TabsPanel>
-				{outputPanels('p-4')}
+				{outputPanels('p-4', true)}
 			</Tabs>
 		</main>
 	);
