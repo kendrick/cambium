@@ -501,3 +501,66 @@ test('downloads the complete archive, built in the page with no request, holding
 
 	expect(requests).toEqual([]);
 });
+
+// The listing lags an edit behind `useDeferredValue` while the adapters rerun. A per-file download
+// clicked inside that window has to write the edited tokens, as the archive does, not the stale
+// listing's (PR #180 review).
+test('a per-file download clicked before the listing catches up with an edit still writes the edited tokens', async ({
+	page,
+}) => {
+	await openExportTab(page, buildRecord(null));
+
+	const override: TokenOverride = {
+		kind: 'alias',
+		scheme: 'light',
+		token: 'primary',
+		alias: 'brand.1',
+	};
+	const applied = applyOverrides(TOKEN_SET, [override]);
+	if (!applied.ok) throw new Error(`fixture override refused: ${JSON.stringify(applied.issues)}`);
+
+	const [expectedLight] = exportArtifacts(applied.tokenSet, { brandUrl: null });
+
+	await page.getByRole('button', { name: 'Edit semantic.primary', exact: true }).click();
+
+	const select = await page.getByLabel('primary alias', { exact: true }).elementHandle();
+	const button = await page
+		.getByRole('button', { name: 'Download light.tokens.json', exact: true })
+		.elementHandle();
+
+	if (!select || !button) throw new Error('expected the alias select and the download button');
+
+	// The edit and the click share one task, so the click lands after React commits the edit's
+	// urgent render (a microtask) and before the deferred listing's render (a scheduler task). The
+	// preview's `primary` at the click is the evidence the window was open rather than closed.
+	const [download, previewPrimary] = await Promise.all([
+		page.waitForEvent('download'),
+		page.evaluate(
+			async ([element, target]) => {
+				(element as HTMLSelectElement).value = 'brand.1';
+				element.dispatchEvent(new Event('change', { bubbles: true }));
+				await Promise.resolve();
+
+				const preview = document.querySelector('[data-export-preview="tokens/light.tokens.json"]');
+				const primary: unknown = JSON.parse(preview?.textContent ?? '{}')?.color?.semantic?.primary
+					?.$value;
+
+				(target as HTMLButtonElement).click();
+
+				return primary;
+			},
+			[select, button] as const,
+		),
+	]);
+
+	expect(previewPrimary).toBe('{color.primitive.brand.9}');
+
+	const path = await download.path();
+	if (path === null) throw new Error('the light download produced no saved file');
+	const bytes = await readFile(path);
+
+	expect(JSON.parse(bytes.toString('utf-8')).color.semantic.primary.$value).toBe(
+		'{color.primitive.brand.1}',
+	);
+	expect(bytes.equals(Buffer.from(expectedLight!.contents, 'utf-8'))).toBe(true);
+});

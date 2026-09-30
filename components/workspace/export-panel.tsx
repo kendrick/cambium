@@ -63,14 +63,26 @@ export function ExportPanel({ store }: { store: StoreApi<WorkspaceState> }) {
 		}
 	}, [input, archiveFilename]);
 
-	const handleFile = useCallback((file: ExportFile) => {
-		try {
-			setError(null);
-			downloadFile(file);
-		} catch (thrown) {
-			setError(messageOf(thrown));
-		}
-	}, []);
+	// Rebuilt from the undeferred input too, rather than taken from the listing, so a click inside the deferred window can't write pre-edit tokens (PR #180 review). Disabling the buttons until the listing caught up would flicker every one of them on each keystroke beside a visible tab.
+	const handleFile = useCallback(
+		(path: string) => {
+			if (!input) return;
+
+			try {
+				setError(null);
+				const file = exportFiles(exportArchiveEntries(input), brandUrl).find(
+					(candidate) => candidate.path === path,
+				);
+
+				if (!file) throw new Error(`${path} is no longer part of the export`);
+
+				downloadFile(file);
+			} catch (thrown) {
+				setError(messageOf(thrown));
+			}
+		},
+		[input, brandUrl],
+	);
 
 	if (!listing) return null;
 
@@ -106,7 +118,7 @@ export function ExportPanel({ store }: { store: StoreApi<WorkspaceState> }) {
 									{file.contents}
 								</pre>
 							</details>
-							<Button variant="outline" size="sm" onClick={() => handleFile(file)}>
+							<Button variant="outline" size="sm" onClick={() => handleFile(file.path)}>
 								Download {file.filename}
 							</Button>
 						</li>
