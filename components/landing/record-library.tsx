@@ -105,6 +105,10 @@ export function RecordLibrary({ firstRun }: { firstRun?: ReactNode }) {
 			const { name: _previous, ...unnamed } = record;
 			setNotice(null);
 
+			// Every write moves `revision`, and an open workspace tab holding the old one would have its
+			// next real commit refused as stale. A rename that changes nothing must not cost it that.
+			if (name === (record.name ?? '')) return { ok: true };
+
 			try {
 				await records.put(name ? { ...unnamed, name } : unnamed);
 			} catch (error) {

@@ -218,6 +218,32 @@ test('a record can be named and renamed', async ({ page }) => {
 	expect((await readRows(page))[0]).not.toHaveProperty('name');
 });
 
+const byId = (rows: Row[]) => Object.fromEntries(rows.map((held) => [held.id, held]));
+
+// A rename that changes nothing must not move the revision, or an open workspace tab's next real
+// commit is refused as stale over a write that renamed nothing.
+test('a rename that leaves the name as it was writes nothing', async ({ page }) => {
+	const named = stored(uiWikipedia, { name: 'Same' });
+	const unnamed = stored(photoWindow, { brandUrl: 'example.com' });
+	await seedRows(page, [named, unnamed]);
+	const before = await readRows(page);
+
+	const namedRow = row(page, named.id);
+	await namedRow.getByRole('button', { name: 'Rename Same' }).click();
+	await namedRow.getByRole('textbox', { name: 'Name for Same' }).fill('  Same ');
+	await namedRow.getByRole('button', { name: 'Save name' }).click();
+	await expect(namedRow.getByRole('textbox')).toHaveCount(0);
+
+	// Clearing a record that has no name is the same no-op.
+	const unnamedRow = row(page, unnamed.id);
+	await unnamedRow.getByRole('button', { name: 'Rename example.com' }).click();
+	await unnamedRow.getByRole('textbox', { name: 'Name for example.com' }).fill('   ');
+	await unnamedRow.getByRole('button', { name: 'Save name' }).click();
+	await expect(unnamedRow.getByRole('textbox')).toHaveCount(0);
+
+	expect(byId(await readRows(page))).toEqual(byId(before));
+});
+
 test('a rename built on a copy another tab overtook is refused and the list refreshed', async ({
 	page,
 }) => {
