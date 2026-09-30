@@ -27,6 +27,11 @@ const RecordLibrary = lazy(() =>
 	})),
 );
 
+// Lazy for the same budget reason as the library. The picker renders only in an empty library, so a returning visitor never loads it.
+const DemoPicker = lazy(() =>
+	import('@/components/landing/demo-picker').then((module) => ({ default: module.DemoPicker })),
+);
+
 /**
  * Four outcomes rather than two, because each one licenses a different sentence and the wrong
  * sentence here is expensive.
@@ -144,7 +149,13 @@ function LandingOutcome({ onKeyStored }: { onKeyStored: (stored: boolean) => voi
 		return (
 			<div className="flex w-full flex-col gap-10">
 				<Suspense fallback={null}>
-					<RecordLibrary />
+					<RecordLibrary
+						firstRun={
+							<Suspense fallback={null}>
+								<DemoPicker />
+							</Suspense>
+						}
+					/>
 				</Suspense>
 				<UploadForm onSaved={onSaved} />
 			</div>
