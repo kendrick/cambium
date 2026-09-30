@@ -1571,6 +1571,69 @@ describe('the workspace store’s contrast repair (#8)', () => {
 		expect(written.tokenSet).toBeNull();
 		expect(written.overrides).toEqual([userOverride]);
 	});
+
+	/**
+	 * DESIGN.md documents `repairs`, so each move has to match the set the workspace paints. The test
+	 * reads each moved step's colour off the store's token set instead of recomputing the repair.
+	 */
+	it('carries the repair report whose moves are the colours its token set paints', () => {
+		const { store } = openWorkspace();
+		const { tokenSet, contrast } = store.getState();
+		const repairs = contrast?.repairs ?? [];
+
+		expect(repairs.length).toBeGreaterThan(0);
+
+		// A step moved twice keeps only its last colour, as `repairContrast` keys its overrides by step.
+		const lastMove = new Map(
+			repairs.map((entry) => [`${entry.scheme}:${entry.ramp}.${entry.step}`, entry]),
+		);
+
+		for (const entry of lastMove.values()) {
+			const painted = tokenSet!.schemes[entry.scheme].primitives[entry.ramp]![entry.step - 1]!;
+
+			expect(painted, `${entry.scheme} ${entry.ramp}.${entry.step}`).toMatchObject(entry.to);
+		}
+	});
+
+	// ExportPanel memoizes on this array. An override edit reuses the cached repair, so it has to hand
+	// back the same array, or the panel recomputes its listing on every keystroke.
+	it('keeps the same repairs array across an override edit that reuses the cached repair', () => {
+		const { store } = openWorkspace();
+		const before = store.getState().contrast?.repairs;
+		const mutedAlias = store.getState().tokenSet?.schemes.light.semantic.muted?.alias;
+
+		if (!mutedAlias) throw new Error('expected "muted" to resolve in the light scheme');
+
+		store.getState().setOverride({
+			kind: 'alias',
+			scheme: 'light',
+			token: 'muted-foreground',
+			alias: mutedAlias,
+		});
+
+		expect(store.getState().contrast?.repairs).toBe(before);
+	});
+
+	it('replaces the repairs when a seed edit changes what repair has to move', () => {
+		const { store } = openWorkspace();
+		const before = store.getState().contrast?.repairs;
+
+		store.getState().editSeed({ keyColors: seedWith(162.5).keyColors });
+
+		const { tokenSet, contrast } = store.getState();
+
+		expect(contrast?.repairs).not.toEqual(before);
+
+		for (const entry of contrast?.repairs ?? []) {
+			expect(tokenSet!.schemes[entry.scheme].primitives[entry.ramp]![entry.step - 1]).toBeDefined();
+		}
+	});
+
+	it('has no repairs to report when nothing is derived', () => {
+		const { store } = openWorkspace(makeRecord([]));
+
+		expect(store.getState().contrast).toBeNull();
+	});
 });
 
 describe('the repair cache’s seed and preset check', () => {

@@ -3,7 +3,11 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { BrandRecord, BrandVersion } from '../../core/brand-record';
 import type { BrandSeed } from '../../core/brand-seed';
 import { checkContrast, type ContrastEntry } from '../../core/contrast/check';
-import { type UnrepairedEntry, withContrastRepairs } from '../../core/contrast/repair';
+import {
+	type RepairEntry,
+	type UnrepairedEntry,
+	withContrastRepairs,
+} from '../../core/contrast/repair';
 import { type ScaleEngine, type ScaleEngineResult } from '../../core/scale-engine';
 import {
 	BALANCED,
@@ -226,11 +230,14 @@ type CommitRequest = {
  * user override that re-breaks a pair a repair already fixed shows up as a failing entry instead of
  * disappearing behind the repair that ran before it. `unrepaired` comes from the repair pass on the
  * pre-override set: which pairs it couldn't reach is a question about pins, not about what the user
- * later did to an unrelated token.
+ * later did to an unrelated token. `repairs` lists the moves the repair pass made before any user
+ * override applied. The export archive's DESIGN.md reads it from here, so the moves it documents are
+ * the ones behind the set the page paints.
  */
 export type ContrastState = {
 	report: ContrastEntry[];
 	unrepaired: UnrepairedEntry[];
+	repairs: RepairEntry[];
 };
 
 export type WorkspaceState = {
@@ -490,6 +497,7 @@ const repairCache = new WeakMap<
 		pins: SeedPinPath[];
 		repaired: TokenSet;
 		unrepaired: UnrepairedEntry[];
+		repairs: RepairEntry[];
 	}
 >();
 
@@ -498,7 +506,7 @@ function repairedBase(
 	seed: BrandSeed,
 	params: InterpretationParams,
 	pins: SeedPinPath[],
-): { repaired: TokenSet; unrepaired: UnrepairedEntry[] } {
+): { repaired: TokenSet; unrepaired: UnrepairedEntry[]; repairs: RepairEntry[] } {
 	const cached = repairCache.get(derived);
 
 	if (
@@ -512,8 +520,8 @@ function repairedBase(
 
 	const base = buildTokenSet(derived.schemes, seed, params);
 	const pinned = repairPinsFor(seed, pins);
-	const { tokenSet, unrepaired } = withContrastRepairs(base, { pinned });
-	const result = { seed, params, pins, repaired: tokenSet, unrepaired };
+	const { tokenSet, unrepaired, report } = withContrastRepairs(base, { pinned });
+	const result = { seed, params, pins, repaired: tokenSet, unrepaired, repairs: report };
 
 	repairCache.set(derived, result);
 
@@ -540,13 +548,17 @@ function tokensFor(
 		return { tokenSet: null, overrideIssues: {}, contrast: null };
 	}
 
-	const { repaired, unrepaired } = repairedBase(derived, seed, params, pins);
+	const { repaired, unrepaired, repairs } = repairedBase(derived, seed, params, pins);
 	const { tokenSet, overrideIssues } =
 		Object.keys(overrides).length === 0
 			? { tokenSet: repaired, overrideIssues: {} }
 			: withOverrides(repaired, overrides);
 
-	return { tokenSet, overrideIssues, contrast: { report: checkContrast(tokenSet), unrepaired } };
+	return {
+		tokenSet,
+		overrideIssues,
+		contrast: { report: checkContrast(tokenSet), unrepaired, repairs },
+	};
 }
 
 /**

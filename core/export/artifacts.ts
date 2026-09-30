@@ -15,7 +15,7 @@ export type ExportArtifact = { filename: string; mediaType: string; contents: st
  * `application/design-tokens+json` as its media type over `application/json`, because a generic
  * JSON type gives a consumer no way to route the file to a DTCG parser instead of any other one.
  */
-const DTCG_MEDIA_TYPE = 'application/design-tokens+json';
+export const DTCG_MEDIA_TYPE = 'application/design-tokens+json';
 
 const ARTIFACT_SUFFIXES = ['light.tokens.json', 'dark.tokens.json', 'tokens.css'] as const;
 
