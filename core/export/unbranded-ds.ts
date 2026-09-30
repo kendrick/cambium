@@ -8,7 +8,8 @@ import {
 	type TokenSet,
 	TokenSetSchema,
 } from '../token-set';
-import vendored from './unbranded-ds.vendor.json';
+// Playwright loads specs as native Node ESM, which refuses a JSON import without this attribute, and `e2e/export.spec.ts` reaches this module through `archive.ts`.
+import vendored from './unbranded-ds.vendor.json' with { type: 'json' };
 
 export type UnbrandedDsScheme = 'light' | 'dark';
 
