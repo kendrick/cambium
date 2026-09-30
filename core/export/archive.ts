@@ -11,7 +11,8 @@ export type ExportArchiveInput = DesignDocInput;
 
 // Issue #1: "Cambium output corresponds to a `theme` identity in unbranded-ds's three-axis model:
 // one named brand with light and dark variants." One theme per archive, so its name is fixed
-// rather than taken from a brand URL, which would make the archive depend on more than the set.
+// rather than taken from a brand URL, which lives outside `ExportArchiveInput`. That whole input
+// is the determinism boundary, since DESIGN.md reads `seed` and `repairs` as well as `tokens`.
 const THEME_IDENTITY = 'brand';
 const THEME_DISPLAY_NAME = 'Brand';
 

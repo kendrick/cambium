@@ -99,8 +99,17 @@ function standaloneOutputs({
 	};
 }
 
+// Captured at load so any test that touches TZ is checked against the host's own setting.
+const HOST_TZ = process.env.TZ;
+
 afterEach(() => {
 	vi.unstubAllGlobals();
+	// Assigning `undefined` to process.env stores the string "undefined", which leaks into later tests.
+	if (process.env.TZ !== HOST_TZ) {
+		throw new Error(
+			`TZ leaked out of a test: ${JSON.stringify(process.env.TZ)}, host had ${JSON.stringify(HOST_TZ)}`,
+		);
+	}
 });
 
 describe('exportArchiveEntries', () => {
@@ -196,7 +205,11 @@ describe('buildExportArchive', () => {
 
 			expect(west).toEqual(east);
 		} finally {
-			process.env.TZ = original;
+			if (original === undefined) {
+				delete process.env.TZ;
+			} else {
+				process.env.TZ = original;
+			}
 		}
 	});
 
