@@ -30,6 +30,8 @@ import { deserializeRecord, serializeRecord } from './record-archive';
 import { defaultSeedPins, repairPinsFor } from './seed-pins';
 import { BALANCED } from './interpretation';
 import { buildTokenSet } from './semantic-layer';
+import { deriveSurfacePolarity } from './surface-polarity';
+import { DARK_DOMINANT, paintBands } from './surface-polarity.fixture';
 import { NON_COLOR_FIXTURE, SHADOW_FIXTURE } from './token-set.fixture';
 import { type TokenSet, TokenSetSchema } from './token-set';
 
@@ -462,6 +464,14 @@ describe('core purity', () => {
 					result.record.images[0]?.downscaled === archivableRecord.images[0]?.downscaled
 				);
 			},
+		],
+		[
+			'deriveSurfacePolarity',
+			// Proves the derivation runs under the `fetch` guard. `surface-polarity.test.ts` owns what it
+			// derives.
+			() =>
+				deriveSurfacePolarity([{ id: 'img-1', pixels: paintBands(DARK_DOMINANT) }]).polarity ===
+				'dark',
 		],
 	])('%s parses a valid value without reaching the network', (_name, parses) => {
 		vi.stubGlobal('fetch', () => {
