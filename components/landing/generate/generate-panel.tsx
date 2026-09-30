@@ -28,6 +28,12 @@ export type GeneratePanelProps = {
 	 * once per id, so the new version would stay hidden until a reload.
 	 */
 	onGenerated?: (record: BrandRecord) => void;
+	/**
+	 * Told when the panel starts or stops holding something a remount would lose: a request in
+	 * flight, or a failure whose way forward reuses a paid answer. Told `false` on unmount too, so a
+	 * caller that holds its layout still for this is never left holding it for a panel that's gone.
+	 */
+	onBusyChange?: (busy: boolean) => void;
 };
 
 /**
@@ -86,7 +92,13 @@ async function measure(dataUrl: string): Promise<{ width: number; height: number
 	}
 }
 
-export function GeneratePanel({ recordId, images, onKeyStored, onGenerated }: GeneratePanelProps) {
+export function GeneratePanel({
+	recordId,
+	images,
+	onKeyStored,
+	onGenerated,
+	onBusyChange,
+}: GeneratePanelProps) {
 	const router = useRouter();
 	const [estimate, setEstimate] = useState<Estimate>({ kind: 'pending' });
 	const [running, setRunning] = useState(false);
@@ -372,6 +384,19 @@ export function GeneratePanel({ recordId, images, onKeyStored, onGenerated }: Ge
 			setShown(null);
 		}
 	}
+
+	// A repair resends the answer it fixes and a save-again commits the seed already paid for, and
+	// both live only in this panel's state. Every other recovery starts a fresh request instead.
+	const busy =
+		running ||
+		(shown?.kind === 'described' &&
+			(shown.descriptor.recovery === 'repair-retry' || shown.descriptor.recovery === 'save-again'));
+
+	useEffect(() => {
+		if (!onBusyChange) return;
+		onBusyChange(busy);
+		return () => onBusyChange(false);
+	}, [busy, onBusyChange]);
 
 	const estimateReady = estimate.kind !== 'pending';
 

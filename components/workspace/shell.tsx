@@ -80,13 +80,14 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const draftSeed = useStore(store, (state) => state.draftSeed);
 
 	const viewportNarrow = useNarrowViewport();
-	// Swapping layouts unmounts FirstVersion, and its panel drops the reply of a generate still in
-	// flight. The paid version lands in IndexedDB but never reaches the store, and Generate comes
-	// back on a record that already has one. So the layout holds still until the first version
-	// exists, then catches up with the viewport. It's state set during render, not an effect, so
-	// the catch-up never paints a stale frame.
+	// Swapping layouts unmounts FirstVersion. Mid-generate, its panel would drop the reply, so the
+	// paid version would land in IndexedDB but never reach the store, and Generate would come back on
+	// a record that already has one. A repair or save-again offer would lose the paid answer it reuses. So the
+	// layout holds still while the panel reports either, then catches up with the viewport. It's
+	// state set during render, not an effect, so the catch-up never paints a stale frame.
+	const [generating, setGenerating] = useState(false);
 	const [narrow, setNarrow] = useState(viewportNarrow);
-	if (narrow !== viewportNarrow && !showsFirstVersion(record)) setNarrow(viewportNarrow);
+	if (narrow !== viewportNarrow && !generating) setNarrow(viewportNarrow);
 	// A phone opens on Seed, the first tab and where the stacked page used to start. Desktop keeps
 	// opening Output on Preview.
 	const [tab, setTab] = useState<WorkspaceTab>(() => (narrow ? 'seed' : 'preview'));
@@ -138,17 +139,18 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	// Built once and placed by whichever layout is mounted. Only one layout mounts at a time, so
 	// each panel, id, ref, lazy chunk and scheme control exists once in the DOM at any width. It
 	// also means crossing 768px, on a rotated tablet or a resized window, remounts everything, so
-	// the token filter and open categories don't survive it. The one exception is a record still
-	// waiting on its first version: the layout holds until it has one, so a generate in flight does.
+	// the token filter and open categories don't survive it. The one exception is a first-version
+	// generate in flight or a repair offer on screen, which holds the layout until it settles.
 	const seedColumn = (
 		<>
 			{/* The seed's field list scrolls inside half the rail at most from md up, so a fully stated
 			    seed can't push the token list off the bottom of a short window. A record with no
-			    versions also gets a First version section after it, outside that cap (#158). */}
+			    versions also gets a First version section after it, outside that cap (#158), and its
+			    busy reports are what hold the layout above. */}
 			<div className="flex min-h-0 flex-col md:max-h-[50%]">
 				<SeedRail store={store} />
 			</div>
-			<FirstVersion store={store} />
+			<FirstVersion onBusyChange={setGenerating} store={store} />
 		</>
 	);
 

@@ -34,7 +34,13 @@ export function showsFirstVersion(
  * version, because a second version from here is out of scope, and nothing for a record with no
  * images, which has nothing to send.
  */
-export function FirstVersion({ store }: { store: StoreApi<WorkspaceState> }) {
+export function FirstVersion({
+	store,
+	onBusyChange,
+}: {
+	store: StoreApi<WorkspaceState>;
+	onBusyChange?: (busy: boolean) => void;
+}) {
 	const record = useStore(store, (state) => state.record);
 	const open = useStore(store, (state) => state.open);
 
@@ -59,6 +65,7 @@ export function FirstVersion({ store }: { store: StoreApi<WorkspaceState> }) {
 			<Suspense fallback={null}>
 				<GeneratePanel
 					images={record.images}
+					onBusyChange={onBusyChange}
 					onKeyStored={ignoreKeyStored}
 					// `open` takes the committed record the way `WorkspaceRoute` takes a loaded one: last
 					// version active, draft reset, tokens rederived. Every rail subscriber rerenders off it.
