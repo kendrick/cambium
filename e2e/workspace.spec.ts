@@ -964,6 +964,7 @@ async function expandEveryCategory(tokens: Locator): Promise<void> {
 	const collapsed = tokens
 		.getByRole('heading', { level: 3 })
 		.getByRole('button', { expanded: false });
+	// oxlint-disable-next-line no-await-in-loop -- each click reveals the next collapsed category, so the count has to be re-read between clicks
 	while ((await collapsed.count()) > 0) await collapsed.first().click();
 }
 
@@ -991,19 +992,26 @@ test.describe('at 390 × 844', () => {
 		await expect(tokens).toHaveCSS('overflow-y', 'visible');
 
 		for (const name of PHONE_TABS) {
+			// oxlint-disable-next-line no-await-in-loop -- one tab at a time: each check reads the panel the click just opened
 			await bar.getByRole('tab', { name }).click();
+			// oxlint-disable-next-line no-await-in-loop
 			await expect.poll(() => visibleWorkspacePanels(page), { message: name }).toEqual([name]);
 
 			// #40's export previews are `<pre>`s inside collapsed `<details>`. Closed, they have no box
 			// for `selfScrollers` to catch, so open every one.
 			if (name === 'Export') {
 				const previews = page.getByRole('tabpanel', { name: 'Export' }).locator('details');
+				// oxlint-disable-next-line no-await-in-loop
 				await expect(previews.first()).toBeVisible();
+				// oxlint-disable-next-line no-await-in-loop
 				for (const preview of await previews.all()) await preview.locator('summary').click();
+				// oxlint-disable-next-line no-await-in-loop
 				await expect(page.locator('[data-export-preview]').first()).toBeVisible();
 			}
 
+			// oxlint-disable-next-line no-await-in-loop
 			expect(await selfScrollers(page), name).toEqual([]);
+			// oxlint-disable-next-line no-await-in-loop
 			expect(await page.evaluate(() => document.documentElement.scrollWidth), name).toBe(390);
 		}
 	});
@@ -1022,8 +1030,11 @@ test.describe('at 390 × 844', () => {
 		expect(await bar.getByRole('tab').allInnerTexts()).toEqual(PHONE_TABS);
 
 		for (const name of PHONE_TABS) {
+			// oxlint-disable-next-line no-await-in-loop -- one tab at a time: each check reads the panel the click just opened
 			await bar.getByRole('tab', { name }).click();
+			// oxlint-disable-next-line no-await-in-loop
 			await expect(bar.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true');
+			// oxlint-disable-next-line no-await-in-loop
 			await expect.poll(() => visibleWorkspacePanels(page), { message: name }).toEqual([name]);
 		}
 
@@ -1103,15 +1114,21 @@ test.describe('at 390 × 844', () => {
 			{ presses: 1, tab: 'Preview' },
 			{ presses: 2, tab: 'Export' },
 		] as const) {
+			// oxlint-disable-next-line no-await-in-loop -- one page: each pass reloads it and reads the state the previous keypresses left
 			await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+			// oxlint-disable-next-line no-await-in-loop
 			await expect(page.getByRole('region', { name: 'Seed' })).toBeVisible();
 
+			// oxlint-disable-next-line no-await-in-loop
 			for (let press = 0; press < presses; press += 1) await page.keyboard.press('Tab');
+			// oxlint-disable-next-line no-await-in-loop
 			await page.keyboard.press('Enter');
 
 			const bar = page.getByRole('tablist', { name: 'Workspace' });
+			// oxlint-disable-next-line no-await-in-loop
 			await expect(bar.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true');
 			const panel = page.getByRole('tabpanel', { name: tab });
+			// oxlint-disable-next-line no-await-in-loop
 			await expect
 				.poll(() => panel.evaluate((node) => node.contains(document.activeElement)), {
 					message: tab,
@@ -1135,14 +1152,18 @@ test('the tab set and the page-scrolling token list switch at the same width', a
 		[768, false],
 		[767, true],
 	] as const) {
+		// oxlint-disable-next-line no-await-in-loop -- one page: each resize is measured before the next one changes the viewport
 		await page.setViewportSize({ width, height: 844 });
+		// oxlint-disable-next-line no-await-in-loop
 		await expect(page.getByRole('tablist', { name: 'Workspace' })).toHaveCount(narrow ? 1 : 0);
 		if (narrow) {
+			// oxlint-disable-next-line no-await-in-loop
 			await page
 				.getByRole('tablist', { name: 'Workspace' })
 				.getByRole('tab', { name: 'Tokens' })
 				.click();
 		}
+		// oxlint-disable-next-line no-await-in-loop
 		await expect(page.getByRole('region', { name: 'Tokens' })).toHaveCSS(
 			'overflow-y',
 			narrow ? 'visible' : 'auto',
