@@ -9,6 +9,7 @@ import type { WorkspaceState } from '../../app/state/workspace-store';
 import { attributeContrastFailures } from '../../core/contrast/attribute';
 import { buildTokenSet } from '../../core/semantic-layer';
 import type { SchemeName } from '../../core/token-overrides';
+import { FirstVersion } from '@/components/workspace/first-version';
 import { RawResponse } from '@/components/workspace/raw-response';
 import { SchemeControl } from '@/components/workspace/scheme-control';
 import { SeedRail } from '@/components/workspace/seed-rail';
@@ -90,14 +91,15 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	return (
 		<main className="grid min-h-dvh grid-cols-1 gap-6 p-4 md:h-dvh md:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)_auto] md:p-6">
 			<SkipLinks onSkip={skipTo} />
-			{/* The issue keeps the rail to two sections, seed over tokens. The seed's field list scrolls
-			    inside half the rail at most, so a fully stated seed can't push the token list off the
-			    bottom of a short window. */}
+			{/* Seed over tokens. The seed's field list scrolls inside half the rail at most, so a fully
+			    stated seed can't push the token list off the bottom of a short window. A record with no
+			    versions also gets a First version section between the two, outside that cap (#158). */}
 			<aside aria-label="Seed and tokens" className="flex min-h-0 flex-col gap-4">
 				<h1 className="text-2xl font-semibold tracking-tight">Cambium</h1>
 				<div className="flex min-h-0 flex-col md:max-h-[50%]">
 					<SeedRail store={store} />
 				</div>
+				<FirstVersion store={store} />
 				<div className="flex min-h-0 flex-1 flex-col gap-2">
 					<h2 id="tokens-heading" className="text-lg font-semibold">
 						Tokens
