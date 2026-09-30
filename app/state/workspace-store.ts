@@ -355,9 +355,11 @@ export type WorkspaceStoreOptions = {
 	 * the engine statically instead was 196.5 kB. Part of that 7.8 kB gap was culori, which this
 	 * store now brings on its own, so the gap overstates what a static engine import adds today.
 	 *
-	 * `pnpm test:bundle` cannot measure it either way. The landing route is a Server Component today,
-	 * so the engine runs at build time, reaches no client chunk, and the budget stays green no matter
-	 * what this file imports. The guard is the import list, in `workspace-store.test.ts`.
+	 * `pnpm test:bundle`'s first-load figure can't catch a static engine import here either.
+	 * `app/page.tsx` stays a Server Component, and the engine reaches `/` only through lazy client
+	 * chunks: `record-library.tsx` creates one to paint each brand's palette, and the generate panel
+	 * imports it dynamically. Those chunks count toward the total-JS budget, not first load, so the
+	 * guard is the import list, in `workspace-store.test.ts`.
 	 *
 	 * #8's contrast repair rides the same lazy chunks. `core/contrast/check.ts` reaches `chroma-js`'s
 	 * APCA module, and each route reaches this store only through a dynamic import that also loads
