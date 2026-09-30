@@ -17,8 +17,7 @@ describe('assetPath', () => {
 	});
 });
 
-// `assetPath` only works if its prefix matches the one Next routes under. These tests read both
-// off the config Next loads, because the e2e harness has no prefixed static server.
+// `assetPath` only works if its prefix matches the one Next routes under. These tests read both off the config Next loads, because the e2e harness has no prefixed static server.
 describe('next.config', () => {
 	afterEach(() => {
 		vi.unstubAllEnvs();

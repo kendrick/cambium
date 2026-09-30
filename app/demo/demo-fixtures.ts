@@ -1,8 +1,5 @@
 /**
- * The committed demo records the landing route offers a keyless visitor (#40), in
- * `app/demo/fixtures/README.md`'s order. `scripts/copy-demo-fixtures.mjs` serves each `<slug>.json`
- * from `public/demo/fixtures/`, and `demo-fixtures.test.ts` holds this list and that directory equal.
- * Imports nothing, so the picker chunk stays free of zod.
+ * The committed demo records the landing route offers a keyless visitor (#40), in `app/demo/fixtures/README.md`'s order. `scripts/copy-demo-fixtures.mjs` serves each `<slug>.json` from `public/demo/fixtures/`, and `demo-fixtures.test.ts` holds this list and that directory equal. Imports nothing, so the picker chunk stays free of zod.
  */
 export const DEMO_FIXTURES = [
 	{ slug: 'ui-wikipedia', label: 'Reading UI' },

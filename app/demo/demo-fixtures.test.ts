@@ -10,8 +10,7 @@ import { DEMO_FIXTURES, demoRecordName } from './demo-fixtures';
 const FIXTURE_DIR = fileURLToPath(new URL('./fixtures/', import.meta.url));
 
 describe('DEMO_FIXTURES', () => {
-	// `scripts/copy-demo-fixtures.mjs` serves whatever the directory holds, and the picker offers
-	// whatever this list names. A fixture on disk with no button, or a button with no file, fails here.
+	// `scripts/copy-demo-fixtures.mjs` serves whatever the directory holds, and the picker offers whatever this list names. A fixture on disk with no button, or a button with no file, fails here.
 	it('names exactly the records committed under app/demo/fixtures', () => {
 		const onDisk = readdirSync(FIXTURE_DIR)
 			.filter((name) => name.endsWith('.json') && !name.endsWith('.raw.json'))

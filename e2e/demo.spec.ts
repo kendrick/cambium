@@ -17,9 +17,7 @@ import { buildTokenSet } from '../core/semantic-layer';
 import { expect, test } from './fixtures';
 
 /**
- * Typed out rather than imported from `app/demo/demo-fixtures.ts`, so a relabel there fails here.
- * `photo-window` because its unrepaired set fails AA (guarded below), so repair has to run before
- * the Accessibility tab reads clean.
+ * Typed out rather than imported from `app/demo/demo-fixtures.ts`, so a relabel there fails here. `photo-window` because its unrepaired set fails AA (guarded below), so repair has to run before the Accessibility tab reads clean.
  */
 const BUTTON = 'Open the Window photo demo';
 const STORED_NAME = 'Window photo (demo)';
@@ -46,8 +44,7 @@ if (checkContrast(BASE).every((entry) => entry.passes)) {
 }
 
 /**
- * `export.spec.ts`'s moved-step diff, copied because importing a spec file registers its tests. The
- * steps repair moved, found without the report, which DESIGN.md has to document.
+ * `export.spec.ts`'s moved-step diff, copied because importing a spec file registers its tests. The steps repair moved, found without the report, which DESIGN.md has to document.
  */
 const MOVED_STEPS = (['light', 'dark'] as const).flatMap((scheme) =>
 	Object.entries(BASE.schemes[scheme].primitives).flatMap(([ramp, steps]) =>
@@ -148,6 +145,9 @@ test('a keyless visitor opens a demo from the landing route and downloads its ar
 	expect(rows[0]!.images).toEqual(FIXTURE.images);
 	expect(rows[0]!.versions).toEqual(FIXTURE.versions);
 	expect(rows[0]!.incarnation).toMatch(/^[0-9a-f-]{36}$/);
+
+	// Preview is the tab the workspace opens on, and its gallery only renders from the demo's token set.
+	await expect(page.locator('[data-preview] [data-preview-gallery]')).toBeVisible();
 
 	// Repair ran: this fixture's unrepaired set fails AA (guarded above).
 	await page.getByRole('tab', { name: 'Accessibility' }).click();
