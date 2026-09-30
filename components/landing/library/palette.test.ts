@@ -5,7 +5,7 @@ import type { BrandVersion } from '../../../core/brand-record';
 import { readOklch } from '../../../core/oklch';
 import { createOklchScaleEngine } from '../../../core/oklch-scale-engine';
 
-import { PALETTE_TOKENS, paletteSwatches } from './palette';
+import { paletteSwatches } from './palette';
 
 const RED = { l: 0.627955, c: 0.257683, h: 29.2339 };
 
@@ -47,8 +47,18 @@ describe('paletteSwatches', () => {
 	const tokenSet = tokenSetForVersion(createOklchScaleEngine(), version);
 	if (!tokenSet) throw new Error('the fixture version derived no token set');
 
+	// Written out from #39's plan (Decision 14). `paletteSwatches` maps over `PALETTE_TOKENS`, so
+	// comparing against that constant would pass any reorder.
 	it('paints the seven palette tokens in their fixed order', () => {
-		expect(paletteSwatches(tokenSet).map((swatch) => swatch.token)).toEqual([...PALETTE_TOKENS]);
+		expect(paletteSwatches(tokenSet).map((swatch) => swatch.token)).toEqual([
+			'background',
+			'muted',
+			'border',
+			'primary',
+			'ring',
+			'destructive',
+			'foreground',
+		]);
 	});
 
 	// Parsed back through culori's `readOklch`, so the assertion checks the colour a CSS parser reads
