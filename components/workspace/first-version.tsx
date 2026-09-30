@@ -7,8 +7,9 @@ import type { StoreApi } from 'zustand/vanilla';
 import type { WorkspaceState } from '../../app/state/workspace-store';
 
 // Lazy for the landing route's reason: only a record with no versions needs it, so no other
-// workspace open should pay for the cost estimate and key dialog behind it. Both routes import the
-// same module, so the build emits one chunk they share.
+// workspace open should pay for the cost estimate and key dialog behind it. The build gives each
+// route's lazy import its own copy of the panel and its dynamic dependencies, so this keeps the
+// panel off first-load and off every open that has versions, while total JS pays for it twice.
 const GeneratePanel = lazy(() =>
 	import('@/components/landing/generate/generate-panel').then((module) => ({
 		default: module.GeneratePanel,
