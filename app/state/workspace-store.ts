@@ -230,9 +230,9 @@ type CommitRequest = {
  * user override that re-breaks a pair a repair already fixed shows up as a failing entry instead of
  * disappearing behind the repair that ran before it. `unrepaired` comes from the repair pass on the
  * pre-override set: which pairs it couldn't reach is a question about pins, not about what the user
- * later did to an unrelated token. `repairs` lists the moves the repair pass made before any user
- * override applied. The export archive's DESIGN.md reads it from here, so the moves it documents are
- * the ones behind the set the page paints.
+ * later did to an unrelated token. `repairs` is the repair pass's report, less any entry whose moved
+ * step a user override replaced. The export archive's DESIGN.md reads it from here, so it doesn't
+ * document a repair the user's own edit has since overwritten.
  */
 export type ContrastState = {
 	report: ContrastEntry[];
@@ -557,8 +557,36 @@ function tokensFor(
 	return {
 		tokenSet,
 		overrideIssues,
-		contrast: { report: checkContrast(tokenSet), unrepaired, repairs },
+		contrast: {
+			report: checkContrast(tokenSet),
+			unrepaired,
+			repairs: repairsStillHeld(repairs, repaired, tokenSet),
+		},
 	};
+}
+
+/**
+ * A user override that replaces a step the repair moved leaves the entry describing a colour the
+ * final set no longer has, and DESIGN.md would ship that ratio next to different token files. The
+ * repaired set is the reference rather than `entry.to`, since a step moved twice leaves an earlier
+ * entry whose `to` never survived even with no override. Returns `repairs` itself when nothing
+ * drops, so the store's `contrast.repairs` keeps its identity for subscribers that compare by it.
+ */
+function repairsStillHeld(
+	repairs: RepairEntry[],
+	repaired: TokenSet,
+	final: TokenSet,
+): RepairEntry[] {
+	if (final === repaired) return repairs;
+
+	const held = repairs.filter((entry) => {
+		const before = repaired.schemes[entry.scheme].primitives[entry.ramp]?.[entry.step - 1];
+		const after = final.schemes[entry.scheme].primitives[entry.ramp]?.[entry.step - 1];
+
+		return before && after && before.l === after.l && before.c === after.c && before.h === after.h;
+	});
+
+	return held.length === repairs.length ? repairs : held;
 }
 
 /**

@@ -1614,6 +1614,73 @@ describe('the workspace store’s contrast repair (#8)', () => {
 		expect(store.getState().contrast?.repairs).toBe(before);
 	});
 
+	// DESIGN.md reads `repairs`; an entry whose step a user override replaced would document a colour
+	// and ratio the exported token files don't carry.
+	it('drops a repair entry whose moved step a user override replaced, and keeps the rest', () => {
+		const { store } = openWorkspace();
+		const before = store.getState().contrast?.repairs ?? [];
+		const target = before[0];
+
+		if (!target) throw new Error('expected the default seed to need at least one repair');
+
+		const others = before.filter(
+			(entry) =>
+				entry.scheme !== target.scheme || entry.ramp !== target.ramp || entry.step !== target.step,
+		);
+
+		expect(others.length).toBeGreaterThan(0);
+
+		store.getState().setOverride({
+			kind: 'primitive',
+			scheme: target.scheme,
+			ramp: target.ramp,
+			step: target.step,
+			l: target.to.l === 0.5 ? 0.6 : 0.5,
+			c: target.to.c,
+			h: target.to.h,
+		});
+
+		const after = store.getState().contrast?.repairs ?? [];
+
+		expect(
+			after.some(
+				(entry) =>
+					entry.scheme === target.scheme &&
+					entry.ramp === target.ramp &&
+					entry.step === target.step,
+			),
+		).toBe(false);
+		expect(after).toEqual(others);
+	});
+
+	it('keeps the same repairs array when a primitive override lands on a step no repair moved', () => {
+		const { store } = openWorkspace();
+		const before = store.getState().contrast?.repairs ?? [];
+		const moved = new Set(before.map((entry) => `${entry.scheme}:${entry.ramp}.${entry.step}`));
+		const primitives = store.getState().tokenSet!.schemes.light.primitives;
+		const ramp = Object.keys(primitives)[0]!;
+		const step = primitives[ramp]!.find(
+			(candidate) => !moved.has(`light:${ramp}.${candidate.step}`),
+		);
+
+		if (!step) throw new Error('expected an unmoved step in the first ramp');
+
+		store.getState().setOverride({
+			kind: 'primitive',
+			scheme: 'light',
+			ramp,
+			step: step.step,
+			l: step.l === 0.5 ? 0.6 : 0.5,
+			c: step.c,
+			h: step.h,
+		});
+
+		expect(store.getState().tokenSet!.schemes.light.primitives[ramp]![step.step - 1]!.l).not.toBe(
+			step.l,
+		);
+		expect(store.getState().contrast?.repairs).toBe(before);
+	});
+
 	it('replaces the repairs when a seed edit changes what repair has to move', () => {
 		const { store } = openWorkspace();
 		const before = store.getState().contrast?.repairs;
