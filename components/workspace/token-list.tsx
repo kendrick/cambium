@@ -213,7 +213,9 @@ export function TokenList({
 
 	return (
 		<TokensRegion headingId={headingId}>
-			<label className="bg-background sticky top-0 z-10 flex flex-col gap-1 pb-2 text-xs">
+			{/* Sticky only while the region scrolls itself. Below md it would pin to the viewport
+			    top, under the workspace tab bar. */}
+			<label className="bg-background z-10 flex flex-col gap-1 pb-2 text-xs md:sticky md:top-0">
 				Filter by name
 				<input
 					type="search"
@@ -328,11 +330,12 @@ export function TokenList({
 	);
 }
 
-// Scrolls on its own at md and up. No `tabIndex`: every populated state holds a focusable
-// descendant (the filter at least), and focusing one scrolls the region in every engine. That's
-// also the condition axe's `scrollable-region-focusable` checks. The empty and error states hold
-// one short paragraph and never overflow.
-const SCROLLER = 'max-h-[60vh] min-h-0 flex-1 overflow-y-auto rounded border p-2 md:max-h-none';
+// Scrolls on its own only from md up. Below md the page is the one scroller, because a nested one
+// caught a thumb dragging through some 3,000px of list and held it there (#157). No `tabIndex`: every
+// populated state holds a focusable descendant (the filter at least), and focusing one scrolls
+// the region in every engine. That's also the condition axe's `scrollable-region-focusable`
+// checks. The empty and error states hold one short paragraph and never overflow.
+const SCROLLER = 'min-h-0 flex-1 rounded border p-2 md:overflow-y-auto';
 
 function TokensRegion({ headingId, children }: { headingId: string; children: ReactNode }) {
 	return (

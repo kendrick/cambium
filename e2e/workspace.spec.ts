@@ -547,18 +547,27 @@ test('the raw response sits closed at the bottom of the page, below both columns
 	await expect(details).toHaveJSProperty('open', false);
 
 	// The issue puts it "at the bottom", apart from the rail's two sections, so its top edge has to
-	// clear the bottom of both columns at either width. Inside the rail it would start above the
+	// clear the bottom of both columns from md up. Inside the rail it would start above the
 	// rail's bottom edge, and inside the output column above that column's.
-	for (const width of [1280, 375]) {
-		await page.setViewportSize({ width, height: 900 });
+	await page.setViewportSize({ width: 1280, height: 900 });
 
-		const detailsBox = await requireBox(details);
-		const railBox = await requireBox(rail);
-		const outputBox = await requireBox(output);
+	const detailsBox = await requireBox(details);
+	const railBox = await requireBox(rail);
+	const outputBox = await requireBox(output);
 
-		expect(detailsBox.y).toBeGreaterThanOrEqual(railBox.y + railBox.height - 1);
-		expect(detailsBox.y).toBeGreaterThanOrEqual(outputBox.y + outputBox.height - 1);
-	}
+	expect(detailsBox.y).toBeGreaterThanOrEqual(railBox.y + railBox.height - 1);
+	expect(detailsBox.y).toBeGreaterThanOrEqual(outputBox.y + outputBox.height - 1);
+
+	// Below md the raw response sits in the Seed tab, under the seed it produced (#157), and only
+	// there.
+	await page.setViewportSize({ width: 375, height: 900 });
+	const bar = page.getByRole('tablist', { name: 'Workspace' });
+	await bar.getByRole('tab', { name: 'Seed' }).click();
+	const seedBox = await requireBox(page.getByRole('region', { name: 'Seed' }));
+	const narrowDetails = await requireBox(details);
+	expect(narrowDetails.y).toBeGreaterThanOrEqual(seedBox.y + seedBox.height - 1);
+	await bar.getByRole('tab', { name: 'Tokens' }).click();
+	await expect(details).toBeHidden();
 });
 
 test('a version with no raw response renders the details element as a paragraph, not a preformatted block', async ({
@@ -582,9 +591,7 @@ test('a version with no raw response renders the details element as a paragraph,
 	await expect(details.locator('pre')).toHaveCount(0);
 });
 
-test('the layout collapses to one column narrow and sits side by side from md up', async ({
-	page,
-}) => {
+test('the layout is one tab set narrow and sits side by side from md up', async ({ page }) => {
 	const record = buildRecordWithOneVersion();
 	await seedWorkspaceRecord(page, record);
 
@@ -596,13 +603,11 @@ test('the layout collapses to one column narrow and sits side by side from md up
 	await expect(rail).toBeVisible();
 	await expect(output).toBeVisible();
 
-	// Below Tailwind's `md` breakpoint (768px), `components/workspace/shell.tsx`'s grid is
-	// `grid-cols-1`, so the two boxes stack.
+	// Below md the workspace is one tab set (#157): neither column exists as a landmark.
 	await page.setViewportSize({ width: 375, height: 900 });
-	const narrowRail = await requireBox(rail);
-	const narrowOutput = await requireBox(output);
-
-	expect(narrowOutput.y).toBeGreaterThanOrEqual(narrowRail.y + narrowRail.height - 1);
+	await expect(page.getByRole('tablist', { name: 'Workspace' })).toBeVisible();
+	await expect(rail).toHaveCount(0);
+	await expect(output).toHaveCount(0);
 
 	// At 1280px the grid switches to `md:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]`, so the columns
 	// sit beside each other: the output box starts at or after the rail's right edge, and the two
@@ -805,4 +810,390 @@ test('a record with a version still renders the preset select', async ({ page })
 	// By value, not by option text: #159 changes the labels, not the values.
 	await expect(page.getByLabel('Interpretation')).toBeVisible();
 	await expect(page.getByLabel('Interpretation')).toHaveValue('balanced');
+});
+
+/**
+ * Names of the tab lists in the workspace's own chrome. The preview's sample gallery renders a
+ * "Sample range" tab list of its own, which is the consumer's UI rather than the workspace's, so
+ * anything inside `[data-preview]` is skipped.
+ */
+async function workspaceTabLists(page: Page): Promise<string[]> {
+	return page
+		.locator('main [role="tablist"]')
+		.evaluateAll((lists) =>
+			lists
+				.filter((list) => !list.closest('[data-preview]'))
+				.map((list) => list.getAttribute('aria-label') ?? ''),
+		);
+}
+
+/**
+ * The workspace panels a person can see, by the name of the tab that labels each. base-ui leaves
+ * an outgoing panel mounted and not yet `hidden` while its exit transition runs, so callers poll.
+ */
+async function visibleWorkspacePanels(page: Page): Promise<string[]> {
+	return page
+		.locator('main [role="tabpanel"]')
+		.evaluateAll((panels) =>
+			panels
+				.filter((panel) => !panel.closest('[data-preview]') && panel.checkVisibility())
+				.map(
+					(panel) =>
+						document
+							.getElementById(panel.getAttribute('aria-labelledby') ?? '')
+							?.textContent?.trim() ?? '',
+				),
+		);
+}
+
+async function duplicateIds(page: Page): Promise<string[]> {
+	return page.evaluate(() => {
+		const counts = new Map<string, number>();
+		for (const element of document.querySelectorAll('[id]')) {
+			counts.set(element.id, (counts.get(element.id) ?? 0) + 1);
+		}
+		return [...counts].filter(([, count]) => count > 1).map(([id]) => id);
+	});
+}
+
+const PHONE_TABS = ['Seed', 'Tokens', 'Preview', 'Accessibility', 'Export'];
+
+type Box = { x: number; y: number; width: number; height: number };
+
+function rounded({ x, y, width, height }: Box): Box {
+	return {
+		x: Math.round(x),
+		y: Math.round(y),
+		width: Math.round(width),
+		height: Math.round(height),
+	};
+}
+
+/**
+ * `components/workspace/shell.tsx`'s desktop layout at 1440 × 900, measured on 06ec569 before
+ * #157 rebuilt the narrow layout. #157 had to leave this one alone, so the boxes come from the
+ * unchanged tree, not from the grid classes that produce them: a figure worked out from those
+ * classes would only check the code against itself. All four are set by the `h-dvh` grid and the
+ * closed `<details>`, not by what the columns hold.
+ */
+const DESKTOP_LAYOUT_BEFORE_157 = {
+	rail: { x: 24, y: 24, width: 384, height: 808 },
+	output: { x: 432, y: 24, width: 984, height: 808 },
+	rawResponse: { x: 24, y: 856, width: 1392, height: 20 },
+	documentHeight: 900,
+};
+
+test.describe('at 1440 × 900', () => {
+	test.use({ viewport: { width: 1440, height: 900 } });
+
+	test('the layout is the one from before the phone tab set, with no workspace-level tab list', async ({
+		page,
+	}) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+		await expect(
+			page.getByRole('region', { name: 'Tokens' }).getByRole('listitem').first(),
+		).toBeVisible();
+		await expect(page.locator('[data-preview]')).toBeVisible();
+		await page.evaluate(() => document.fonts.ready);
+
+		const measured = {
+			rail: rounded(await requireBox(page.getByRole('complementary', { name: 'Seed and tokens' }))),
+			output: rounded(await requireBox(page.getByRole('region', { name: 'Output' }))),
+			rawResponse: rounded(await requireBox(page.locator('details'))),
+			documentHeight: await page.evaluate(() => document.documentElement.scrollHeight),
+		};
+
+		expect(measured).toEqual(DESKTOP_LAYOUT_BEFORE_157);
+		expect(await workspaceTabLists(page)).toEqual(['Output']);
+		// The list keeps scrolling inside its own column here. Only the narrow layout hands that to
+		// the page.
+		await expect(page.getByRole('region', { name: 'Tokens' })).toHaveCSS('overflow-y', 'auto');
+	});
+});
+
+/**
+ * Long enough to overflow the raw response's old `max-h-64` box, and one unbroken 400-character
+ * run wide enough to overflow a 390px line on its own. The fixture's default one-liner fits
+ * either way, so it couldn't tell a capped `<pre>` from an uncapped one.
+ */
+const LONG_RAW_RESPONSE = [
+	`{"unbroken":"${'x'.repeat(400)}"}`,
+	...Array.from({ length: 80 }, (_, line) => `line ${line}`),
+].join('\n');
+
+/**
+ * The raw response's `<details>`, by its summary. #40's Export panel renders a `<details>` per
+ * export file while it's mounted, so the raw response is no longer the page's only one.
+ */
+function rawResponseDetails(page: Page): Locator {
+	return page
+		.locator('details')
+		.filter({ has: page.getByText('Raw model response', { exact: true }) });
+}
+
+/**
+ * Every element in `<main>` a person could scroll on its own. Horizontal scrolling inside
+ * `[data-preview]` is left out: the sample table scrolls sideways at phone width through
+ * `components/ui/table.tsx`'s container, which is the preview's own layout and out of #157's
+ * scope. Vertical scrolling there still counts.
+ */
+async function selfScrollers(page: Page): Promise<string[]> {
+	return page.locator('main').evaluate((main) => {
+		// Inline because the callback is serialized into the page and can't close over a helper.
+		return [...main.querySelectorAll<HTMLElement>('*')]
+			.filter((element) => {
+				const style = getComputedStyle(element);
+				const vertical =
+					['auto', 'scroll'].includes(style.overflowY) &&
+					element.scrollHeight > element.clientHeight;
+				const horizontal =
+					['auto', 'scroll'].includes(style.overflowX) &&
+					element.scrollWidth > element.clientWidth &&
+					!element.closest('[data-preview]');
+				return vertical || horizontal;
+			})
+			.map((element) => element.outerHTML.slice(0, 160));
+	});
+}
+
+/** Opens every collapsed token category, so no row a category hides can escape a measurement. */
+async function expandEveryCategory(tokens: Locator): Promise<void> {
+	const collapsed = tokens
+		.getByRole('heading', { level: 3 })
+		.getByRole('button', { expanded: false });
+	// oxlint-disable-next-line no-await-in-loop -- each click reveals the next collapsed category, so the count has to be re-read between clicks
+	while ((await collapsed.count()) > 0) await collapsed.first().click();
+}
+
+test.describe('at 390 × 844', () => {
+	test.use({ viewport: { width: 390, height: 844 } });
+
+	test('the token list scrolls with the page, and nothing inside the workspace scrolls on its own', async ({
+		page,
+	}) => {
+		const record = buildRecordWithOneVersion({ rawResponse: LONG_RAW_RESPONSE });
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+		const bar = page.getByRole('tablist', { name: 'Workspace' });
+
+		await bar.getByRole('tab', { name: 'Seed' }).click();
+		await rawResponseDetails(page).locator('summary').click();
+		await expect(rawResponseDetails(page)).toHaveJSProperty('open', true);
+
+		await bar.getByRole('tab', { name: 'Tokens' }).click();
+		const tokens = page.getByRole('region', { name: 'Tokens' });
+		await expect(tokens.getByRole('listitem').first()).toBeVisible();
+		await expandEveryCategory(tokens);
+		await expect(tokens).toHaveCSS('overflow-y', 'visible');
+
+		for (const name of PHONE_TABS) {
+			// oxlint-disable-next-line no-await-in-loop -- one tab at a time: each check reads the panel the click just opened
+			await bar.getByRole('tab', { name }).click();
+			// oxlint-disable-next-line no-await-in-loop
+			await expect.poll(() => visibleWorkspacePanels(page), { message: name }).toEqual([name]);
+
+			// #40's export previews are `<pre>`s inside collapsed `<details>`. Closed, they have no box
+			// for `selfScrollers` to catch, so open every one.
+			if (name === 'Export') {
+				const previews = page.getByRole('tabpanel', { name: 'Export' }).locator('details');
+				// oxlint-disable-next-line no-await-in-loop
+				await expect(previews.first()).toBeVisible();
+				// oxlint-disable-next-line no-await-in-loop
+				for (const preview of await previews.all()) await preview.locator('summary').click();
+				// oxlint-disable-next-line no-await-in-loop
+				await expect(page.locator('[data-export-preview]').first()).toBeVisible();
+			}
+
+			// oxlint-disable-next-line no-await-in-loop
+			expect(await selfScrollers(page), name).toEqual([]);
+			// oxlint-disable-next-line no-await-in-loop
+			expect(await page.evaluate(() => document.documentElement.scrollWidth), name).toBe(390);
+		}
+	});
+
+	test('at phone width the workspace is one tab list, and only the selected tab’s panel shows', async ({
+		page,
+	}) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+		const bar = page.getByRole('tablist', { name: 'Workspace' });
+		await expect(bar).toBeVisible();
+		expect(await workspaceTabLists(page)).toEqual(['Workspace']);
+		expect(await bar.getByRole('tab').allInnerTexts()).toEqual(PHONE_TABS);
+
+		for (const name of PHONE_TABS) {
+			// oxlint-disable-next-line no-await-in-loop -- one tab at a time: each check reads the panel the click just opened
+			await bar.getByRole('tab', { name }).click();
+			// oxlint-disable-next-line no-await-in-loop
+			await expect(bar.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true');
+			// oxlint-disable-next-line no-await-in-loop
+			await expect.poll(() => visibleWorkspacePanels(page), { message: name }).toEqual([name]);
+		}
+
+		// Preview is the costly one to mount twice, and a second copy would also duplicate ids. The
+		// scheme control is built once and placed by whichever layout is mounted.
+		await bar.getByRole('tab', { name: 'Preview' }).click();
+		await expect(page.locator('[data-preview]')).toHaveCount(1);
+		await expect(page.getByRole('group', { name: 'Colour scheme' })).toHaveCount(1);
+		expect(await duplicateIds(page)).toEqual([]);
+	});
+
+	test('selecting Preview puts the preview’s top inside the first screen', async ({ page }) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+		await page
+			.getByRole('tablist', { name: 'Workspace' })
+			.getByRole('tab', { name: 'Preview' })
+			.click();
+
+		const preview = page.locator('[data-preview]');
+		await expect(preview).toBeVisible();
+		const top = await preview.evaluate((node) => node.getBoundingClientRect().top + window.scrollY);
+		expect(top).toBeLessThan(844);
+	});
+
+	test('the tab bar stays at the viewport top after a 2,000px scroll on Tokens', async ({
+		page,
+	}) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+		const bar = page.getByRole('tablist', { name: 'Workspace' });
+		await bar.getByRole('tab', { name: 'Tokens' }).click();
+		const tokens = page.getByRole('region', { name: 'Tokens' });
+		await expect(tokens.getByRole('listitem').first()).toBeVisible();
+		await expandEveryCategory(tokens);
+		// Each click above scrolls its disclosure into view, which has already docked the bar.
+		// Start from the top, so the wheel below does all 2,000px and the check under it means
+		// something.
+		await page.evaluate(() => window.scrollTo(0, 0));
+		await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+
+		// Below the `h1` before any scroll, so a bar found at 0 afterwards got there by sticking.
+		expect((await requireBox(bar)).y).toBeGreaterThan(0);
+
+		// A wheel over the list itself. A nested scroller would take the delta and leave the page
+		// at 0, which is the defect #157 reports.
+		await page.mouse.move(195, 600);
+		await page.mouse.wheel(0, 2000);
+		await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(2000);
+
+		expect(Math.abs((await requireBox(bar)).y)).toBeLessThan(0.5);
+
+		// #154's control rides in the same bar, so it stays on screen too.
+		const scheme = await requireBox(page.getByRole('group', { name: 'Colour scheme' }));
+		expect(scheme.y).toBeGreaterThanOrEqual(0);
+		expect(scheme.y + scheme.height).toBeLessThanOrEqual(844);
+
+		// Switching tabs from deep in the list opens the next panel at its own top.
+		await bar.getByRole('tab', { name: 'Preview' }).click();
+		const preview = page.locator('[data-preview]');
+		await expect(preview).toBeVisible();
+		const previewTop = (await requireBox(preview)).y;
+		expect(previewTop).toBeGreaterThanOrEqual(0);
+		expect(previewTop).toBeLessThan(844);
+	});
+
+	test('both skip links land in their panel at phone width', async ({ page }) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		for (const { presses, tab } of [
+			{ presses: 1, tab: 'Preview' },
+			{ presses: 2, tab: 'Export' },
+		] as const) {
+			// oxlint-disable-next-line no-await-in-loop -- one page: each pass reloads it and reads the state the previous keypresses left
+			await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+			// oxlint-disable-next-line no-await-in-loop
+			await expect(page.getByRole('region', { name: 'Seed' })).toBeVisible();
+
+			// oxlint-disable-next-line no-await-in-loop
+			for (let press = 0; press < presses; press += 1) await page.keyboard.press('Tab');
+			// oxlint-disable-next-line no-await-in-loop
+			await page.keyboard.press('Enter');
+
+			const bar = page.getByRole('tablist', { name: 'Workspace' });
+			// oxlint-disable-next-line no-await-in-loop
+			await expect(bar.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true');
+			const panel = page.getByRole('tabpanel', { name: tab });
+			// oxlint-disable-next-line no-await-in-loop
+			await expect
+				.poll(() => panel.evaluate((node) => node.contains(document.activeElement)), {
+					message: tab,
+				})
+				.toBe(true);
+		}
+	});
+
+	test('every phone tab keeps its headings in order, with no level skipped under the page h1', async ({
+		page,
+	}) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+		const bar = page.getByRole('tablist', { name: 'Workspace' });
+
+		for (const name of PHONE_TABS) {
+			// oxlint-disable-next-line no-await-in-loop -- one tab at a time: axe reads only the panel the click just opened
+			await bar.getByRole('tab', { name }).click();
+			// oxlint-disable-next-line no-await-in-loop
+			await expect.poll(() => visibleWorkspacePanels(page), { message: name }).toEqual([name]);
+			// Preview's headings live in a lazy chunk. Axe run on its fallback would see no h3 to skip to.
+			if (name === 'Preview') {
+				// oxlint-disable-next-line no-await-in-loop
+				await expect(page.locator('[data-preview]')).toBeVisible();
+			}
+
+			const { violations } =
+				// oxlint-disable-next-line no-await-in-loop
+				await new AxeBuilder({ page }).include('main').withRules(['heading-order']).analyze();
+			expect(violations, name).toEqual([]);
+		}
+	});
+});
+
+test('the tab set and the page-scrolling token list switch at the same width', async ({ page }) => {
+	const record = buildRecordWithOneVersion();
+	await seedWorkspaceRecord(page, record);
+
+	await page.setViewportSize({ width: 767, height: 844 });
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	// The tab set is switched in JS and the scroller in CSS. At 767 and 768 both have to agree, or
+	// one pixel shows a tab set over a nested scroller, or a desktop grid with no scroller at all.
+	for (const [width, narrow] of [
+		[767, true],
+		[768, false],
+		[767, true],
+	] as const) {
+		// oxlint-disable-next-line no-await-in-loop -- one page: each resize is measured before the next one changes the viewport
+		await page.setViewportSize({ width, height: 844 });
+		// oxlint-disable-next-line no-await-in-loop
+		await expect(page.getByRole('tablist', { name: 'Workspace' })).toHaveCount(narrow ? 1 : 0);
+		if (narrow) {
+			// oxlint-disable-next-line no-await-in-loop
+			await page
+				.getByRole('tablist', { name: 'Workspace' })
+				.getByRole('tab', { name: 'Tokens' })
+				.click();
+		}
+		// oxlint-disable-next-line no-await-in-loop
+		await expect(page.getByRole('region', { name: 'Tokens' })).toHaveCSS(
+			'overflow-y',
+			narrow ? 'visible' : 'auto',
+		);
+	}
 });
