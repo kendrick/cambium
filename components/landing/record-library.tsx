@@ -74,6 +74,7 @@ export function RecordLibrary({ firstRun }: { firstRun?: ReactNode }) {
 	const live = useRef(true);
 	const latestRefresh = useRef(0);
 	const headingRef = useRef<HTMLHeadingElement>(null);
+	const [notice, setNotice] = useState<string | null>(null);
 
 	const refresh = useCallback(async () => {
 		const call = ++latestRefresh.current;
@@ -102,11 +103,22 @@ export function RecordLibrary({ firstRun }: { firstRun?: ReactNode }) {
 		async (record: BrandRecord, typed: string): Promise<RenameOutcome> => {
 			const name = typed.trim();
 			const { name: _previous, ...unnamed } = record;
+			setNotice(null);
 
 			try {
 				await records.put(name ? { ...unnamed, name } : unnamed);
 			} catch (error) {
 				await refresh();
+
+				// The refresh just dropped this row and its form, so a message returned to the form would
+				// never render. The notice lives on the library instead, and focus goes where `remove`
+				// sends it, for the same reason.
+				if (error instanceof StaleRecordWriteError && error.incarnation === 'deleted') {
+					setNotice("That brand was deleted in another tab, so the new name wasn't saved.");
+					headingRef.current?.focus();
+					return { ok: false, message: '' };
+				}
+
 				return {
 					ok: false,
 					message:
@@ -124,6 +136,8 @@ export function RecordLibrary({ firstRun }: { firstRun?: ReactNode }) {
 
 	const remove = useCallback(
 		async (id: string) => {
+			setNotice(null);
+
 			try {
 				await records.delete(id);
 			} catch (error) {
@@ -158,6 +172,11 @@ export function RecordLibrary({ firstRun }: { firstRun?: ReactNode }) {
 			<h2 className="text-lg font-semibold" id={headingId} ref={headingRef} tabIndex={-1}>
 				Your brands
 			</h2>
+			{/* An <output> is a status live region. It's mounted empty so screen readers are already
+			    watching it when a notice lands. */}
+			<output className="block text-sm" data-library-notice>
+				{notice}
+			</output>
 			{listing.kind === 'unavailable' ? (
 				<p className="text-sm">
 					Cambium couldn&apos;t read the brands saved in this browser. Blocked site data and private

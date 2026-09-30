@@ -241,6 +241,33 @@ test('a rename built on a copy another tab overtook is refused and the list refr
 	expect((await readRows(page))[0]).toMatchObject({ name: 'Elsewhere', revision: 2 });
 });
 
+test('a rename of a record another tab deleted says so outside the removed row', async ({
+	page,
+}) => {
+	// An incarnation, because only a copy carrying one is refused as a deleted record's.
+	const record = stored(uiWikipedia, { name: 'Doomed', incarnation: crypto.randomUUID() });
+	await seedRows(page, [record]);
+	const item = row(page, record.id);
+
+	await item.getByRole('button', { name: 'Rename Doomed' }).click();
+	await item.getByRole('textbox', { name: 'Name for Doomed' }).fill('Too late');
+
+	const other = await page.context().newPage();
+	await other.goto('/');
+	await other.getByRole('button', { name: 'Delete Doomed' }).click();
+	await other.getByRole('dialog').getByRole('button', { name: 'Delete brand' }).click();
+	await expect(row(other, record.id)).toHaveCount(0);
+	await other.close();
+
+	await item.getByRole('button', { name: 'Save name' }).click();
+
+	await expect(item).toHaveCount(0);
+	await expect(library(page)).toContainText('deleted in another tab');
+	await expect(library(page).getByRole('heading', { name: 'Your brands' })).toBeFocused();
+	expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+	expect(await readRows(page)).toHaveLength(0);
+});
+
 test('deleting a record removes it from the library and frees what it held', async ({ page }) => {
 	const kept = stored(uiWikipedia, { name: 'Kept' });
 	const removed = stored(photoWindow, { name: 'Removed' });
