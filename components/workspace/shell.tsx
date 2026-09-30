@@ -129,7 +129,9 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	}, [tokenSet, derived, draftSeed, overrides]);
 
 	// Built once and placed by whichever layout is mounted. Only one layout mounts at a time, so
-	// each panel, id, ref, lazy chunk and scheme control exists once in the DOM at any width.
+	// each panel, id, ref, lazy chunk and scheme control exists once in the DOM at any width. It
+	// also means crossing 768px, on a rotated tablet or a resized window, remounts everything, so
+	// the token filter, open categories and a generate in flight don't survive it.
 	const seedColumn = (
 		<>
 			{/* The seed's field list scrolls inside half the rail at most from md up, so a fully stated
@@ -287,8 +289,9 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 		<main className="flex min-h-dvh flex-col gap-4 pb-4">
 			<SkipLinks onSkip={skipTo} />
 			<h1 className="px-4 pt-4 text-2xl font-semibold tracking-tight">Cambium</h1>
-			{/* `id="output"` keeps the skip links' fragment resolving. Only one layout is mounted, so
-			    it never duplicates the desktop section's id. */}
+			{/* The skip links' `href="#output"` names this element, as it names the desktop section.
+			    `onSkip` does the navigating, but the link shouldn't point at nothing. Only one layout
+			    is mounted, so the id never duplicates. */}
 			<Tabs
 				ref={phoneTabs}
 				id="output"

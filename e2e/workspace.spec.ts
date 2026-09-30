@@ -995,7 +995,7 @@ test.describe('at 390 × 844', () => {
 			await expect.poll(() => visibleWorkspacePanels(page), { message: name }).toEqual([name]);
 
 			// #40's export previews are `<pre>`s inside collapsed `<details>`. Closed, they have no box
-			// for `selfScrollers` to catch, so open every one (Decision 22).
+			// for `selfScrollers` to catch, so open every one.
 			if (name === 'Export') {
 				const previews = page.getByRole('tabpanel', { name: 'Export' }).locator('details');
 				await expect(previews.first()).toBeVisible();
@@ -1028,7 +1028,7 @@ test.describe('at 390 × 844', () => {
 		}
 
 		// Preview is the costly one to mount twice, and a second copy would also duplicate ids. The
-		// scheme control is built once and placed by whichever layout is mounted (Decision 7).
+		// scheme control is built once and placed by whichever layout is mounted.
 		await bar.getByRole('tab', { name: 'Preview' }).click();
 		await expect(page.locator('[data-preview]')).toHaveCount(1);
 		await expect(page.getByRole('group', { name: 'Colour scheme' })).toHaveCount(1);
@@ -1081,12 +1081,12 @@ test.describe('at 390 × 844', () => {
 
 		expect(Math.abs((await requireBox(bar)).y)).toBeLessThan(0.5);
 
-		// #154's control rides in the same bar, so it stays on screen too (Decision 7).
+		// #154's control rides in the same bar, so it stays on screen too.
 		const scheme = await requireBox(page.getByRole('group', { name: 'Colour scheme' }));
 		expect(scheme.y).toBeGreaterThanOrEqual(0);
 		expect(scheme.y + scheme.height).toBeLessThanOrEqual(844);
 
-		// Switching tabs from deep in the list opens the next panel at its own top (Decision 9).
+		// Switching tabs from deep in the list opens the next panel at its own top.
 		await bar.getByRole('tab', { name: 'Preview' }).click();
 		const preview = page.locator('[data-preview]');
 		await expect(preview).toBeVisible();

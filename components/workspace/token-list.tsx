@@ -330,8 +330,8 @@ export function TokenList({
 	);
 }
 
-// Scrolls on its own only from md up. Below md the page is the one scroller: a nested one caught
-// a thumb dragging through some 3,000px of list and held it there (#157). No `tabIndex`: every
+// Scrolls on its own only from md up. Below md the page is the one scroller, because a nested one
+// caught a thumb dragging through some 3,000px of list and held it there (#157). No `tabIndex`: every
 // populated state holds a focusable descendant (the filter at least), and focusing one scrolls
 // the region in every engine. That's also the condition axe's `scrollable-region-focusable`
 // checks. The empty and error states hold one short paragraph and never overflow.
