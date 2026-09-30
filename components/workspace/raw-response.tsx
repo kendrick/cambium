@@ -14,7 +14,9 @@ export function RawResponse({ rawResponse }: { rawResponse: string | null }) {
 					This version has no raw response. No model call produced it.
 				</p>
 			) : (
-				<pre className="bg-muted mt-2 max-h-64 overflow-auto rounded p-2 text-xs whitespace-pre-wrap">
+				// Capped and scrolling on its own only from md up. Below md the page scrolls it, and a long
+				// unbroken run wraps rather than widening the page (#157).
+				<pre className="bg-muted mt-2 rounded p-2 text-xs whitespace-pre-wrap max-md:wrap-anywhere md:max-h-64 md:overflow-auto">
 					{rawResponse}
 				</pre>
 			)}

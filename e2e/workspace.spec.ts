@@ -877,3 +877,85 @@ test.describe('at 1440 × 900', () => {
 		await expect(page.getByRole('region', { name: 'Tokens' })).toHaveCSS('overflow-y', 'auto');
 	});
 });
+
+/**
+ * Long enough to overflow the raw response's old `max-h-64` box, and one unbroken 400-character
+ * run wide enough to overflow a 390px line on its own. The fixture's default one-liner fits
+ * either way, so it couldn't tell a capped `<pre>` from an uncapped one.
+ */
+const LONG_RAW_RESPONSE = [
+	`{"unbroken":"${'x'.repeat(400)}"}`,
+	...Array.from({ length: 80 }, (_, line) => `line ${line}`),
+].join('\n');
+
+/**
+ * The raw response's `<details>`, by its summary. #40's Export panel renders a `<details>` per
+ * export file while it's mounted, so the raw response is no longer the page's only one.
+ */
+function rawResponseDetails(page: Page): Locator {
+	return page
+		.locator('details')
+		.filter({ has: page.getByText('Raw model response', { exact: true }) });
+}
+
+/**
+ * Every element in `<main>` a person could scroll on its own. Horizontal scrolling inside
+ * `[data-preview]` is left out: the sample table scrolls sideways at phone width through
+ * `components/ui/table.tsx`'s container, which is the preview's own layout and out of #157's
+ * scope. Vertical scrolling there still counts.
+ */
+async function selfScrollers(page: Page): Promise<string[]> {
+	return page.locator('main').evaluate((main) => {
+		// Inline because the callback is serialized into the page and can't close over a helper.
+		return [...main.querySelectorAll<HTMLElement>('*')]
+			.filter((element) => {
+				const style = getComputedStyle(element);
+				const vertical =
+					['auto', 'scroll'].includes(style.overflowY) &&
+					element.scrollHeight > element.clientHeight;
+				const horizontal =
+					['auto', 'scroll'].includes(style.overflowX) &&
+					element.scrollWidth > element.clientWidth &&
+					!element.closest('[data-preview]');
+				return vertical || horizontal;
+			})
+			.map((element) => element.outerHTML.slice(0, 160));
+	});
+}
+
+/** Opens every collapsed token category, so no row a category hides can escape a measurement. */
+async function expandEveryCategory(tokens: Locator): Promise<void> {
+	const collapsed = tokens
+		.getByRole('heading', { level: 3 })
+		.getByRole('button', { expanded: false });
+	while ((await collapsed.count()) > 0) await collapsed.first().click();
+}
+
+test.describe('at 390 × 844', () => {
+	test.use({ viewport: { width: 390, height: 844 } });
+
+	test('the token list scrolls with the page, and nothing inside the workspace scrolls on its own', async ({
+		page,
+	}) => {
+		const record = buildRecordWithOneVersion({ rawResponse: LONG_RAW_RESPONSE });
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+		const tokens = page.getByRole('region', { name: 'Tokens' });
+		await expect(tokens.getByRole('listitem').first()).toBeVisible();
+		await expandEveryCategory(tokens);
+		await rawResponseDetails(page).locator('summary').click();
+		await expect(rawResponseDetails(page)).toHaveJSProperty('open', true);
+
+		await expect(tokens).toHaveCSS('overflow-y', 'visible');
+
+		for (const name of ['Preview', 'Accessibility', 'Export']) {
+			await page.getByRole('tab', { name }).click();
+			await expect(page.getByRole('tabpanel', { name })).toBeVisible();
+
+			expect(await selfScrollers(page), name).toEqual([]);
+			expect(await page.evaluate(() => document.documentElement.scrollWidth), name).toBe(390);
+		}
+	});
+});
