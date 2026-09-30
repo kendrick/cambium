@@ -19,7 +19,7 @@ import { CAMBIUM_NAMESPACE } from '../core/provenance';
 import { defaultSeedPins } from '../core/seed-pins';
 import { buildTokenSet } from '../core/semantic-layer';
 import { STEP_ROLES } from '../core/step-roles';
-import { applyOverrides, type TokenOverride } from '../core/token-overrides';
+import { applyOverrides, type SchemeName, type TokenOverride } from '../core/token-overrides';
 import { stepForAlias, type TokenSet } from '../core/token-set';
 
 import { expect, test } from './fixtures';
@@ -417,6 +417,20 @@ function paintDistance(actual: Rgb, expected: Rgb): number {
 	return Math.max(...actual.map((channel, index) => Math.abs(channel - expected[index]!)));
 }
 
+const SCHEME_LABELS = { light: 'Light', dark: 'Dark' } as const satisfies Record<
+	SchemeName,
+	string
+>;
+
+/** The workspace's one scheme control, in the Output header since #154. */
+async function chooseScheme(page: Page, scheme: SchemeName): Promise<void> {
+	const button = page
+		.getByRole('group', { name: 'Colour scheme' })
+		.getByRole('button', { name: SCHEME_LABELS[scheme], exact: true });
+	await button.click();
+	await expect(button).toHaveAttribute('aria-pressed', 'true');
+}
+
 /**
  * A token's edit trigger, found by accessible name. The `(has issues)` suffix is the trigger
  * announcing a held issue, so a scenario that raised one can still find it.
@@ -480,8 +494,10 @@ test('the token list is one Tab stop per ramp, semantic row and category, plus t
 
 	const tokens = page.getByRole('region', { name: 'Tokens' });
 	await expect(tokens.locator('[data-token]').first()).toBeVisible();
-	// The scheme toggle sits just above the region, so Tab from it walks the region from its top.
-	const start = page.getByRole('button', { name: 'dark', exact: true });
+	// The filter is the region's first stop, so counting from it and adding one for the filter walks
+	// the whole region. Nothing above the region is a fixed starting point since the scheme control
+	// moved to the Output header (#154).
+	const start = tokens.getByRole('searchbox', { name: 'Filter by name' });
 
 	// A row whose override breaks a pair adds a stop, #153's Revert, and the issue's bound has no
 	// allowance for it. None exists at load: `buildRecordWithSeed` loads no override and this seed
@@ -491,7 +507,7 @@ test('the token list is one Tab stop per ramp, semantic row and category, plus t
 
 	// From the issue: one per ramp, per semantic row, per category disclosure, plus the filter.
 	const bound = RAMP_NAMES.length + SEMANTIC_TOKENS.length + CATEGORY_DISCLOSURES.length + 1;
-	const onLoad = await tabStopsInside(page, tokens, start);
+	const onLoad = 1 + (await tabStopsInside(page, tokens, start));
 
 	expect(onLoad).toBeGreaterThan(0);
 	expect(onLoad).toBeLessThanOrEqual(bound);
@@ -500,7 +516,7 @@ test('the token list is one Tab stop per ramp, semantic row and category, plus t
 	for (const category of NON_COLOUR_CATEGORIES) await expandCategory(page, category);
 	const valueRows = Object.values(EXPECTED_ROWS).reduce((total, count) => total + count, 0);
 
-	expect(await tabStopsInside(page, tokens, start)).toBeLessThanOrEqual(bound + valueRows);
+	expect(1 + (await tabStopsInside(page, tokens, start))).toBeLessThanOrEqual(bound + valueRows);
 });
 
 test('typing a token name into the filter hides every row whose name does not contain it', async ({
@@ -825,7 +841,7 @@ test("a dark-scheme shadow swatch paints that scheme's own shadow colour, alpha 
 
 	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
-	await page.getByRole('button', { name: 'dark', exact: true }).click();
+	await chooseScheme(page, 'dark');
 	await expandCategory(page, 'shadow');
 
 	// Dark's shadow colour differs from light's in lightness and alpha for this seed, so a swatch
@@ -1057,6 +1073,87 @@ test('an override survives a preset switch', async ({ page }) => {
 		.toBeLessThanOrEqual(1);
 });
 
+test('an override made while the scheme control reads Dark changes dark and leaves light as it was', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const DARK = TOKEN_SET.schemes.dark;
+	const target = 'brand.1';
+	const lightAlias = LIGHT.semantic.primary!.alias;
+	const darkAlias = DARK.semantic.primary!.alias;
+	// Neither scheme starts on the target, so an overridden mark can only come from this edit.
+	expect(lightAlias).not.toBe(target);
+	expect(darkAlias).not.toBe(target);
+
+	const row = page.locator('[data-token="semantic.primary"]');
+	const swatch = row.locator('[data-swatch]');
+	const revert = row.getByRole('button', { name: 'Revert primary override', exact: true });
+	await expect(swatch).toBeVisible();
+
+	const paintOf = (scheme: TokenSet['schemes']['light'], alias: string) =>
+		referencePaint(page, swatch, oklchFromFields(stepForAlias(scheme.primitives, alias)!));
+
+	await chooseScheme(page, 'dark');
+
+	const darkDerived = await paintOf(DARK, darkAlias);
+	const darkTarget = await paintOf(DARK, target);
+	// Guard: the edit changes what dark paints, so "dark took it" can fail.
+	expect(paintDistance(darkDerived, darkTarget)).toBeGreaterThan(1);
+
+	const editor = await openEditor(page, 'semantic.primary');
+	await editor.getByLabel('primary alias', { exact: true }).selectOption(target);
+	// Closed before any paint check: the popup can cover the row it hangs from.
+	await closeEditor(page, editor);
+
+	await expect(row).toHaveAttribute('data-overridden', '');
+	await expect(row.locator('[data-resolves-to]')).toHaveAttribute('data-resolves-to', target);
+	await expect
+		.poll(async () => paintDistance(await paintedCentre(swatch), darkTarget))
+		.toBeLessThanOrEqual(1);
+	// #153's verdict for dark's own pair: `primary-foreground` is `brand.1` too, so 1.00:1.
+	await expect(verdictOf(row)).toHaveCount(1);
+	await expect(verdictOf(row).first()).toHaveText(/^primary-foreground on primary: /);
+	await expect(revert).toBeVisible();
+
+	await chooseScheme(page, 'light');
+
+	// Light against the derived set, not against an earlier reading of the page, so an edit that
+	// leaked into light can't pass by matching itself.
+	const lightDerived = await paintOf(LIGHT, lightAlias);
+	const lightTarget = await paintOf(LIGHT, target);
+	expect(paintDistance(lightDerived, lightTarget)).toBeGreaterThan(1);
+
+	await expect(row).not.toHaveAttribute('data-overridden', '');
+	await expect(row.locator('[data-resolves-to]')).toHaveAttribute('data-resolves-to', lightAlias);
+	await expect
+		.poll(async () => paintDistance(await paintedCentre(swatch), lightDerived))
+		.toBeLessThanOrEqual(1);
+	// The row's verdict follows the control: light's `primary` holds no override, so nothing to say.
+	await expect(verdictOf(row)).toHaveCount(0);
+	await expect(revert).toHaveCount(0);
+
+	// The Accessibility report doesn't follow it: it lists both schemes, so dark's failure shows
+	// while the control reads Light.
+	await page.getByRole('tab', { name: 'Accessibility' }).click();
+	await expect(
+		page
+			.getByRole('tabpanel', { name: 'Accessibility' })
+			.getByText('dark: primary-foreground on primary:', { exact: false }),
+	).toBeVisible();
+
+	// And dark still holds it after the round trip.
+	await chooseScheme(page, 'dark');
+	await expect(row).toHaveAttribute('data-overridden', '');
+	await expect(verdictOf(row)).toHaveCount(1);
+	await expect
+		.poll(async () => paintDistance(await paintedCentre(swatch), darkTarget))
+		.toBeLessThanOrEqual(1);
+});
+
 /**
  * The computed `background-color` of a throwaway element painted with `oklchCss`, so the swatch's
  * computed value is compared against one the browser normalised the same way rather than against a
@@ -1269,11 +1366,11 @@ test("a field issue raised in the light scheme doesn't follow the row into dark"
 	await expect(issueItems(lightEditor)).toHaveText(['Enter a number.']);
 
 	// An outside press closes the popover, and the scheme-keyed remount drops the row's field state.
-	// The press lands on the Output heading because the scheme toggle sits outside the Tokens
-	// scroller now, and at this viewport a popover flipped above brand.1 covers it.
+	// The press lands on the Output heading: it's inert and outside the Tokens column, which a
+	// popover flipped above brand.1 can cover at this viewport.
 	await page.getByRole('heading', { name: 'Output', exact: true }).click();
 	await expect(lightEditor).toHaveCount(0);
-	await page.getByRole('button', { name: 'dark', exact: true }).click();
+	await chooseScheme(page, 'dark');
 
 	const darkEditor = await openEditor(page, 'primitive.brand.1');
 	const darkStep = TOKEN_SET.schemes.dark.primitives.brand!.find((step) => step.step === 1)!;

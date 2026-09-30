@@ -1,12 +1,11 @@
 'use client';
 
-import { type CSSProperties, useCallback, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useMemo, useRef } from 'react';
 
 import type { SchemeName } from '../../../core/token-overrides';
 import type { TokenSet } from '../../../core/token-set';
 import { cssNaming } from '../../../core/css/globals-css';
 import { scalarDeclarations, schemeDeclarations } from '../../../core/css/scheme-declarations';
-import { Button } from '@/components/ui/button';
 import { AppScreen } from '@/components/workspace/preview/app-screen';
 import { Gallery } from '@/components/workspace/preview/gallery';
 
@@ -29,25 +28,15 @@ function declare(tokenSet: TokenSet, scheme: SchemeName): Declared {
 	}
 }
 
-export function Preview({ tokenSet }: { tokenSet: TokenSet }) {
-	const [scheme, setScheme] = useState<SchemeName>('light');
+export function Preview({ tokenSet, scheme }: { tokenSet: TokenSet; scheme: SchemeName }) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const declared = useMemo(() => declare(tokenSet, scheme), [tokenSet, scheme]);
-	const toggleScheme = useCallback(
-		() => setScheme((current) => (current === 'dark' ? 'light' : 'dark')),
-		[],
-	);
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-3">
-			<div className="flex items-center justify-between gap-3">
-				<p className="text-muted-foreground text-sm">
-					Your tokens on a component set and a sample app screen.
-				</p>
-				<Button variant="outline" size="sm" aria-pressed={scheme === 'dark'} onClick={toggleScheme}>
-					Dark scheme
-				</Button>
-			</div>
+			<p className="text-muted-foreground text-sm">
+				Your tokens on a component set and a sample app screen.
+			</p>
 
 			{declared.ok ? (
 				// Every map entry goes inline rather than into a class: the `dark` class is here so `dark:`

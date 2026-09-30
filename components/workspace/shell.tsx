@@ -8,7 +8,9 @@ import type { StoreApi } from 'zustand/vanilla';
 import type { WorkspaceState } from '../../app/state/workspace-store';
 import { attributeContrastFailures } from '../../core/contrast/attribute';
 import { buildTokenSet } from '../../core/semantic-layer';
+import type { SchemeName } from '../../core/token-overrides';
 import { RawResponse } from '@/components/workspace/raw-response';
+import { SchemeControl } from '@/components/workspace/scheme-control';
 import { SeedRail } from '@/components/workspace/seed-rail';
 import { SkipLinks, type SkipTarget } from '@/components/workspace/skip-links';
 import { TokenList } from '@/components/workspace/token-list';
@@ -51,6 +53,8 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const draftSeed = useStore(store, (state) => state.draftSeed);
 
 	const [tab, setTab] = useState<OutputTab>('preview');
+	// Here rather than in the store: nothing outside Shell's own subtree reads it, and it isn't saved.
+	const [scheme, setScheme] = useState<SchemeName>('light');
 	const panels = useRef<Partial<Record<OutputTab, HTMLDivElement | null>>>({});
 
 	// `flushSync` so the panel is mounted and no longer `hidden` before `focus()` runs: base-ui
@@ -107,14 +111,18 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 						setOverride={setOverride}
 						clearOverride={clearOverride}
 						contrastByOverride={contrastByOverride}
+						scheme={scheme}
 					/>
 				</div>
 			</aside>
 
 			<section id="output" aria-labelledby="output-heading" className="flex min-h-0 flex-col gap-2">
-				<h2 id="output-heading" className="text-lg font-semibold">
-					Output
-				</h2>
+				<div data-output-header className="flex flex-wrap items-center justify-between gap-2">
+					<h2 id="output-heading" className="text-lg font-semibold">
+						Output
+					</h2>
+					{tokenSet ? <SchemeControl scheme={scheme} onSchemeChange={setScheme} /> : null}
+				</div>
 				<Tabs
 					value={tab}
 					onValueChange={(value) => setTab(value as OutputTab)}
@@ -136,7 +144,7 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 					>
 						{tokenSet ? (
 							<Suspense fallback={PREVIEW_LOADING}>
-								<Preview tokenSet={tokenSet} />
+								<Preview tokenSet={tokenSet} scheme={scheme} />
 							</Suspense>
 						) : (
 							<p className="text-muted-foreground text-sm">
