@@ -559,9 +559,30 @@ describe('withContrastRepairs', () => {
 	 */
 	it('deep-equals repairContrast composed onto applyOverrides by hand, for blue', () => {
 		const base = sweptSet('blue');
-		const { overrides, unrepaired } = repairContrast(base);
+		const { overrides, unrepaired, report } = repairContrast(base);
 
-		expect(withContrastRepairs(base)).toEqual({ tokenSet: applied(base, overrides), unrepaired });
+		expect(withContrastRepairs(base)).toEqual({
+			tokenSet: applied(base, overrides),
+			unrepaired,
+			report,
+		});
+	});
+
+	// The report is what #15's DESIGN.md and the store's `contrast.repairs` carry. An empty one would
+	// deep-equal an empty hand-composed one, so this pins that blue actually reports its moves.
+	it('reports every move it applied, each landing on the colour the returned set paints', () => {
+		const { tokenSet, report } = withContrastRepairs(sweptSet('blue'));
+		const lastMove = new Map(
+			report.map((entry) => [`${entry.scheme}:${entry.ramp}.${entry.step}`, entry]),
+		);
+
+		expect(report.length).toBeGreaterThan(0);
+
+		for (const entry of lastMove.values()) {
+			const painted = tokenSet.schemes[entry.scheme].primitives[entry.ramp]![entry.step - 1]!;
+
+			expect(painted, `${entry.scheme} ${entry.ramp}.${entry.step}`).toMatchObject(entry.to);
+		}
 	});
 
 	it('passes AA everywhere for every seed in the sweep', () => {
@@ -580,11 +601,12 @@ describe('withContrastRepairs', () => {
 	it('forwards a pinned set to repairContrast, never falling back to defaultPins', () => {
 		const base = sweptSet('blue');
 		const pinned = new Set([...observedSteps(base), pinKey('light', 'brand', 1)]);
-		const { overrides, unrepaired } = repairContrast(base, { pinned });
+		const { overrides, unrepaired, report } = repairContrast(base, { pinned });
 
 		expect(withContrastRepairs(base, { pinned })).toEqual({
 			tokenSet: applied(base, overrides),
 			unrepaired,
+			report,
 		});
 		// `brand.1` is the step the no-options case above moves for blue (see the "pins" describe
 		// block), so pinning it here and getting a different set proves the option reached

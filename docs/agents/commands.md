@@ -22,7 +22,9 @@ Listed in `package.json` order.
 
 | Script | A path argument | Detail |
 |---|---|---|
+| `predev` | is ignored | `scripts/copy-demo-fixtures.mjs` reads no `argv`. Writes `public/demo/fixtures/`, which git ignores. |
 | `dev` | fails loudly | Next reads the positional as its project root: `No such directory exists as the project root: <repo>/core/purity.test.ts`. |
+| `prebuild` | is ignored | The same script as `predev`, and the same output. |
 | `build` | fails quietly | Same positional. Exits 1 after printing `Time: 14ms \| Errors: 6` and no error detail at all. |
 | `postbuild` | is ignored | `scripts/write-nojekyll.mjs` reads no `argv`. |
 | `typecheck` | fails loudly | tsc reads it as a file list and refuses: `error TS5112: tsconfig.json is present but will not be loaded if files are specified on commandline.` Exit 1. |
@@ -58,7 +60,7 @@ pnpm exec playwright install chromium
 
 ## The scripts that write
 
-`format` and `lint:fix` write across the whole tree when called bare, and both take a path, so give them one. `dtcg:build` and `dtcg:refresh` overwrite committed files, `dtcg:refresh` from the network, and neither belongs inside a task that did not ask for it. `evaluate` writes `swatches/seed.html`, which git ignores. `fixture:demo` writes `<stem>.json` and `<stem>.raw.json` to `app/demo/fixtures` by default—tracked fixture files, not a throwaway artifact, so give it an explicit `--out` when trying something experimentally.
+`format` and `lint:fix` write across the whole tree when called bare, and both take a path, so give them one. `dtcg:build` and `dtcg:refresh` overwrite committed files, `dtcg:refresh` from the network, and neither belongs inside a task that did not ask for it. `evaluate` writes `swatches/seed.html`, which git ignores. `predev` and `prebuild` clear and rewrite `public/demo/fixtures/`, also ignored, so `pnpm dev` and `pnpm build` both touch it. `fixture:demo` writes `<stem>.json` and `<stem>.raw.json` to `app/demo/fixtures` by default—tracked fixture files, not a throwaway artifact, so give it an explicit `--out` when trying something experimentally.
 
 `test:e2e` writes `test-results/` at the repo root. That is Playwright's `outputDir`, and the `list` reporter does not switch it off: `.last-run.json` lands on every run, and an `error-context.md` lands under a per-scenario directory for every scenario that fails. A fully green run writes both, because `e2e/console-gate.spec.ts` is marked `test.fail()` and a scenario that fails on purpose still leaves its error context behind.
 

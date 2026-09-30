@@ -32,7 +32,9 @@
     "node": ">=22.2.0"
   },
   "scripts": {
+    "predev": "node scripts/copy-demo-fixtures.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/copy-demo-fixtures.mjs",
     "build": "next build",
     "postbuild": "node scripts/write-nojekyll.mjs",
     "typecheck": "tsc --noEmit",
