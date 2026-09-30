@@ -19,4 +19,11 @@ describe('formatBytes', () => {
 	it('keeps one fractional digit at most', () => {
 		expect(formatBytes(1_234_567)).toBe('1.2 MB');
 	});
+
+	// A figure that rounds up to a thousand of one unit reads as one of the next.
+	it('rolls over to the next unit when rounding reaches a thousand', () => {
+		expect(formatBytes(999_949)).toBe('999.9 kB');
+		expect(formatBytes(999_950)).toBe('1 MB');
+		expect(formatBytes(999_999_999)).toBe('1 GB');
+	});
 });
