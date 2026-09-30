@@ -130,8 +130,10 @@ export class CommitAbandonedError extends Error {
  * copy loaded through a separate `get` is a different object holding the same old history and
  * nothing here recognises it. It still carries the revision it was read at, so `put` refuses it,
  * and refuses a stale commit from a second tab on the same grounds. Both hold while the record is
- * still stored. After a `delete`, `put` takes a stale commit as an insert, as the module docblock
- * in `app/storage/record-store.ts` describes.
+ * still stored. After a `delete`, `put` refuses a stale copy that carries an incarnation, since
+ * taking it as an insert would bring the record back. A copy with no incarnation, read from a
+ * record stored before the field existed and not committed since, still goes in as an insert. The
+ * module docblock in `app/storage/record-store.ts` calls that the limit left open.
  *
  * Typed for the same reason as `RecordStampedAheadError`: the caller has a specific recovery, which
  * is to reload the record and commit again, and it can only choose it if it can tell this apart

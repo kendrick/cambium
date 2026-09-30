@@ -178,6 +178,8 @@ export function GeneratePanel({ recordId, images, onKeyStored }: GeneratePanelPr
 	 *
 	 * The record is read fresh from storage each time rather than taken from props. A stale-record
 	 * failure says "save again to add it to the latest copy", and only a fresh read makes that true.
+	 * When another tab has deleted the record, the failure offers no save-again, because the fresh
+	 * read would find nothing.
 	 */
 	async function run(attempt: Attempt) {
 		if (inFlight.current) return;
