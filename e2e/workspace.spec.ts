@@ -547,18 +547,27 @@ test('the raw response sits closed at the bottom of the page, below both columns
 	await expect(details).toHaveJSProperty('open', false);
 
 	// The issue puts it "at the bottom", apart from the rail's two sections, so its top edge has to
-	// clear the bottom of both columns at either width. Inside the rail it would start above the
+	// clear the bottom of both columns from md up. Inside the rail it would start above the
 	// rail's bottom edge, and inside the output column above that column's.
-	for (const width of [1280, 375]) {
-		await page.setViewportSize({ width, height: 900 });
+	await page.setViewportSize({ width: 1280, height: 900 });
 
-		const detailsBox = await requireBox(details);
-		const railBox = await requireBox(rail);
-		const outputBox = await requireBox(output);
+	const detailsBox = await requireBox(details);
+	const railBox = await requireBox(rail);
+	const outputBox = await requireBox(output);
 
-		expect(detailsBox.y).toBeGreaterThanOrEqual(railBox.y + railBox.height - 1);
-		expect(detailsBox.y).toBeGreaterThanOrEqual(outputBox.y + outputBox.height - 1);
-	}
+	expect(detailsBox.y).toBeGreaterThanOrEqual(railBox.y + railBox.height - 1);
+	expect(detailsBox.y).toBeGreaterThanOrEqual(outputBox.y + outputBox.height - 1);
+
+	// Below md the raw response sits in the Seed tab, under the seed it produced (#157), and only
+	// there.
+	await page.setViewportSize({ width: 375, height: 900 });
+	const bar = page.getByRole('tablist', { name: 'Workspace' });
+	await bar.getByRole('tab', { name: 'Seed' }).click();
+	const seedBox = await requireBox(page.getByRole('region', { name: 'Seed' }));
+	const narrowDetails = await requireBox(details);
+	expect(narrowDetails.y).toBeGreaterThanOrEqual(seedBox.y + seedBox.height - 1);
+	await bar.getByRole('tab', { name: 'Tokens' }).click();
+	await expect(details).toBeHidden();
 });
 
 test('a version with no raw response renders the details element as a paragraph, not a preformatted block', async ({
@@ -582,9 +591,7 @@ test('a version with no raw response renders the details element as a paragraph,
 	await expect(details.locator('pre')).toHaveCount(0);
 });
 
-test('the layout collapses to one column narrow and sits side by side from md up', async ({
-	page,
-}) => {
+test('the layout is one tab set narrow and sits side by side from md up', async ({ page }) => {
 	const record = buildRecordWithOneVersion();
 	await seedWorkspaceRecord(page, record);
 
@@ -596,13 +603,11 @@ test('the layout collapses to one column narrow and sits side by side from md up
 	await expect(rail).toBeVisible();
 	await expect(output).toBeVisible();
 
-	// Below Tailwind's `md` breakpoint (768px), `components/workspace/shell.tsx`'s grid is
-	// `grid-cols-1`, so the two boxes stack.
+	// Below md the workspace is one tab set (#157): neither column exists as a landmark.
 	await page.setViewportSize({ width: 375, height: 900 });
-	const narrowRail = await requireBox(rail);
-	const narrowOutput = await requireBox(output);
-
-	expect(narrowOutput.y).toBeGreaterThanOrEqual(narrowRail.y + narrowRail.height - 1);
+	await expect(page.getByRole('tablist', { name: 'Workspace' })).toBeVisible();
+	await expect(rail).toHaveCount(0);
+	await expect(output).toHaveCount(0);
 
 	// At 1280px the grid switches to `md:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]`, so the columns
 	// sit beside each other: the output box starts at or after the rail's right edge, and the two
@@ -822,6 +827,37 @@ async function workspaceTabLists(page: Page): Promise<string[]> {
 		);
 }
 
+/**
+ * The workspace panels a person can see, by the name of the tab that labels each. base-ui leaves
+ * an outgoing panel mounted and not yet `hidden` while its exit transition runs, so callers poll.
+ */
+async function visibleWorkspacePanels(page: Page): Promise<string[]> {
+	return page
+		.locator('main [role="tabpanel"]')
+		.evaluateAll((panels) =>
+			panels
+				.filter((panel) => !panel.closest('[data-preview]') && panel.checkVisibility())
+				.map(
+					(panel) =>
+						document
+							.getElementById(panel.getAttribute('aria-labelledby') ?? '')
+							?.textContent?.trim() ?? '',
+				),
+		);
+}
+
+async function duplicateIds(page: Page): Promise<string[]> {
+	return page.evaluate(() => {
+		const counts = new Map<string, number>();
+		for (const element of document.querySelectorAll('[id]')) {
+			counts.set(element.id, (counts.get(element.id) ?? 0) + 1);
+		}
+		return [...counts].filter(([, count]) => count > 1).map(([id]) => id);
+	});
+}
+
+const PHONE_TABS = ['Seed', 'Tokens', 'Preview', 'Accessibility', 'Export'];
+
 type Box = { x: number; y: number; width: number; height: number };
 
 function rounded({ x, y, width, height }: Box): Box {
@@ -942,20 +978,174 @@ test.describe('at 390 × 844', () => {
 
 		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
 
-		const tokens = page.getByRole('region', { name: 'Tokens' });
-		await expect(tokens.getByRole('listitem').first()).toBeVisible();
-		await expandEveryCategory(tokens);
+		const bar = page.getByRole('tablist', { name: 'Workspace' });
+
+		await bar.getByRole('tab', { name: 'Seed' }).click();
 		await rawResponseDetails(page).locator('summary').click();
 		await expect(rawResponseDetails(page)).toHaveJSProperty('open', true);
 
+		await bar.getByRole('tab', { name: 'Tokens' }).click();
+		const tokens = page.getByRole('region', { name: 'Tokens' });
+		await expect(tokens.getByRole('listitem').first()).toBeVisible();
+		await expandEveryCategory(tokens);
 		await expect(tokens).toHaveCSS('overflow-y', 'visible');
 
-		for (const name of ['Preview', 'Accessibility', 'Export']) {
-			await page.getByRole('tab', { name }).click();
-			await expect(page.getByRole('tabpanel', { name })).toBeVisible();
+		for (const name of PHONE_TABS) {
+			await bar.getByRole('tab', { name }).click();
+			await expect.poll(() => visibleWorkspacePanels(page), { message: name }).toEqual([name]);
+
+			// #40's export previews are `<pre>`s inside collapsed `<details>`. Closed, they have no box
+			// for `selfScrollers` to catch, so open every one (Decision 22).
+			if (name === 'Export') {
+				const previews = page.getByRole('tabpanel', { name: 'Export' }).locator('details');
+				await expect(previews.first()).toBeVisible();
+				for (const preview of await previews.all()) await preview.locator('summary').click();
+				await expect(page.locator('[data-export-preview]').first()).toBeVisible();
+			}
 
 			expect(await selfScrollers(page), name).toEqual([]);
 			expect(await page.evaluate(() => document.documentElement.scrollWidth), name).toBe(390);
 		}
 	});
+
+	test('at phone width the workspace is one tab list, and only the selected tab’s panel shows', async ({
+		page,
+	}) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+		const bar = page.getByRole('tablist', { name: 'Workspace' });
+		await expect(bar).toBeVisible();
+		expect(await workspaceTabLists(page)).toEqual(['Workspace']);
+		expect(await bar.getByRole('tab').allInnerTexts()).toEqual(PHONE_TABS);
+
+		for (const name of PHONE_TABS) {
+			await bar.getByRole('tab', { name }).click();
+			await expect(bar.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true');
+			await expect.poll(() => visibleWorkspacePanels(page), { message: name }).toEqual([name]);
+		}
+
+		// Preview is the costly one to mount twice, and a second copy would also duplicate ids. The
+		// scheme control is built once and placed by whichever layout is mounted (Decision 7).
+		await bar.getByRole('tab', { name: 'Preview' }).click();
+		await expect(page.locator('[data-preview]')).toHaveCount(1);
+		await expect(page.getByRole('group', { name: 'Colour scheme' })).toHaveCount(1);
+		expect(await duplicateIds(page)).toEqual([]);
+	});
+
+	test('selecting Preview puts the preview’s top inside the first screen', async ({ page }) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+		await page
+			.getByRole('tablist', { name: 'Workspace' })
+			.getByRole('tab', { name: 'Preview' })
+			.click();
+
+		const preview = page.locator('[data-preview]');
+		await expect(preview).toBeVisible();
+		const top = await preview.evaluate((node) => node.getBoundingClientRect().top + window.scrollY);
+		expect(top).toBeLessThan(844);
+	});
+
+	test('the tab bar stays at the viewport top after a 2,000px scroll on Tokens', async ({
+		page,
+	}) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+		const bar = page.getByRole('tablist', { name: 'Workspace' });
+		await bar.getByRole('tab', { name: 'Tokens' }).click();
+		const tokens = page.getByRole('region', { name: 'Tokens' });
+		await expect(tokens.getByRole('listitem').first()).toBeVisible();
+		await expandEveryCategory(tokens);
+		// Each click above scrolls its disclosure into view, which has already docked the bar.
+		// Start from the top, so the wheel below does all 2,000px and the check under it means
+		// something.
+		await page.evaluate(() => window.scrollTo(0, 0));
+		await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+
+		// Below the `h1` before any scroll, so a bar found at 0 afterwards got there by sticking.
+		expect((await requireBox(bar)).y).toBeGreaterThan(0);
+
+		// A wheel over the list itself. A nested scroller would take the delta and leave the page
+		// at 0, which is the defect #157 reports.
+		await page.mouse.move(195, 600);
+		await page.mouse.wheel(0, 2000);
+		await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(2000);
+
+		expect(Math.abs((await requireBox(bar)).y)).toBeLessThan(0.5);
+
+		// #154's control rides in the same bar, so it stays on screen too (Decision 7).
+		const scheme = await requireBox(page.getByRole('group', { name: 'Colour scheme' }));
+		expect(scheme.y).toBeGreaterThanOrEqual(0);
+		expect(scheme.y + scheme.height).toBeLessThanOrEqual(844);
+
+		// Switching tabs from deep in the list opens the next panel at its own top (Decision 9).
+		await bar.getByRole('tab', { name: 'Preview' }).click();
+		const preview = page.locator('[data-preview]');
+		await expect(preview).toBeVisible();
+		const previewTop = (await requireBox(preview)).y;
+		expect(previewTop).toBeGreaterThanOrEqual(0);
+		expect(previewTop).toBeLessThan(844);
+	});
+
+	test('both skip links land in their panel at phone width', async ({ page }) => {
+		const record = buildRecordWithOneVersion();
+		await seedWorkspaceRecord(page, record);
+
+		for (const { presses, tab } of [
+			{ presses: 1, tab: 'Preview' },
+			{ presses: 2, tab: 'Export' },
+		] as const) {
+			await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+			await expect(page.getByRole('region', { name: 'Seed' })).toBeVisible();
+
+			for (let press = 0; press < presses; press += 1) await page.keyboard.press('Tab');
+			await page.keyboard.press('Enter');
+
+			const bar = page.getByRole('tablist', { name: 'Workspace' });
+			await expect(bar.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true');
+			const panel = page.getByRole('tabpanel', { name: tab });
+			await expect
+				.poll(() => panel.evaluate((node) => node.contains(document.activeElement)), {
+					message: tab,
+				})
+				.toBe(true);
+		}
+	});
+});
+
+test('the tab set and the page-scrolling token list switch at the same width', async ({ page }) => {
+	const record = buildRecordWithOneVersion();
+	await seedWorkspaceRecord(page, record);
+
+	await page.setViewportSize({ width: 767, height: 844 });
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	// The tab set is switched in JS and the scroller in CSS. At 767 and 768 both have to agree, or
+	// one pixel shows a tab set over a nested scroller, or a desktop grid with no scroller at all.
+	for (const [width, narrow] of [
+		[767, true],
+		[768, false],
+		[767, true],
+	] as const) {
+		await page.setViewportSize({ width, height: 844 });
+		await expect(page.getByRole('tablist', { name: 'Workspace' })).toHaveCount(narrow ? 1 : 0);
+		if (narrow) {
+			await page
+				.getByRole('tablist', { name: 'Workspace' })
+				.getByRole('tab', { name: 'Tokens' })
+				.click();
+		}
+		await expect(page.getByRole('region', { name: 'Tokens' })).toHaveCSS(
+			'overflow-y',
+			narrow ? 'visible' : 'auto',
+		);
+	}
 });
