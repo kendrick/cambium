@@ -284,13 +284,12 @@ export type StaleRecordWriteStanding = {
  * base the refused write carried, and a caller reads which failed off those fields without parsing
  * the message.
  *
- * The recovery is the same in every case, which is why there is one error and not several: re-read
- * the record and commit again from what comes back. That holds for a copy another writer overtook,
- * for a commit whose own response was lost and was sent a second time, and for a copy of an id that
- * was deleted and recreated. For `deleted` the re-read finds nothing, so there is no record left to
- * commit to. Only an overtaken copy has a second writer in it, so no wording here says one landed.
- * A resent insert is not on that list. `put` accepts its first resend as a commit, and
- * `wasBuiltOnStored` says why.
+ * Every case but `deleted` has one recovery: re-read the record and commit again from what comes
+ * back. That holds for a copy another writer overtook, for a commit whose own response was lost and
+ * was sent a second time, and for a copy of an id that was deleted and recreated (`replaced`). Only
+ * an overtaken copy has a second writer in it, so no wording here says one landed. A resent insert
+ * is not on that list. `put` accepts its first resend as a commit, and `wasBuiltOnStored` says why.
+ * `deleted` has no recovery. The re-read finds nothing, so no record is left to commit to.
  *
  * The version counts are context rather than the test the write failed, and they measure neither
  * that test nor how far behind the losing copy is. Two writers that each added only an image
