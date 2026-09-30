@@ -359,13 +359,15 @@ export type WorkspaceStoreOptions = {
 	 * so the engine runs at build time, reaches no client chunk, and the budget stays green no matter
 	 * what this file imports. The guard is the import list, in `workspace-store.test.ts`.
 	 *
-	 * #8's contrast repair rides the same lazy chunk. `core/contrast/check.ts` reaches `chroma-js`'s
-	 * APCA module, but this store is only ever reached through the same dynamic
-	 * `import('../../app/state/workspace-store')` in `workspace-route.tsx` that already carries the
-	 * engine and culori, and the landing route never imports this file at all. Nothing about that
-	 * import graph is unconditional the way `engine` is, so it needs no injection seam of its own.
-	 * `pnpm test:bundle`'s total-JS budget is what catches `chroma-js` growing the shipped bundle,
-	 * since first load stays unaffected either way.
+	 * #8's contrast repair rides the same lazy chunks. `core/contrast/check.ts` reaches `chroma-js`'s
+	 * APCA module, and each route reaches this store only through a dynamic import that also loads
+	 * the engine. The workspace route uses `import('../../app/state/workspace-store')` in
+	 * `workspace-route.tsx`. The landing route has two paths. `landing-route.tsx` loads
+	 * `record-library.tsx`, which imports `tokenSetForVersion` from here, through `lazy()`. The lazy
+	 * generate panel loads `app/generation/generate.ts`, which imports this store, by dynamic import.
+	 * Since no first-load chunk imports this file, `chroma-js` stays out of first load without an
+	 * injection seam of its own. `pnpm test:bundle`'s total-JS budget is what catches `chroma-js`
+	 * growing the shipped bundle.
 	 */
 	engine: ScaleEngine;
 	now?: () => string;
