@@ -568,14 +568,7 @@ function tokensFor(
 }
 
 /**
- * DESIGN.md prints each entry's moved step and achieved ratio beside the exported tokens, so an
- * entry is kept only while the final set paints what the repaired set did: the moved step itself,
- * and both operands of its pair. An override on either operand (an edited primitive on the side the
- * repair didn't move, or a re-aliased foreground or background) changes the ratio those tokens
- * paint even when the moved step is untouched (PR #180 review). The repaired set is the reference
- * rather than `entry.to` or `entry.achieved`, since a pair moved twice leaves an earlier entry whose
- * figures never survived even with no override. Returns `repairs` itself when nothing drops, so the
- * store's `contrast.repairs` keeps its identity for subscribers that compare by it.
+ * DESIGN.md prints each entry's moved step and achieved ratio beside the exported tokens, so an entry is kept only while the final set paints what the repaired set did: the moved step itself, and both operands of its pair. An override on either operand (an edited primitive on the side the repair didn't move, or a re-aliased foreground or background) changes the ratio those tokens paint even when the moved step is untouched (PR #180 review). The repaired set is the reference rather than `entry.to` or `entry.achieved`, since a pair moved twice leaves an earlier entry whose figures never survived even with no override. Returns `repairs` itself when nothing drops, so the store's `contrast.repairs` keeps its identity for subscribers that compare by it.
  */
 function repairsStillHeld(
 	repairs: RepairEntry[],

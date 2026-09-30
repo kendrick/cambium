@@ -1600,8 +1600,7 @@ describe('the workspace store’s contrast repair (#8)', () => {
 	it('keeps the same repairs array across an override edit that reuses the cached repair', () => {
 		const { store } = openWorkspace();
 		const before = store.getState().contrast?.repairs;
-		// A token outside every repaired pair, so the edit leaves each entry's operands alone and
-		// nothing has cause to drop.
+		// A token outside every repaired pair, so the edit leaves each entry's operands alone and nothing has cause to drop.
 		const operands = new Set(
 			(before ?? []).flatMap((entry) =>
 				entry.scheme === 'light' ? [entry.foreground, entry.background] : [],
@@ -1661,9 +1660,7 @@ describe('the workspace store’s contrast repair (#8)', () => {
 		expect(after).toEqual(others);
 	});
 
-	// DESIGN.md prints each entry's pair and achieved ratio beside the exported tokens. An override on
-	// either operand changes the ratio those tokens paint even when the moved step is untouched, so
-	// the entry has to go with it (PR #180 review).
+	// DESIGN.md prints each entry's pair and achieved ratio beside the exported tokens. An override on either operand changes the ratio those tokens paint even when the moved step is untouched, so the entry has to go with it (PR #180 review).
 	describe('drops a repair entry once an override changes either operand of its pair', () => {
 		it('when the primitive on the side the repair did not move is edited', () => {
 			const { store } = openWorkspace();

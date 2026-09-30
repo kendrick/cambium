@@ -502,9 +502,7 @@ test('downloads the complete archive, built in the page with no request, holding
 	expect(requests).toEqual([]);
 });
 
-// The listing lags an edit behind `useDeferredValue` while the adapters rerun. A per-file download
-// clicked inside that window has to write the edited tokens, as the archive does, not the stale
-// listing's (PR #180 review).
+// The listing lags an edit behind `useDeferredValue` while the adapters rerun. A per-file download clicked inside that window has to write the edited tokens, as the archive does, not the stale listing's (PR #180 review).
 test('a per-file download clicked before the listing catches up with an edit still writes the edited tokens', async ({
 	page,
 }) => {
@@ -530,9 +528,7 @@ test('a per-file download clicked before the listing catches up with an edit sti
 
 	if (!select || !button) throw new Error('expected the alias select and the download button');
 
-	// The edit and the click share one task, so the click lands after React commits the edit's
-	// urgent render (a microtask) and before the deferred listing's render (a scheduler task). The
-	// preview's `primary` at the click is the evidence the window was open rather than closed.
+	// The edit and the click share one task, so the click lands after React commits the edit's urgent render (a microtask) and before the deferred listing's render (a scheduler task). The preview's `primary` at the click is the evidence the window was open rather than closed.
 	const [download, previewPrimary] = await Promise.all([
 		page.waitForEvent('download'),
 		page.evaluate(
