@@ -9,7 +9,7 @@ import type { WorkspaceState } from '../../app/state/workspace-store';
 import { attributeContrastFailures } from '../../core/contrast/attribute';
 import { buildTokenSet } from '../../core/semantic-layer';
 import type { SchemeName } from '../../core/token-overrides';
-import { FirstVersion } from '@/components/workspace/first-version';
+import { FirstVersion, showsFirstVersion } from '@/components/workspace/first-version';
 import { RawResponse } from '@/components/workspace/raw-response';
 import { SchemeControl } from '@/components/workspace/scheme-control';
 import { SeedRail } from '@/components/workspace/seed-rail';
@@ -94,7 +94,12 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 			{/* Seed over tokens. The seed's field list scrolls inside half the rail at most, so a fully
 			    stated seed can't push the token list off the bottom of a short window. A record with no
 			    versions also gets a First version section between the two, outside that cap (#158). */}
-			<aside aria-label="Seed and tokens" className="flex min-h-0 flex-col gap-4">
+			<aside
+				aria-label={
+					showsFirstVersion(record) ? 'Seed, first version and tokens' : 'Seed and tokens'
+				}
+				className="flex min-h-0 flex-col gap-4"
+			>
 				<h1 className="text-2xl font-semibold tracking-tight">Cambium</h1>
 				<div className="flex min-h-0 flex-col md:max-h-[50%]">
 					<SeedRail store={store} />

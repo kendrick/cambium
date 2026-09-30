@@ -658,8 +658,11 @@ test('a saved record links to its workspace, which opens reporting no versions y
 	// resolves at all—nothing below is `<dl>`, a token row, or a `<details>` either. This asserts
 	// the shell itself actually mounted for this record before reading what it left out: the rail
 	// is the structural marker `components/workspace/shell.tsx` always renders once a record loads,
-	// with or without versions.
-	await expect(page.getByRole('complementary', { name: 'Seed and tokens' })).toBeVisible();
+	// with or without versions. This record has an image and no version, so the rail also holds
+	// the First version section and is named for all three.
+	await expect(
+		page.getByRole('complementary', { name: 'Seed, first version and tokens', exact: true }),
+	).toBeVisible();
 
 	// No versions yet: `components/workspace/seed-rail.tsx` renders no `<dl>` when the seed is null,
 	// `components/workspace/token-list.tsx` renders no list rows when `derived` is null, and

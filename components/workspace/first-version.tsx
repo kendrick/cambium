@@ -20,6 +20,16 @@ const GeneratePanel = lazy(() =>
 function ignoreKeyStored() {}
 
 /**
+ * Whether `FirstVersion` renders for this record. Exported so the shell can name its rail landmark
+ * after what the rail actually holds.
+ */
+export function showsFirstVersion(
+	record: WorkspaceState['record'],
+): record is NonNullable<WorkspaceState['record']> {
+	return record !== null && record.versions.length === 0 && record.images.length > 0;
+}
+
+/**
  * The empty workspace's way to a first version (#158). Renders nothing once the record has a
  * version, because a second version from here is out of scope, and nothing for a record with no
  * images, which has nothing to send.
@@ -28,10 +38,17 @@ export function FirstVersion({ store }: { store: StoreApi<WorkspaceState> }) {
 	const record = useStore(store, (state) => state.record);
 	const open = useStore(store, (state) => state.open);
 
-	if (!record || record.versions.length > 0 || record.images.length === 0) return null;
+	if (!showsFirstVersion(record)) return null;
 
+	// From md up the rail is exactly one window tall, so this section shares what the seed leaves
+	// with the token region and scrolls inside that share. Left at its content height, it squeezed
+	// the seed region to 12px at 768×400 and the seed's text painted over it (#179's review). The
+	// 4px padding, pulled back by the margin, keeps the focus outline (2px at 2px offset) unclipped.
 	return (
-		<section aria-labelledby="first-version-heading" className="flex flex-col gap-2">
+		<section
+			aria-labelledby="first-version-heading"
+			className="flex flex-col gap-2 md:-m-1 md:min-h-0 md:flex-1 md:overflow-y-auto md:p-1"
+		>
 			<h2 id="first-version-heading" className="text-lg font-semibold">
 				First version
 			</h2>
