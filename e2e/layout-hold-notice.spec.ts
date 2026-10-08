@@ -227,7 +227,7 @@ test('the first key dialog keeps a half-typed key across an md crossing', async 
 	await expect(page.getByRole('tablist', { name: 'Output' })).toBeVisible();
 });
 
-test('a cancel that sent nothing lets the layout follow the viewport', async ({
+test('a cancel made before any reply arrived lets the layout follow the viewport', async ({
 	page,
 	consoleErrors,
 }) => {

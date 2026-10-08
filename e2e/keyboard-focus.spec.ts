@@ -168,8 +168,9 @@ test('a first version that lands after the viewport crossed md still leaves focu
 	const recordId = await saveOneRecord(page);
 
 	// #181's rotated-phone case: the run starts in the phone Seed tab, and `Shell` holds that layout
-	// until the panel stops reporting busy. The catch-up then remounts the rail, so focus sent to the
-	// heading of the layout that's leaving would fall with it (Decision 5).
+	// until the panel stops reporting busy. The catch-up then remounts the rail. Two guards keep focus
+	// on the heading: `FirstVersion` swaps inside its flush before it focuses (Decision 5), and
+	// `Shell`'s focus restore catches a swap that lands later. This passes with either one alone.
 	await page.setViewportSize({ width: 390, height: 844 });
 	await page.goto(`/workspace?record=${recordId}`);
 	await waitForGenerateReady(page);

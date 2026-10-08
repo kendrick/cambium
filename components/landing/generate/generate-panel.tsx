@@ -406,11 +406,11 @@ export function GeneratePanel({
 	// is a cancel made before any reply arrived: it has no request id to keep and no answer to reuse,
 	// so a remount loses nothing. A notice with no way forward holds until the page is left. It was a
 	// dead end already, and now it's the same one on both sides of md.
-	const cancelledBeforeSend =
+	const cancelledBeforeReply =
 		shown?.kind === 'described' &&
 		shown.descriptor.kind === 'cancelled' &&
 		!shown.descriptor.requestId;
-	const busy = running || dialog !== null || (shown !== null && !cancelledBeforeSend);
+	const busy = running || dialog !== null || (shown !== null && !cancelledBeforeReply);
 
 	useEffect(() => {
 		if (!onBusyChange) return;

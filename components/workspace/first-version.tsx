@@ -73,8 +73,10 @@ export function FirstVersion({
 					// commit it causes unmounts this section with the panel that held focus (#174). Flushed
 					// first, as `Shell`'s `skipTo` does, so focus moves after that unmount, not before it.
 					// The busy report goes in the same flush: the version is already saved and in hand, so
-					// the layout hold has nothing left to protect, and letting `Shell` catch up with the
-					// viewport here keeps that swap from unmounting the heading after it's focused.
+					// the layout hold has nothing left to protect. If the viewport crossed md mid-run,
+					// `Shell` swaps layouts inside this flush, and the heading focused below is the one
+					// that stays. Without it the swap would land later, and `Shell`'s own focus restore
+					// would move focus to the new layout's seed heading anyway.
 					onGenerated={(generated) => {
 						flushSync(() => {
 							onBusyChange?.(false);
