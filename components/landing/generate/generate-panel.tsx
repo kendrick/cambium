@@ -560,7 +560,10 @@ function FailureNotice({
 					<summary className="text-muted-foreground cursor-pointer">
 						What Anthropic sent back
 					</summary>
-					<pre className="bg-muted mt-2 max-h-64 overflow-auto rounded-md p-3 text-xs whitespace-pre-wrap">
+					{/* Capped and scrolling only from md, like the workspace raw response (#157). Below
+					    that it grows with the page, which the phone layout already scrolls, and long
+					    unbroken runs wrap instead of widening it (#174). */}
+					<pre className="bg-muted mt-2 rounded-md p-3 text-xs whitespace-pre-wrap max-md:wrap-anywhere md:max-h-64 md:overflow-auto">
 						{descriptor.raw}
 					</pre>
 				</details>
