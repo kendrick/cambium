@@ -76,7 +76,12 @@ export function AppScreen() {
 							}`}
 						>
 							<span>{view.label}</span>
-							<span className="text-muted-foreground text-xs">{view.count}</span>
+							{/* The active row's count inherits `sidebar-accent-foreground`, the pair repair
+							    guarantees on `sidebar-accent`. `muted-foreground` was never declared on it
+							    and read 4.34:1 there (#68, #174). */}
+							<span className={index === 0 ? 'text-xs' : 'text-muted-foreground text-xs'}>
+								{view.count}
+							</span>
 						</div>
 					))}
 				</aside>
