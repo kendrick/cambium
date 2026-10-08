@@ -31,7 +31,8 @@ export function readNumberField(raw: string, shown: number): NumberFieldOutcome 
  * on `shown` so an outside change (a reset, a preset switch) remounts it with the new value.
  *
  * `describedBy` comes from `useFieldIssues().describedBy`. It's set exactly while this field holds a
- * refused value, which is also when the field is invalid (#174).
+ * refused value, which is also when the field is invalid (#174). 32px tall at least, the rail's
+ * target size (#174).
  */
 export function NumberInput({
 	label,
@@ -53,7 +54,7 @@ export function NumberInput({
 			aria-describedby={describedBy}
 			defaultValue={shown}
 			onBlur={(event) => onBlurOutcome(readNumberField(event.target.value, shown))}
-			className="w-20 rounded border px-1"
+			className="min-h-8 w-20 rounded border px-1"
 		/>
 	);
 }

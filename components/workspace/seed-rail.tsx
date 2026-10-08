@@ -344,6 +344,9 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 												value={value}
 												aria-valuetext={String(value)}
 												onChange={(event) => tuneParam(field, Number(event.target.value))}
+												// 32px tall like every rail control. A 16px track is under the 24px minimum on
+												// its own, whatever its label adds (#174).
+												className="min-h-8"
 											/>
 										</label>
 									);

@@ -82,7 +82,7 @@ export function KeyColorEditor({
 									onChange={(event) =>
 										onChange(withChannel(channel.index, Number(event.target.value)))
 									}
-									className="accent-foreground w-full"
+									className="accent-foreground min-h-8 w-full"
 								/>
 								<NumberInput
 									// Keyed on the value so a drag on the range remounts the field with it.
