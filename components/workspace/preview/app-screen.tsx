@@ -33,15 +33,17 @@ const STATUS_VARIANT = {
 } as const;
 
 /**
- * One composed screen, so a token set is judged the way a product would wear it: surfaces nested
- * three deep, a sidebar on its own colour, and a primary action that has to hold its own against a
- * dense table.
+ * One composed screen, inside the preview's one region, so a token set is judged the way a product
+ * would wear it: surfaces nested three deep, a sidebar on its own colour, and a primary action that
+ * has to hold its own against a dense table.
  */
 export function AppScreen() {
 	return (
-		<section aria-label="Sample app screen" data-preview-app-screen className="@container border-b">
-			<nav
-				aria-label="Sample app"
+		// Plain elements on purpose (#174). The sample's nav and sidebar picture a product. They aren't
+		// this page's navigation, and as landmarks they sat in a screen reader's list beside the tool's
+		// own. `preview.tsx` names the one region they all live in.
+		<div data-preview-app-screen className="@container border-b">
+			<div
 				data-preview-part="nav"
 				className="bg-card text-card-foreground flex items-center gap-4 border-b px-4 py-2"
 			>
@@ -60,11 +62,10 @@ export function AppScreen() {
 						</li>
 					))}
 				</ul>
-			</nav>
+			</div>
 
 			<div className="flex flex-col @2xl:flex-row">
-				<aside
-					aria-label="Order views"
+				<div
 					data-preview-part="sidebar"
 					className="bg-sidebar text-sidebar-foreground border-sidebar-border flex shrink-0 flex-col gap-1 border-b p-3 @2xl:w-52 @2xl:border-r @2xl:border-b-0"
 				>
@@ -84,7 +85,7 @@ export function AppScreen() {
 							</span>
 						</div>
 					))}
-				</aside>
+				</div>
 
 				<div className="flex min-w-0 flex-1 flex-col gap-4 p-4">
 					<header
@@ -124,6 +125,6 @@ export function AppScreen() {
 					</div>
 				</div>
 			</div>
-		</section>
+		</div>
 	);
 }

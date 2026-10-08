@@ -46,6 +46,12 @@ export function Preview({ tokenSet, scheme }: { tokenSet: TokenSet; scheme: Sche
 					ref={containerRef}
 					data-preview
 					data-preview-scheme={scheme}
+					// The preview's one landmark (#174). The gallery and the sample app both render inside it, so
+					// nothing the brand paints is announced as part of the tool. Not a `section`:
+					// `containerRef` is a `RefObject<HTMLDivElement>` that `Gallery` also types.
+					// oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
+					role="region"
+					aria-label="Preview: sample app"
 					style={declared.style}
 					className={`${scheme === 'dark' ? 'dark ' : ''}bg-background text-foreground min-h-0 flex-1 overflow-y-auto rounded-xl border`}
 				>
