@@ -1,8 +1,7 @@
 import { useRef, type ReactNode } from 'react';
 
-import type { OverrideIssue } from '../../../core/token-overrides';
 import type { TokenProvenance } from '../../../core/token-set';
-import { TokenEditor } from './token-editor';
+import { type ListedIssue, TokenEditor } from './token-editor';
 
 /**
  * One semantic or non-colour token as a list row: what it is and what it resolves to, readable at
@@ -38,7 +37,7 @@ export function TokenRow({
 	swatch?: string;
 	overridden: boolean;
 	onReset?: () => void;
-	issues: OverrideIssue[];
+	issues: ListedIssue[];
 	/**
 	 * Only a semantic row passes this, as an empty list until its override breaks a pair. The live
 	 * region renders whenever this is defined, because screen readers skip a live region that mounts

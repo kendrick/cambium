@@ -48,7 +48,7 @@ export function ValueRow({
 
 	const keys = token.leaves.map((leaf) => overrideKey(overrideFor(leaf.suffix, leaf.value)));
 	const overridden = keys.some((key) => Object.hasOwn(overrides, key));
-	const { fieldIssues, settle, clear } = useFieldIssues();
+	const { fieldIssues, describedBy, settle, clear } = useFieldIssues();
 	const issues = [...keys.flatMap((key) => issuesFor(key)), ...fieldIssues];
 	const swatch = shadowSwatch(token);
 	const [resetGeneration, setResetGeneration] = useState(0);
@@ -83,6 +83,7 @@ export function ValueRow({
 						{label}
 						<NumberInput
 							label={`${id} ${label}`}
+							describedBy={describedBy(label)}
 							shown={leaf.value}
 							onBlurOutcome={(outcome) =>
 								settle(label, outcome, (value) => onOverride(overrideFor(leaf.suffix, value)))

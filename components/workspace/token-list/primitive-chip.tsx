@@ -55,7 +55,7 @@ export function PrimitiveChip({
 		h: step.h,
 	});
 	const overridden = Object.hasOwn(overrides, key);
-	const { fieldIssues, settle, clear } = useFieldIssues();
+	const { fieldIssues, describedBy, settle, clear } = useFieldIssues();
 	const heldIssues = issuesFor(key);
 	const [resetGeneration, setResetGeneration] = useState(0);
 
@@ -126,6 +126,7 @@ export function PrimitiveChip({
 					{channel.toUpperCase()}
 					<NumberInput
 						label={`${id} ${channel}`}
+						describedBy={describedBy(channel)}
 						shown={step[channel]}
 						onBlurOutcome={(outcome) =>
 							settle(channel, outcome, (value) => onOverride(withChannel(channel, value)))

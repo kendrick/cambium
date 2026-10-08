@@ -32,7 +32,7 @@ export function KeyColorEditor({
 	color: KeyColor;
 	onChange: (next: KeyColor) => void;
 }) {
-	const { fieldIssues, settle } = useFieldIssues();
+	const { fieldIssues, describedBy, settle } = useFieldIssues();
 	const withChannel = (index: 0 | 1 | 2, value: number): KeyColor => {
 		const oklch: KeyColor['oklch'] = [...color.oklch];
 		oklch[index] = value;
@@ -88,6 +88,7 @@ export function KeyColorEditor({
 									// Keyed on the value so a drag on the range remounts the field with it.
 									key={value}
 									label={`${label} ${channel.name.toLowerCase()} value`}
+									describedBy={describedBy(channel.name)}
 									shown={value}
 									onBlurOutcome={(outcome) =>
 										settle(channel.name, outcome, (next) => {
@@ -113,7 +114,9 @@ export function KeyColorEditor({
 					{fieldIssues.length > 0 ? (
 						<ul className="text-destructive text-xs">
 							{fieldIssues.map((issue) => (
-								<li key={issue.message}>{issue.message}</li>
+								<li key={issue.id} id={issue.id}>
+									{issue.message}
+								</li>
 							))}
 						</ul>
 					) : null}

@@ -78,7 +78,7 @@ function BoundedNumber({
 	exclusiveMin?: boolean;
 	onChange: (next: number) => void;
 }) {
-	const { fieldIssues, settle } = useFieldIssues();
+	const { fieldIssues, describedBy, settle } = useFieldIssues();
 	const tooLow = (next: number) => (exclusiveMin ? next <= min : next < min);
 	const bound =
 		max === undefined
@@ -90,6 +90,7 @@ function BoundedNumber({
 			<NumberInput
 				key={value}
 				label={label}
+				describedBy={describedBy(label)}
 				shown={value}
 				onBlurOutcome={(outcome) =>
 					settle(label, outcome, (next) => {
@@ -102,7 +103,7 @@ function BoundedNumber({
 				}
 			/>
 			{fieldIssues.map((issue) => (
-				<span key={issue.message} className="text-destructive text-xs">
+				<span key={issue.id} id={issue.id} className="text-destructive text-xs">
 					{issue.message}
 				</span>
 			))}
