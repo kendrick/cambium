@@ -26,7 +26,7 @@ const LANDMARK_ROLES = [
 	'search',
 ] as const;
 
-type Landmark = { role: string; name: string; holdsSampleApp: boolean };
+type Landmark = { role: string; name: string; holdsSampleApp: boolean; holdsGallery: boolean };
 
 /**
  * Every landmark Chromium's accessibility tree exposes, read over Playwright's CDP session for the
@@ -34,6 +34,8 @@ type Landmark = { role: string; name: string; holdsSampleApp: boolean };
  * name code, not the tree a screen reader's landmark list is built from. `holdsSampleApp` resolves
  * each landmark back to the DOM node Chromium built it from, so "the sample app sits inside the
  * region" is asked of that node rather than of a selector that could match a different one.
+ * `holdsGallery` asks the same of the gallery, because the region is the whole preview, not only
+ * the app screen.
  */
 async function chromiumLandmarks(page: Page): Promise<Landmark[]> {
 	const cdp = await page.context().newCDPSession(page);
@@ -45,6 +47,7 @@ async function chromiumLandmarks(page: Page): Promise<Landmark[]> {
 			if (node.ignored || !(LANDMARK_ROLES as readonly string[]).includes(role)) continue;
 
 			let holdsSampleApp = false;
+			let holdsGallery = false;
 			if (node.backendDOMNodeId !== undefined) {
 				const { object } = await cdp.send('DOM.resolveNode', {
 					backendNodeId: node.backendDOMNodeId,
@@ -52,12 +55,12 @@ async function chromiumLandmarks(page: Page): Promise<Landmark[]> {
 				const { result } = await cdp.send('Runtime.callFunctionOn', {
 					objectId: object.objectId,
 					functionDeclaration:
-						'function () { return this.querySelector("[data-preview-app-screen]") !== null; }',
+						'function () { return [this.querySelector("[data-preview-app-screen]") !== null, this.querySelector("[data-preview-gallery]") !== null]; }',
 					returnByValue: true,
 				});
-				holdsSampleApp = result.value === true;
+				[holdsSampleApp, holdsGallery] = result.value as [boolean, boolean];
 			}
-			landmarks.push({ role, name: String(node.name?.value ?? ''), holdsSampleApp });
+			landmarks.push({ role, name: String(node.name?.value ?? ''), holdsSampleApp, holdsGallery });
 		}
 		return landmarks;
 	} finally {
@@ -98,8 +101,9 @@ test('at 1280 × 720 the sample app adds no landmark of its own, and the preview
 		({ role, name }) => role === 'region' && name === 'Preview: sample app',
 	);
 	expect(regions).toHaveLength(1);
-	// The sample app is still inside it, parts and all.
+	// The whole preview is inside it: the sample app, parts and all, and the gallery beside it.
 	expect(regions[0]!.holdsSampleApp).toBe(true);
+	expect(regions[0]!.holdsGallery).toBe(true);
 	await expect(page.locator('[data-preview-part="nav"]')).toBeVisible();
 	await expect(page.locator('[data-preview-part="sidebar"]')).toBeVisible();
 });

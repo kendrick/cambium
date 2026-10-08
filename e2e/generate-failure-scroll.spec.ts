@@ -99,6 +99,21 @@ async function failAndOpenRaw(page: Page): Promise<void> {
 	expect(await raw.evaluate((node) => node.scrollHeight)).toBeGreaterThan(OLD_CAP_PX);
 }
 
+/**
+ * `<pre>`s in `<main>` whose text runs past their own box. Neither scrolling nor a wider page shows
+ * that: a `<pre>` that clips its overflow scrolls nowhere and widens nothing, and the raw response
+ * still can't be read.
+ */
+async function clippedPres(page: Page): Promise<string[]> {
+	return page
+		.locator('main')
+		.evaluate((main) =>
+			[...main.querySelectorAll<HTMLElement>('pre')]
+				.filter((pre) => !pre.closest('[data-preview]') && pre.scrollWidth > pre.clientWidth)
+				.map((pre) => `${pre.scrollWidth} > ${pre.clientWidth}: ${pre.className}`),
+		);
+}
+
 test.describe('at 390 × 844', () => {
 	test.use({ viewport: { width: 390, height: 844 } });
 
@@ -111,6 +126,7 @@ test.describe('at 390 × 844', () => {
 
 		expect(await ownScrollers(page)).toEqual([]);
 		expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+		expect(await clippedPres(page)).toEqual([]);
 	});
 
 	test('a failed generate in the workspace Seed tab leaves nothing in main scrolling on its own', async ({
@@ -136,5 +152,6 @@ test.describe('at 390 × 844', () => {
 
 		expect(await ownScrollers(page)).toEqual([]);
 		expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+		expect(await clippedPres(page)).toEqual([]);
 	});
 });
