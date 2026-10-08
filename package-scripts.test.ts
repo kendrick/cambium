@@ -41,6 +41,9 @@ const TIMEOUT = 30_000;
 const NOTE = 'Temporary fixture from package-scripts.test.ts. Safe to delete.';
 
 const CODE = `// ${NOTE}\nconst   x   =   {a:1,  b:2};\nexport { x };\n`;
+// oxfmt parses `.cjs` as CommonJS from 0.72 on, so an `export` there is a parse error, which
+// `format:check` reports without listing the file, and the canary read as unreachable.
+const COMMONJS_CODE = `// ${NOTE}\nconst   x   =   {a:1,  b:2};\nmodule.exports = { x };\n`;
 const DATA = `{"_note": "${NOTE}",   "a":1,  "b":2}\n`;
 const STYLE = `/* ${NOTE} */\na{color:red;background:blue}\n`;
 const CONFIG = `# ${NOTE}\nkey:   value\n`;
@@ -76,7 +79,7 @@ const MESSY: Record<string, string> = {
 	'.js': CODE,
 	'.jsx': CODE,
 	'.mjs': CODE,
-	'.cjs': CODE,
+	'.cjs': COMMONJS_CODE,
 	'.json': DATA,
 	'.jsonc': DATA,
 	'.json5': DATA,
