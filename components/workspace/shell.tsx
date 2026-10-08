@@ -1,7 +1,7 @@
 'use client';
 
 import { cn } from 'cn';
-import { lazy, Suspense, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useStore } from 'zustand';
 import type { StoreApi } from 'zustand/vanilla';
@@ -13,7 +13,7 @@ import type { SchemeName } from '../../core/token-overrides';
 import { FirstVersion, showsFirstVersion } from '@/components/workspace/first-version';
 import { RawResponse } from '@/components/workspace/raw-response';
 import { SchemeControl } from '@/components/workspace/scheme-control';
-import { SeedRail } from '@/components/workspace/seed-rail';
+import { SEED_HEADING_ID, SeedRail } from '@/components/workspace/seed-rail';
 import { SkipLinks, type SkipTarget } from '@/components/workspace/skip-links';
 import { TokenList } from '@/components/workspace/token-list';
 import { useNarrowViewport } from '@/components/workspace/use-narrow-viewport';
@@ -43,6 +43,88 @@ type WorkspaceTab = 'seed' | 'tokens' | OutputTab;
 
 function isOutputTab(tab: WorkspaceTab): tab is OutputTab {
 	return tab !== 'seed' && tab !== 'tokens';
+}
+
+type FocusColumn = 'seed' | 'tokens' | 'output';
+
+/**
+ * Where keyboard focus sat when `Shell` swapped layouts, in terms both layouts render alike (#174).
+ * The element can't carry over, since crossing 48rem remounts everything, and ids are no help:
+ * base-ui's come from `useId`, which differs between two trees that nest a component at different
+ * depths. The row hooks below come from the same components in both layouts, so a control's index
+ * inside its row carries over. `column` picks the heading to fall back on when nothing matches.
+ */
+type FocusKey = { column: FocusColumn } & (
+	| { kind: 'row'; row: string; index: number }
+	| { kind: 'named'; tag: string; name: string }
+);
+
+/** Innermost first: a token row sits inside a category group. */
+const ROW_HOOKS = ['data-seed-field', 'data-token', 'data-ramp', 'data-category'] as const;
+
+const FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex]';
+
+/** The accessible name, close enough to find a control's twin in the other layout. */
+function nameOf(node: Element): string {
+	const label = node.getAttribute('aria-label');
+	if (label) return label;
+	const labels =
+		node instanceof HTMLInputElement || node instanceof HTMLSelectElement ? node.labels : null;
+	return ((labels?.[0] ?? node).textContent ?? '').trim();
+}
+
+function columnOf(node: Element, tab: WorkspaceTab): FocusColumn {
+	if (
+		node.closest(
+			`[aria-labelledby="${SEED_HEADING_ID}"], [aria-labelledby="first-version-heading"]`,
+		)
+	) {
+		return 'seed';
+	}
+	if (node.id === 'tokens-heading' || node.closest('[aria-labelledby="tokens-heading"]')) {
+		return 'tokens';
+	}
+	// A phone bar tab stands for the panel it had selected.
+	if (node.closest('[data-workspace-bar]') && !isOutputTab(tab)) return tab;
+	return 'output';
+}
+
+function focusKey(active: Element | null, tab: WorkspaceTab): FocusKey | null {
+	if (!(active instanceof HTMLElement) || active === document.body) return null;
+
+	if (!active.closest('main')) {
+		// A popover renders outside `<main>` and unmounts with its trigger, so the trigger stands in.
+		const trigger = active.closest('[role="dialog"]')
+			? document.querySelector('main [data-popup-open]')
+			: null;
+		return trigger ? focusKey(trigger, tab) : null;
+	}
+
+	const column = columnOf(active, tab);
+	for (const hook of ROW_HOOKS) {
+		const row = active.closest(`[${hook}]`);
+		const index = row ? [...row.querySelectorAll(FOCUSABLE)].indexOf(active) : -1;
+		if (row && index >= 0) {
+			return {
+				column,
+				kind: 'row',
+				row: `[${hook}="${CSS.escape(row.getAttribute(hook) ?? '')}"]`,
+				index,
+			};
+		}
+	}
+	return { column, kind: 'named', tag: active.tagName, name: nameOf(active) };
+}
+
+function findFocusTarget(key: FocusKey, main: HTMLElement): HTMLElement | null {
+	if (key.kind === 'row') {
+		return main.querySelector(key.row)?.querySelectorAll<HTMLElement>(FOCUSABLE)[key.index] ?? null;
+	}
+	if (key.name === '') return null;
+	return (
+		[...main.querySelectorAll<HTMLElement>(key.tag)].find((node) => nameOf(node) === key.name) ??
+		null
+	);
 }
 
 // The Output tabs, once for both layouts, so the phone list can't drift from the desktop one.
@@ -90,13 +172,20 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	// paints a stale frame.
 	const [generating, setGenerating] = useState(false);
 	const [narrow, setNarrow] = useState(viewportNarrow);
-	if (narrow !== viewportNarrow && !generating) setNarrow(viewportNarrow);
 	// A phone opens on Seed, the first tab and where the stacked page used to start. Desktop keeps
 	// opening Output on Preview.
 	const [tab, setTab] = useState<WorkspaceTab>(() => (narrow ? 'seed' : 'preview'));
+	const [pendingFocus, setPendingFocus] = useState<FocusKey | null>(null);
+	if (narrow !== viewportNarrow && !generating) {
+		// Read in the render that swaps layouts, the last moment the focused control is still in the
+		// DOM (#174). Not at the media query change: a hold can put the swap long after it.
+		setPendingFocus(focusKey(document.activeElement, tab));
+		setNarrow(viewportNarrow);
+	}
+	const mainRoot = useRef<HTMLElement | null>(null);
 	// Here rather than in the store: nothing outside Shell's own subtree reads it, and it isn't saved.
 	const [scheme, setScheme] = useState<SchemeName>('light');
-	const panels = useRef<Partial<Record<OutputTab, HTMLDivElement | null>>>({});
+	const panels = useRef<Partial<Record<WorkspaceTab, HTMLDivElement | null>>>({});
 	const phoneTabs = useRef<HTMLDivElement | null>(null);
 
 	// `flushSync` so the panel is mounted and no longer `hidden` before `focus()` runs: base-ui
@@ -116,6 +205,46 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 		const docked = root.getBoundingClientRect().top + window.scrollY;
 		if (window.scrollY > docked) window.scrollTo({ top: docked });
 	}
+
+	// The swap unmounted the focused control, so focus sits on `<body>` (#174). Give it to the same
+	// control in the new layout, or its column's heading, or the page `h1`. Below md, a control in an
+	// unselected Seed or Tokens panel is `hidden` and can't take focus, so select that tab first and
+	// finish after the commit. Focus somebody already moved elsewhere stays where it is.
+	useLayoutEffect(() => {
+		if (!pendingFocus) return;
+		const main = mainRoot.current;
+		const active = document.activeElement;
+		if (!main || (active !== null && active !== document.body)) {
+			setPendingFocus(null);
+			return;
+		}
+
+		const heading =
+			pendingFocus.column === 'seed'
+				? document.getElementById(SEED_HEADING_ID)
+				: pendingFocus.column === 'tokens'
+					? document.getElementById('tokens-heading')
+					: (panels.current[isOutputTab(tab) ? tab : 'preview'] ?? null);
+		const target =
+			findFocusTarget(pendingFocus, main) ?? heading ?? main.querySelector<HTMLElement>('h1');
+		if (!target) {
+			setPendingFocus(null);
+			return;
+		}
+
+		if (narrow) {
+			const home = (['seed', 'tokens'] as const).find((value) =>
+				panels.current[value]?.contains(target),
+			);
+			if (home && home !== tab) {
+				setTab(home);
+				return;
+			}
+		}
+
+		target.focus();
+		setPendingFocus(null);
+	}, [pendingFocus, narrow, tab]);
 
 	const active =
 		record && activeOrdinal !== null ? (record.versions[activeOrdinal - 1] ?? null) : null;
@@ -142,9 +271,11 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	// Built once and placed by whichever layout is mounted. Only one layout mounts at a time, so
 	// each panel, id, ref, lazy chunk and scheme control exists once in the DOM at any width. It
 	// also means crossing 768px, on a rotated tablet or a resized window, remounts everything, so
-	// the token filter and open categories don't survive it. The one exception is a first-version
-	// generate in flight, its key dialog open, or a failure notice showing (other than a cancel made
-	// before any reply arrived), which holds the layout until it clears.
+	// the token filter and open categories don't survive it. Focus does: the render that swaps
+	// records where it was, and the layout effect above focuses the same control in the new layout.
+	// The swap waits while a first-version generate is in flight, its key dialog is open, or a
+	// failure notice shows (other than a cancel made before any reply arrived), and catches up once
+	// that clears.
 	const seedColumn = (
 		<>
 			{/* The seed's field list scrolls inside half the rail at most from md up, so a fully stated
@@ -160,7 +291,7 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 
 	const tokensColumn = (
 		<div className="flex min-h-0 flex-1 flex-col gap-2">
-			<h2 id="tokens-heading" className="text-lg font-semibold">
+			<h2 id="tokens-heading" tabIndex={-1} className="text-lg font-semibold">
 				Tokens
 			</h2>
 			<TokenList
@@ -257,7 +388,10 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 
 	if (!narrow) {
 		return (
-			<main className="grid min-h-dvh grid-cols-1 gap-6 p-4 md:h-dvh md:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)_auto] md:p-6">
+			<main
+				ref={mainRoot}
+				className="grid min-h-dvh grid-cols-1 gap-6 p-4 md:h-dvh md:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)_auto] md:p-6"
+			>
 				<SkipLinks onSkip={skipTo} />
 				{/* Seed over tokens, with #158's First version section between them for a record with
 				    no versions. */}
@@ -267,7 +401,9 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 					}
 					className="flex min-h-0 flex-col gap-4"
 				>
-					<h1 className="text-2xl font-semibold tracking-tight">Cambium</h1>
+					<h1 tabIndex={-1} className="text-2xl font-semibold tracking-tight">
+						Cambium
+					</h1>
 					{seedColumn}
 					{tokensColumn}
 				</aside>
@@ -305,9 +441,11 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	// Below md: one tab set, and the page is the only scroller (#157). The stacked layout put the
 	// preview some 1,500px down, behind a token list that caught every thumb dragging through it.
 	return (
-		<main className="flex min-h-dvh flex-col gap-4 pb-4">
+		<main ref={mainRoot} className="flex min-h-dvh flex-col gap-4 pb-4">
 			<SkipLinks onSkip={skipTo} />
-			<h1 className="px-4 pt-4 text-2xl font-semibold tracking-tight">Cambium</h1>
+			<h1 tabIndex={-1} className="px-4 pt-4 text-2xl font-semibold tracking-tight">
+				Cambium
+			</h1>
 			{/* The skip links' `href="#output"` names this element, as it names the desktop section.
 			    `onSkip` does the navigating, but the link shouldn't point at nothing. Only one layout
 			    is mounted, so the id never duplicates. */}
@@ -340,11 +478,25 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 				</div>
 				{/* Kept mounted so a tab switch doesn't wipe the token filter, reopen categories or drop
 				    a generate in flight. All three were mounted all along on desktop. */}
-				<TabsPanel value="seed" keepMounted className="flex flex-col gap-4 p-4">
+				<TabsPanel
+					value="seed"
+					keepMounted
+					ref={(node) => {
+						panels.current.seed = node;
+					}}
+					className="flex flex-col gap-4 p-4"
+				>
 					{seedColumn}
 					{rawResponse}
 				</TabsPanel>
-				<TabsPanel value="tokens" keepMounted className="flex flex-col p-4">
+				<TabsPanel
+					value="tokens"
+					keepMounted
+					ref={(node) => {
+						panels.current.tokens = node;
+					}}
+					className="flex flex-col p-4"
+				>
 					{tokensColumn}
 				</TabsPanel>
 				{outputPanels('p-4', true)}
