@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import type { StoreApi } from 'zustand/vanilla';
 
 import type { WorkspaceState } from '../../app/state/workspace-store';
+import { recordLabel } from '@/components/landing/library/library-order';
 import { isSchemaRejection, Outcome, RECORD_PARAM } from '@/components/stored-record';
 import type { Shell as ShellComponent } from '@/components/workspace/shell';
 
@@ -50,6 +51,14 @@ const MESSAGES = {
 			<p className="text-muted-foreground text-sm">Reloading is worth a try.</p>
 		</>
 	),
+};
+
+/** Each terminal page's `h1` (#174). axe flagged the missing-record page for having none. */
+const HEADINGS: Record<keyof typeof MESSAGES, string> = {
+	unnamed: 'No record named',
+	missing: 'Record not found',
+	unreadable: "This record can't be read",
+	unavailable: "This record couldn't be looked up",
 };
 
 export function WorkspaceRoute() {
@@ -119,6 +128,21 @@ export function WorkspaceRoute() {
 		};
 	}, [recordId]);
 
+	const openStore = current.kind === 'found' ? current.store : null;
+
+	// The static title can't name a record the build never saw (#174). Put back on leaving, so a
+	// client-side move to another record or route doesn't keep this one's name.
+	useEffect(() => {
+		const record = openStore?.getState().record;
+		if (!record) return;
+
+		const previous = document.title;
+		document.title = `Workspace · ${recordLabel(record)}`;
+		return () => {
+			document.title = previous;
+		};
+	}, [openStore]);
+
 	if (!recordId) return <Terminal outcome="unnamed">{MESSAGES.unnamed}</Terminal>;
 
 	if (current.kind === 'loading') {
@@ -148,8 +172,9 @@ function Terminal({
 	return (
 		<main
 			data-outcome={outcome}
-			className="mx-auto flex min-h-dvh max-w-2xl flex-col items-start justify-center p-8"
+			className="mx-auto flex min-h-dvh max-w-2xl flex-col items-start justify-center gap-4 p-8"
 		>
+			<h1 className="text-2xl font-semibold tracking-tight">{HEADINGS[outcome]}</h1>
 			<Outcome action="Start a new brand">{children}</Outcome>
 		</main>
 	);

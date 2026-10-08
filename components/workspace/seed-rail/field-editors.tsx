@@ -21,10 +21,13 @@ const SLOTS = ['display', 'body', 'mono'] as const satisfies readonly (keyof Sug
 
 export const selectClass = 'bg-background min-w-0 rounded border px-1 py-0.5 text-xs';
 
-/** One labelled control inside a field's cell. The label is visible text, so it names the control. */
+/**
+ * One labelled control inside a field's cell. The label is visible text, so it names the control.
+ * At least 24px tall, since the label is a checkbox's hit area (#174).
+ */
 export function Sub({ label, children }: { label: string; children: ReactNode }) {
 	return (
-		<label className="flex items-center justify-between gap-2 text-xs">
+		<label className="flex min-h-6 items-center justify-between gap-2 text-xs">
 			<span className="text-muted-foreground">{label}</span>
 			{children}
 		</label>
@@ -78,7 +81,7 @@ function BoundedNumber({
 	exclusiveMin?: boolean;
 	onChange: (next: number) => void;
 }) {
-	const { fieldIssues, settle } = useFieldIssues();
+	const { fieldIssues, describedBy, settle } = useFieldIssues();
 	const tooLow = (next: number) => (exclusiveMin ? next <= min : next < min);
 	const bound =
 		max === undefined
@@ -90,6 +93,7 @@ function BoundedNumber({
 			<NumberInput
 				key={value}
 				label={label}
+				describedBy={describedBy(label)}
 				shown={value}
 				onBlurOutcome={(outcome) =>
 					settle(label, outcome, (next) => {
@@ -102,7 +106,7 @@ function BoundedNumber({
 				}
 			/>
 			{fieldIssues.map((issue) => (
-				<span key={issue.message} className="text-destructive text-xs">
+				<span key={issue.id} id={issue.id} className="text-destructive text-xs">
 					{issue.message}
 				</span>
 			))}
@@ -462,7 +466,7 @@ export function ExpressiveEditor({
 						step={1}
 						value={entry.score}
 						onChange={(event) => onChange(withScore(entry.axis, Number(event.target.value)))}
-						className="accent-foreground w-full"
+						className="accent-foreground min-h-8 w-full"
 					/>
 					<span className="text-right font-mono tabular-nums">{entry.score}</span>
 				</label>

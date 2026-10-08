@@ -8,8 +8,11 @@ const alertVariants = cva(
 		variants: {
 			variant: {
 				default: 'bg-card text-card-foreground',
+				// Full strength on purpose (#174). At `/90` the description read 4.24:1 on `bg-card`,
+				// because `destructive` is only declared against the page, and a tint of it on a surface
+				// one step darker lands under 4.5:1.
 				destructive:
-					'bg-card text-destructive *:data-[slot=alert-description]:text-destructive/90 *:[svg]:text-current',
+					'bg-card text-destructive *:data-[slot=alert-description]:text-destructive *:[svg]:text-current',
 			},
 		},
 		defaultVariants: {

@@ -38,6 +38,13 @@ import { SourceRegion } from '@/components/workspace/seed-rail/source-region';
 
 const PRESETS: readonly Interpretation[] = ['faithful', 'balanced', 'expressive'];
 
+/**
+ * The rail's heading id. Exported because the empty workspace sends focus here after its first
+ * generate, and `Shell` uses it to tell which column a focused control sits in and where to fall
+ * back to when a layout swap finds no twin for it.
+ */
+export const SEED_HEADING_ID = 'seed-heading';
+
 type ParamField = keyof InterpretationParams;
 
 /** Display names for the advanced disclosure, in the order `InterpretationParams` declares them. */
@@ -218,9 +225,9 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 	}
 
 	return (
-		<section aria-labelledby="seed-heading" className="flex min-h-0 flex-col gap-3">
+		<section aria-labelledby={SEED_HEADING_ID} className="flex min-h-0 flex-col gap-3">
 			<div className="flex items-center justify-between gap-2">
-				<h2 id="seed-heading" className="text-lg font-semibold">
+				<h2 id={SEED_HEADING_ID} tabIndex={-1} className="text-lg font-semibold">
 					Seed
 				</h2>
 				{active ? (
@@ -344,6 +351,9 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 												value={value}
 												aria-valuetext={String(value)}
 												onChange={(event) => tuneParam(field, Number(event.target.value))}
+												// 32px tall like every rail control. A 16px track is under the 24px minimum on
+												// its own, whatever its label adds (#174).
+												className="min-h-8"
 											/>
 										</label>
 									);

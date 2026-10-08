@@ -170,7 +170,7 @@ export function pngFile(name: string, width = 2, height = 2) {
 
 /**
  * Stages one reference image and saves it, the same path `e2e/indexeddb.spec.ts` drives. Returns
- * the id the "Saved." outcome put in the URL, which is what every scenario in generate.spec.ts and
+ * the id the saved outcome put in the URL, which is what every scenario in generate.spec.ts and
  * keyed-path.spec.ts needs to reach `GeneratePanel` and to read the record back afterward.
  */
 export async function saveOneRecord(page: Page, file = pngFile(PNG_NAME)): Promise<string> {
@@ -180,7 +180,7 @@ export async function saveOneRecord(page: Page, file = pngFile(PNG_NAME)): Promi
 	await expect(page.getByText(file.name, { exact: true })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Save these references' }).click();
-	await expect(page.getByText(/^Saved\./)).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Saved' })).toBeVisible();
 
 	const recordId = new URL(page.url()).searchParams.get('record');
 	if (!recordId) throw new Error('saving did not put a record id in the URL');

@@ -9,6 +9,9 @@ export type EditorTriggerProps = Omit<ComponentProps<typeof PopoverTrigger>, 'ar
 	[attribute: `data-${string}`]: string | undefined;
 };
 
+/** An issue as the editor lists it. `id` is set on one a field's `aria-describedby` points at. */
+export type ListedIssue = OverrideIssue & { id?: string };
+
 export type TokenEditorProps = {
 	/** The token's list id, e.g. `semantic.primary`, `primitive.brand.9`, `radius.md`. */
 	id: string;
@@ -16,7 +19,7 @@ export type TokenEditorProps = {
 	stepRole?: string;
 	overridden: boolean;
 	onReset?: () => void;
-	issues: OverrideIssue[];
+	issues: ListedIssue[];
 	trigger: EditorTriggerProps;
 	/** The token's edit controls. Mounted only while the popover is open. */
 	children: ReactNode;
@@ -75,8 +78,10 @@ export function TokenEditor({
 				) : null}
 				{listed.size > 0 ? (
 					<ul data-issues className="text-destructive text-xs">
-						{[...listed].map(([key, message]) => (
-							<li key={key}>{message}</li>
+						{[...listed].map(([key, { message, id: issueId }]) => (
+							<li key={key} id={issueId}>
+								{message}
+							</li>
 						))}
 					</ul>
 				) : null}
@@ -128,18 +133,27 @@ function RationaleDisclosure({
 	);
 }
 
+type CollapsedIssue = Pick<ListedIssue, 'message' | 'id'>;
+
 /**
  * A light-scheme edit is checked against the scheme and the top-level copy that mirrors it, so the
  * store refuses it once per copy, under paths that differ only by a leading `['schemes', 'light']`.
  * Keying on the path with that prefix stripped folds the two copies into one item. Keying on the
  * message alone would also fold two different refused fields that happen to share a message, and
- * the editor would stop saying the second one is refused.
+ * the editor would stop saying the second one is refused. A field issue carries the id its input's
+ * `aria-describedby` names, so a collapse keeps it.
  */
-function listIssues(issues: OverrideIssue[]): Map<string, string> {
-	const listed = new Map<string, string>();
+function listIssues(issues: ListedIssue[]): Map<string, CollapsedIssue> {
+	const listed = new Map<string, CollapsedIssue>();
 	for (const issue of issues) {
 		const path = issue.path[0] === 'schemes' ? issue.path.slice(2) : issue.path;
-		listed.set(JSON.stringify([path, issue.message]), issue.message);
+		const key = JSON.stringify([path, issue.message]);
+		const held = listed.get(key);
+		// The copy with an id wins a collapse. Its input's `aria-describedby` names that id, and a
+		// line rendered without it would leave the input describing itself with nothing (#174).
+		if (!held || (held.id === undefined && issue.id !== undefined)) {
+			listed.set(key, { message: issue.message, id: issue.id });
+		}
 	}
 	return listed;
 }

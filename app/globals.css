@@ -109,7 +109,9 @@
 	--secondary: oklch(0.97 0 0);
 	--secondary-foreground: oklch(0.205 0 0);
 	--muted: oklch(0.97 0 0);
-	--muted-foreground: oklch(0.556 0 0);
+	/* 0.556 is shadcn's, and it reads 4.34:1 on its own --muted, where every inactive tab sits.
+	   0.52 lands about 5.0:1 there and 5.5:1 on white (#174). The preview declares its own. */
+	--muted-foreground: oklch(0.52 0 0);
 	--accent: oklch(0.97 0 0);
 	--accent-foreground: oklch(0.205 0 0);
 	--destructive: oklch(0.577 0.245 27.325);
