@@ -400,12 +400,17 @@ export function GeneratePanel({
 		}
 	}
 
-	// A repair resends the answer it fixes and a save-again commits the seed already paid for, and
-	// both live only in this panel's state. Every other recovery starts a fresh request instead.
-	const busy =
-		running ||
-		(shown?.kind === 'described' &&
-			(shown.descriptor.recovery === 'repair-retry' || shown.descriptor.recovery === 'save-again'));
+	// A layout swap remounts this panel fresh, so anything it shows would be gone before anyone read
+	// it: a failure's message, the request id support needs, Retry, a paid answer to reuse, or a key
+	// dialog with a half-typed key in it. So all of those hold the layout. The one notice that doesn't
+	// is a cancel made before any reply arrived: it has no request id to keep and no answer to reuse,
+	// so a remount loses nothing. A notice with no way forward holds until the page is left. It was a
+	// dead end already, and now it's the same one on both sides of md.
+	const cancelledBeforeSend =
+		shown?.kind === 'described' &&
+		shown.descriptor.kind === 'cancelled' &&
+		!shown.descriptor.requestId;
+	const busy = running || dialog !== null || (shown !== null && !cancelledBeforeSend);
 
 	useEffect(() => {
 		if (!onBusyChange) return;

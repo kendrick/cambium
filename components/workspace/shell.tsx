@@ -80,11 +80,14 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const draftSeed = useStore(store, (state) => state.draftSeed);
 
 	const viewportNarrow = useNarrowViewport();
-	// Swapping layouts unmounts FirstVersion. Mid-generate, its panel would drop the reply, so the
-	// paid version would land in IndexedDB but never reach the store, and Generate would come back on
-	// a record that already has one. A repair or save-again offer would lose the paid answer it reuses. So the
-	// layout holds still while the panel reports either, then catches up with the viewport. It's
-	// state set during render, not an effect, so the catch-up never paints a stale frame.
+	// Swapping layouts unmounts FirstVersion and its panel. Mid-generate, the panel would drop the
+	// reply, so the paid version would land in IndexedDB but never reach the store, and Generate would
+	// come back on a record that already has one. After a failure, the remount would drop the notice
+	// before anyone read it, along with its Retry, its paid answer or its reopened key dialog. So the
+	// layout holds still while the panel reports busy, which is a generate in flight, the key dialog
+	// open, or any failure notice showing other than a cancel made before any reply arrived, then
+	// catches up with the viewport. It's state set during render, not an effect, so the catch-up never
+	// paints a stale frame.
 	const [generating, setGenerating] = useState(false);
 	const [narrow, setNarrow] = useState(viewportNarrow);
 	if (narrow !== viewportNarrow && !generating) setNarrow(viewportNarrow);
@@ -140,7 +143,8 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	// each panel, id, ref, lazy chunk and scheme control exists once in the DOM at any width. It
 	// also means crossing 768px, on a rotated tablet or a resized window, remounts everything, so
 	// the token filter and open categories don't survive it. The one exception is a first-version
-	// generate in flight or a repair offer on screen, which holds the layout until it settles.
+	// generate in flight, its key dialog open, or a failure notice showing (other than a cancel made
+	// before any reply arrived), which holds the layout until it clears.
 	const seedColumn = (
 		<>
 			{/* The seed's field list scrolls inside half the rail at most from md up, so a fully stated
