@@ -52,7 +52,8 @@ type FocusColumn = 'seed' | 'tokens' | 'output';
  * The element can't carry over, since crossing 48rem remounts everything, and ids are no help:
  * base-ui's come from `useId`, which differs between two trees that nest a component at different
  * depths. The row hooks below come from the same components in both layouts, so a control's index
- * inside its row carries over. `column` picks the heading to fall back on when nothing matches.
+ * inside its row carries over. When nothing matches, `column` picks the fallback: the Seed or Tokens
+ * heading, or for Output the selected Output tab's panel (Preview's when no Output tab is selected).
  */
 type FocusKey = { column: FocusColumn } & (
 	| { kind: 'row'; row: string; index: number }
@@ -208,7 +209,8 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	}
 
 	// The swap unmounted the focused control, so focus sits on `<body>` (#174). Give it to the same
-	// control in the new layout, or its column's heading, or the page `h1`. Below md, a control in an
+	// control in the new layout, or else its column's fallback (the Seed or Tokens heading, or the
+	// selected Output panel, Preview's by default), or else the page `h1`. Below md, a control in an
 	// unselected Seed or Tokens panel is `hidden` and can't take focus, so select that tab first and
 	// finish after the commit. Focus somebody already moved elsewhere stays where it is.
 	useLayoutEffect(() => {

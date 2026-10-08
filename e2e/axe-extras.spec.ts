@@ -77,7 +77,7 @@ async function expectLandingClean(page: Page): Promise<void> {
 	await saveOneRecord(page);
 	await waitForGenerateReady(page);
 	// Button's `transition-all` fades `disabled:opacity-50` out over 150ms after the attribute flips.
-	// axe blends whatever it catches mid-fade (4.36:1 at #777), so wait for the settled paint.
+	// axe blends whatever it catches mid-fade (4.36:1 at rgb(119 119 119)), so wait for the settled paint.
 	await expect(generateButton(page)).toHaveCSS('opacity', '1');
 	expect(await violations(page), 'saved outcome').toEqual([]);
 }

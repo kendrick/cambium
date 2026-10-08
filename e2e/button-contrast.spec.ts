@@ -87,7 +87,7 @@ async function switchScheme(page: Page, preview: Locator, scheme: (typeof SCHEME
 
 /**
  * Whether the nearest ancestor that paints a background is the app screen's orders table, walked in
- * the browser rather than assumed. `paintedContrast` below reads the composited pixel regardless of
+ * the browser rather than assumed. `paintedContrast` (from `e2e/painted-contrast.ts`) reads the composited pixel regardless of
  * what that ancestor is, so this exists only to confirm the specimen under test is the badge actually
  * sitting on `card` — the one class-resolution fact a pixel read can't tell you on its own.
  */

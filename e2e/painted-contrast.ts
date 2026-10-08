@@ -12,15 +12,15 @@ import { expect } from './fixtures';
  */
 
 /**
- * `e2e/preview.spec.ts`'s own `settle`: every button and badge variant carries `transition-all`, so
- * a scheme switch or a `:hover` both start a CSS transition on `color`/`background-color` rather
- * than snapping to the new value. Reading `getComputedStyle` right after either one, without
- * waiting here, catches the paint mid-interpolation — a real state a person can see for ~150ms, but
- * not the one this spec is gating, and it serializes as a colour that matches neither endpoint
- * (caught while writing this spec: the link button read back an `oklab(...)` blend nowhere near
- * either scheme's foreground). Polling `document.getAnimations()` down to zero is what actually
- * proves the transition finished, where a fixed `waitForTimeout` would only ever be a guess at its
- * duration.
+ * The same wait as `e2e/preview.spec.ts`'s `settle`, which still keeps its own copy: every button
+ * and badge variant carries `transition-all`, so a scheme switch or a `:hover` both start a CSS
+ * transition on `color`/`background-color` rather than snapping to the new value. Reading the paint
+ * right after either one, without waiting here, catches it mid-interpolation—a real state a person
+ * can see for ~150ms, but not the settled one a caller means to gate, and it matches neither
+ * endpoint (caught while writing `e2e/button-contrast.spec.ts`: the link button read back an
+ * `oklab(...)` blend nowhere near either scheme's foreground). Polling `document.getAnimations()`
+ * down to zero is what actually proves the transition finished, where a fixed `waitForTimeout`
+ * would only ever be a guess at its duration.
  */
 export async function settle(page: Page): Promise<void> {
 	await expect
@@ -119,8 +119,8 @@ function paintedText(pixels: Rgb[], fill: Rgb): Rgb {
 
 /**
  * The ratio between what Chromium painted for `target`'s fill and what it painted for its text —
- * the whole measurement this spec exists to make, now taken from one screenshot rather than from a
- * `getComputedStyle` value this file would otherwise have to composite itself.
+ * the one measurement every caller imports this module for, taken from one screenshot rather than
+ * from a `getComputedStyle` value the caller would otherwise have to composite itself.
  */
 export async function paintedContrast(target: Locator): Promise<number> {
 	const pixels = await paintedPixels(target);

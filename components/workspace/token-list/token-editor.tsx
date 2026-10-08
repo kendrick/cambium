@@ -133,6 +133,8 @@ function RationaleDisclosure({
 	);
 }
 
+type CollapsedIssue = Pick<ListedIssue, 'message' | 'id'>;
+
 /**
  * A light-scheme edit is checked against the scheme and the top-level copy that mirrors it, so the
  * store refuses it once per copy, under paths that differ only by a leading `['schemes', 'light']`.
@@ -141,8 +143,8 @@ function RationaleDisclosure({
  * the editor would stop saying the second one is refused. A field issue carries the id its input's
  * `aria-describedby` names, so a collapse keeps it.
  */
-function listIssues(issues: ListedIssue[]): Map<string, { message: string; id?: string }> {
-	const listed = new Map<string, { message: string; id?: string }>();
+function listIssues(issues: ListedIssue[]): Map<string, CollapsedIssue> {
+	const listed = new Map<string, CollapsedIssue>();
 	for (const issue of issues) {
 		const path = issue.path[0] === 'schemes' ? issue.path.slice(2) : issue.path;
 		const key = JSON.stringify([path, issue.message]);

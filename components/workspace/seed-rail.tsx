@@ -38,7 +38,11 @@ import { SourceRegion } from '@/components/workspace/seed-rail/source-region';
 
 const PRESETS: readonly Interpretation[] = ['faithful', 'balanced', 'expressive'];
 
-/** The rail's heading id, exported so the empty workspace can send focus here after its first generate. */
+/**
+ * The rail's heading id. Exported because the empty workspace sends focus here after its first
+ * generate, and `Shell` uses it to tell which column a focused control sits in and where to fall
+ * back to when a layout swap finds no twin for it.
+ */
 export const SEED_HEADING_ID = 'seed-heading';
 
 type ParamField = keyof InterpretationParams;

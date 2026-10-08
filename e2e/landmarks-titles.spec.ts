@@ -26,6 +26,45 @@ const LANDMARK_ROLES = [
 	'search',
 ] as const;
 
+type Landmark = { role: string; name: string; holdsSampleApp: boolean };
+
+/**
+ * Every landmark Chromium's accessibility tree exposes, read over Playwright's CDP session for the
+ * reason `e2e/field-errors.spec.ts`'s `axField` gives: `getByRole` runs Playwright's own role and
+ * name code, not the tree a screen reader's landmark list is built from. `holdsSampleApp` resolves
+ * each landmark back to the DOM node Chromium built it from, so "the sample app sits inside the
+ * region" is asked of that node rather than of a selector that could match a different one.
+ */
+async function chromiumLandmarks(page: Page): Promise<Landmark[]> {
+	const cdp = await page.context().newCDPSession(page);
+	try {
+		const { nodes } = await cdp.send('Accessibility.getFullAXTree');
+		const landmarks: Landmark[] = [];
+		for (const node of nodes) {
+			const role = String(node.role?.value ?? '');
+			if (node.ignored || !(LANDMARK_ROLES as readonly string[]).includes(role)) continue;
+
+			let holdsSampleApp = false;
+			if (node.backendDOMNodeId !== undefined) {
+				const { object } = await cdp.send('DOM.resolveNode', {
+					backendNodeId: node.backendDOMNodeId,
+				});
+				const { result } = await cdp.send('Runtime.callFunctionOn', {
+					objectId: object.objectId,
+					functionDeclaration:
+						'function () { return this.querySelector("[data-preview-app-screen]") !== null; }',
+					returnByValue: true,
+				});
+				holdsSampleApp = result.value === true;
+			}
+			landmarks.push({ role, name: String(node.name?.value ?? ''), holdsSampleApp });
+		}
+		return landmarks;
+	} finally {
+		await cdp.detach();
+	}
+}
+
 async function openGeneratedWorkspace(page: Page): Promise<void> {
 	await serveFontTable(page);
 	await saveOneRecord(page);
@@ -45,25 +84,24 @@ test('at 1280 × 720 the sample app adds no landmark of its own, and the preview
 	await page.setViewportSize({ width: 1280, height: 720 });
 	await openGeneratedWorkspace(page);
 
-	const sampleLandmarks = LANDMARK_ROLES.flatMap((role) =>
-		['Sample app', 'Order views'].map((name) => ({ role, name })),
-	);
-	await Promise.all(
-		sampleLandmarks.map(({ role, name }) =>
-			expect(page.getByRole(role, { name, exact: true }), `${role} "${name}"`).toHaveCount(0),
-		),
-	);
+	const landmarks = await chromiumLandmarks(page);
+	// A read that came back empty would pass every absence check below, so the tool's own `main`
+	// has to be there first.
+	expect(landmarks.map(({ role }) => role)).toContain('main');
 
-	const region = page.getByRole('region', { name: 'Preview: sample app', exact: true });
-	await expect(region).toHaveCount(1);
-	expect(
-		await region.evaluate(
-			(node) => node.matches('[data-preview]') || node.querySelector('[data-preview]') !== null,
-		),
-	).toBe(true);
+	const sampleLandmarks = landmarks.filter(({ name }) =>
+		['Sample app', 'Order views'].includes(name),
+	);
+	expect(sampleLandmarks).toEqual([]);
+
+	const regions = landmarks.filter(
+		({ role, name }) => role === 'region' && name === 'Preview: sample app',
+	);
+	expect(regions).toHaveLength(1);
 	// The sample app is still inside it, parts and all.
-	await expect(region.locator('[data-preview-part="nav"]')).toBeVisible();
-	await expect(region.locator('[data-preview-part="sidebar"]')).toBeVisible();
+	expect(regions[0]!.holdsSampleApp).toBe(true);
+	await expect(page.locator('[data-preview-part="nav"]')).toBeVisible();
+	await expect(page.locator('[data-preview-part="sidebar"]')).toBeVisible();
 });
 
 test('the landing page and the workspace carry different titles, and the workspace names its record', async ({
@@ -84,6 +122,37 @@ test('the landing page and the workspace carry different titles, and the workspa
 	await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
 	await expect(page).toHaveTitle(/ceramics\.example/);
+	expect(await page.title()).not.toBe(landingTitle);
+});
+
+test("a workspace reached by the keyed flow's client-side push keeps a title naming its record", async ({
+	page,
+}) => {
+	await serveFontTable(page);
+	await page.goto('/');
+	const landingTitle = await page.title();
+
+	await page.getByLabel('Reference images').setInputFiles(pngFile('brand.png'));
+	await expect(page.getByText('brand.png', { exact: true })).toBeVisible();
+	await page.getByLabel(/^Brand site/).fill('ceramics.example');
+	await page.getByRole('button', { name: 'Save these references' }).click();
+	await expect(page.getByRole('heading', { name: 'Saved' })).toBeVisible();
+
+	await mockAnthropic(page, (body) => ({
+		status: 200,
+		body: successResponseBody(imageIdFromRequest(body)),
+	}));
+	await waitForGenerateReady(page);
+	await generateWithFreshKey(page, TEST_KEY);
+	await expect(page).toHaveURL(/\/workspace\?record=/);
+	await expect(page.locator('[data-preview] [data-preview-app-screen]')).toBeVisible();
+
+	await expect(page).toHaveTitle(/ceramics\.example/);
+	// Next applies the route's metadata title on a client-side navigation too, and on its own
+	// schedule. A late write would replace the record's name with the static `Workspace · Cambium`,
+	// so read again once that has had time to land.
+	await page.waitForTimeout(1000);
+	expect(await page.title()).toMatch(/ceramics\.example/);
 	expect(await page.title()).not.toBe(landingTitle);
 });
 
