@@ -1,10 +1,12 @@
 'use client';
 
 import { lazy, Suspense } from 'react';
+import { flushSync } from 'react-dom';
 import { useStore } from 'zustand';
 import type { StoreApi } from 'zustand/vanilla';
 
 import type { WorkspaceState } from '../../app/state/workspace-store';
+import { SEED_HEADING_ID } from '@/components/workspace/seed-rail';
 
 // Lazy for the landing route's reason: only a record with no versions needs it, so no other
 // workspace open should pay for the cost estimate and key dialog behind it. The build gives each
@@ -67,9 +69,19 @@ export function FirstVersion({
 					images={record.images}
 					onBusyChange={onBusyChange}
 					onKeyStored={ignoreKeyStored}
-					// `open` takes the committed record the way `WorkspaceRoute` takes a loaded one: last
-					// version active, draft reset, tokens rederived. Every rail subscriber rerenders off it.
-					onGenerated={open}
+					// `open` takes the committed record the way `WorkspaceRoute` takes a loaded one, and the
+					// commit it causes unmounts this section with the panel that held focus (#174). Flushed
+					// first, as `Shell`'s `skipTo` does, so focus moves after that unmount, not before it.
+					// The busy report goes in the same flush: the version is already saved and in hand, so
+					// the layout hold has nothing left to protect, and letting `Shell` catch up with the
+					// viewport here keeps that swap from unmounting the heading after it's focused.
+					onGenerated={(generated) => {
+						flushSync(() => {
+							onBusyChange?.(false);
+							open(generated);
+						});
+						document.getElementById(SEED_HEADING_ID)?.focus();
+					}}
 					recordId={record.id}
 				/>
 			</Suspense>

@@ -38,6 +38,9 @@ import { SourceRegion } from '@/components/workspace/seed-rail/source-region';
 
 const PRESETS: readonly Interpretation[] = ['faithful', 'balanced', 'expressive'];
 
+/** The rail's heading id, exported so the empty workspace can send focus here after its first generate. */
+export const SEED_HEADING_ID = 'seed-heading';
+
 type ParamField = keyof InterpretationParams;
 
 /** Display names for the advanced disclosure, in the order `InterpretationParams` declares them. */
@@ -218,9 +221,9 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 	}
 
 	return (
-		<section aria-labelledby="seed-heading" className="flex min-h-0 flex-col gap-3">
+		<section aria-labelledby={SEED_HEADING_ID} className="flex min-h-0 flex-col gap-3">
 			<div className="flex items-center justify-between gap-2">
-				<h2 id="seed-heading" className="text-lg font-semibold">
+				<h2 id={SEED_HEADING_ID} tabIndex={-1} className="text-lg font-semibold">
 					Seed
 				</h2>
 				{active ? (

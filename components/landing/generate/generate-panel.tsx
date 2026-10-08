@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, type Ref, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { RECORD_PARAM } from '@/components/stored-record';
 import { Button } from '@/components/ui/button';
@@ -123,6 +123,21 @@ export function GeneratePanel({
 	 * makes no call and leaves this null.
 	 */
 	const [abort, setAbort] = useState<AbortController | null>(null);
+
+	const status = useRef<HTMLParagraphElement>(null);
+	const notice = useRef<HTMLDivElement>(null);
+
+	// Whatever started a run (Generate, the key dialog, Retry, a repair, Save again) goes disabled or
+	// unmounts as it starts, which drops focus to the page (#174). The status line takes it. When the
+	// run ends in a failure with focus still there, the notice takes it, so it never rests on a line
+	// that has just emptied.
+	useLayoutEffect(() => {
+		if (running) {
+			status.current?.focus();
+			return;
+		}
+		if (shown && document.activeElement === status.current) notice.current?.focus();
+	}, [running, shown]);
 
 	// A run that finishes after the person left the page mustn't drag them to the workspace, or hand a
 	// record to one that's gone.
@@ -418,11 +433,17 @@ export function GeneratePanel({
 				Generate
 			</Button>
 
-			{running && (
-				<p aria-live="polite" className="text-muted-foreground text-sm">
-					Generating. This usually takes under a minute.
-				</p>
-			)}
+			{/* Always mounted: a live region that mounts with its text already inside is one screen
+			    readers skip. Empty and `sr-only` between runs. */}
+			<p
+				aria-live="polite"
+				className={running ? 'text-muted-foreground text-sm' : 'sr-only'}
+				data-generate-status
+				ref={status}
+				tabIndex={-1}
+			>
+				{running ? 'Generating. This usually takes under a minute.' : null}
+			</p>
 
 			{/* No timeout stands in for this. A slow read may be a paid one still on its way back, so
 			    only the person decides when to give up on it. */}
@@ -441,6 +462,7 @@ export function GeneratePanel({
 
 			{shown && (
 				<FailureNotice
+					ref={notice}
 					disabled={running}
 					onRepair={(repair) => startGenerate(repair)}
 					onRetry={() => startGenerate()}
@@ -467,6 +489,7 @@ export function GeneratePanel({
 }
 
 type FailureNoticeProps = {
+	ref: Ref<HTMLDivElement>;
 	shown: ShownFailure;
 	disabled: boolean;
 	onUpdateKey: () => void;
@@ -489,6 +512,7 @@ function RequestId({ id }: { id: string }) {
  * the words and the recovery can't drift apart here.
  */
 function FailureNotice({
+	ref,
 	shown,
 	disabled,
 	onUpdateKey,
@@ -501,6 +525,8 @@ function FailureNotice({
 		// holds.
 		return (
 			<div
+				ref={ref}
+				tabIndex={-1}
 				className="flex w-full flex-col items-start gap-3"
 				data-outcome="unexpected"
 				role="alert"
@@ -519,6 +545,8 @@ function FailureNotice({
 
 	return (
 		<div
+			ref={ref}
+			tabIndex={-1}
 			className="flex w-full flex-col items-start gap-3"
 			data-outcome={descriptor.kind}
 			role="alert"

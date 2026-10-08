@@ -106,10 +106,10 @@ test('writing a record through the upload form leaves it in the store', async ({
 
 	await page.getByRole('button', { name: 'Save these references' }).click();
 
-	// This text renders only from the `found` branch in `components/landing/landing-route.tsx`,
+	// This heading renders only from the `found` branch in `components/landing/landing-route.tsx`,
 	// once the read-back that follows `router.replace` has resolved — proof the write landed, not
 	// just that the click happened.
-	await expect(page.getByText(/^Saved\./)).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Saved' })).toBeVisible();
 
 	expect(await countStoredRecords(page)).toBe(1);
 });

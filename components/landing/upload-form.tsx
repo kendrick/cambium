@@ -144,7 +144,8 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 		setNotice(null);
 
 		try {
-			// The picker is disabled while this runs, so the count read here cannot move underneath it.
+			// The picker refuses its dialog and any drop while this runs, so the count read here cannot move
+			// underneath it.
 			const room = MAX_REFERENCE_IMAGES - picked.length;
 			const rejected: string[] = [];
 			const accepted: PickedImage[] = [];
@@ -254,6 +255,12 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 		// live view of the input, so clearing the input empties the same object this holds. Reading it
 		// afterwards found zero files and silently picked nothing.
 		const files = Array.from(event.target.files ?? []);
+
+		// The input stays focusable while busy (#174), so a drop onto it lands here too.
+		if (busy || atLimit) {
+			event.target.value = '';
+			return;
+		}
 
 		// Cleared so picking the same file twice running still fires a change event. The input holds
 		// nothing worth keeping: `picked` is the record of what was accepted.
@@ -375,6 +382,10 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 			className="flex w-full flex-col gap-6"
 			onSubmit={(event) => {
 				event.preventDefault();
+				// Save is `aria-disabled` while busy, not `disabled` (#174), so Enter still submits mid-decode.
+				// `saving` refuses a second save but not a decode in progress, and a save started mid-decode
+				// would drop the images still being read.
+				if (busy) return;
 				void save();
 			}}
 		>
@@ -387,11 +398,17 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				    the extension filter and `File.type`. */}
 				<input
 					accept={ACCEPTED_IMAGE_TYPES.join(',')}
-					className="block w-full cursor-pointer rounded-md border border-dashed border-border bg-background p-6 text-sm file:mr-4 file:cursor-pointer file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground"
-					disabled={busy || atLimit}
+					className="block w-full cursor-pointer rounded-md border border-dashed border-border bg-background p-6 text-sm file:mr-4 file:cursor-pointer file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+					// `aria-disabled`, not `disabled` (#174). The input goes busy while it decodes the file just
+					// picked, and a disabled control drops keyboard focus to the page. So the dialog is refused
+					// here instead.
+					aria-disabled={busy || atLimit}
 					id={pickerId}
 					multiple
 					onChange={onPick}
+					onClick={(event) => {
+						if (busy || atLimit) event.preventDefault();
+					}}
 					type="file"
 				/>
 				<p className="text-muted-foreground text-sm">{guidance}</p>
@@ -494,7 +511,15 @@ export function UploadForm({ onSaved }: UploadFormProps) {
 				<p className="text-muted-foreground text-sm">Cambium never opens it.</p>
 			</div>
 
-			<Button disabled={picked.length < MIN_REFERENCE_IMAGES || busy} type="submit">
+			{/* `busy` is `aria-disabled` for the same reason as the file input: `disabled` would drop the
+			    focus this press put here, before the route swaps the form out. `saving` already refuses a
+			    second submit. */}
+			<Button
+				aria-disabled={busy || undefined}
+				className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
+				disabled={picked.length < MIN_REFERENCE_IMAGES}
+				type="submit"
+			>
 				{busy ? 'Working…' : 'Save these references'}
 			</Button>
 		</form>

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { KeyIndicator } from '@/components/landing/generate/key-indicator';
 import { TAG_LABELS, UploadForm } from '@/components/landing/upload-form';
@@ -166,7 +166,7 @@ function LandingOutcome({ onKeyStored }: { onKeyStored: (stored: boolean) => voi
 	// from another browser resolves to nothing here, and showing an id for a record that is not
 	// stored would make the addressing decorative.
 	if (saved.kind === 'loading') {
-		return <p className="text-muted-foreground text-sm">Looking for that record…</p>;
+		return <LookingUp />;
 	}
 
 	if (saved.kind === 'missing') {
@@ -226,8 +226,9 @@ function LandingOutcome({ onKeyStored }: { onKeyStored: (stored: boolean) => voi
 
 	return (
 		<Outcome action="Add another brand">
+			<SavedHeading />
 			<p className="text-sm">
-				Saved. {count} stored in this browser under{' '}
+				{count} stored in this browser under{' '}
 				<code className="bg-muted rounded px-1 py-0.5 text-xs">{recordId}</code>.
 			</p>
 			<ul className="flex flex-col gap-0.5">
@@ -261,5 +262,42 @@ function LandingOutcome({ onKeyStored }: { onKeyStored: (stored: boolean) => voi
 				</p>
 			)}
 		</Outcome>
+	);
+}
+
+/**
+ * Takes focus on mount, but only focus that has already fallen to the page (#174). Saving unmounts
+ * the form under the button just pressed, then the loading line gives way to the outcome, and each
+ * swap would otherwise leave the keyboard on `<body>`. A layout effect lands in the same commit as
+ * the swap, before anything paints. Focus somebody put elsewhere stays where it is.
+ */
+function useCatchDroppedFocus<T extends HTMLElement>() {
+	const ref = useRef<T>(null);
+
+	useLayoutEffect(() => {
+		const active = document.activeElement;
+		if (active === null || active === document.body) ref.current?.focus();
+	}, []);
+
+	return ref;
+}
+
+function LookingUp() {
+	const ref = useCatchDroppedFocus<HTMLParagraphElement>();
+
+	return (
+		<p className="text-muted-foreground text-sm" ref={ref} tabIndex={-1}>
+			Looking for that record…
+		</p>
+	);
+}
+
+function SavedHeading() {
+	const ref = useCatchDroppedFocus<HTMLHeadingElement>();
+
+	return (
+		<h2 className="text-lg font-semibold" ref={ref} tabIndex={-1}>
+			Saved
+		</h2>
 	);
 }
