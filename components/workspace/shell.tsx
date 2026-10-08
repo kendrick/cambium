@@ -58,6 +58,7 @@ type FocusColumn = 'seed' | 'tokens' | 'output';
 type FocusKey = { column: FocusColumn } & (
 	| { kind: 'row'; row: string; index: number }
 	| { kind: 'named'; tag: string; name: string }
+	| { kind: 'column' }
 );
 
 /** Innermost first: a token row sits inside a category group. */
@@ -118,6 +119,7 @@ function focusKey(active: Element | null, tab: WorkspaceTab): FocusKey | null {
 }
 
 function findFocusTarget(key: FocusKey, main: HTMLElement): HTMLElement | null {
+	if (key.kind === 'column') return null;
 	if (key.kind === 'row') {
 		return main.querySelector(key.row)?.querySelectorAll<HTMLElement>(FOCUSABLE)[key.index] ?? null;
 	}
@@ -166,21 +168,31 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	// Swapping layouts unmounts FirstVersion and its panel. Mid-generate, the panel would drop the
 	// reply, so the paid version would land in IndexedDB but never reach the store, and Generate would
 	// come back on a record that already has one. After a failure, the remount would drop the notice
-	// before anyone read it, along with its Retry, its paid answer or its reopened key dialog. So the
-	// layout holds still while the panel reports busy, which is a generate in flight, the key dialog
-	// open, or any failure notice showing other than a cancel made before any reply arrived, then
-	// catches up with the viewport. It's state set during render, not an effect, so the catch-up never
-	// paints a stale frame.
+	// before anyone read it, along with its Retry, its paid answer, its billing warning or its
+	// reopened key dialog. So the layout holds still while the panel reports busy, which is a generate
+	// in flight, the key dialog open, or any failure notice showing, then catches up with the viewport.
+	// It's state set during render, not an effect, so the catch-up never paints a stale frame.
 	const [generating, setGenerating] = useState(false);
 	const [narrow, setNarrow] = useState(viewportNarrow);
 	// A phone opens on Seed, the first tab and where the stacked page used to start. Desktop keeps
 	// opening Output on Preview.
 	const [tab, setTab] = useState<WorkspaceTab>(() => (narrow ? 'seed' : 'preview'));
 	const [pendingFocus, setPendingFocus] = useState<FocusKey | null>(null);
-	if (narrow !== viewportNarrow && !generating) {
+	// Whether the swap now pending was held back, which changes what a swap from `<body>` means.
+	const [held, setHeld] = useState(false);
+	const behind = narrow !== viewportNarrow;
+	if (behind && generating && !held) setHeld(true);
+	if (!behind && held) setHeld(false);
+	if (behind && !generating) {
 		// Read in the render that swaps layouts, the last moment the focused control is still in the
-		// DOM (#174). Not at the media query change: a hold can put the swap long after it.
-		setPendingFocus(focusKey(document.activeElement, tab));
+		// DOM (#174). Not at the media query change: a hold can put the swap long after it. What ends a
+		// hold can also unmount the focused control first: an updated key clears the dialog and the
+		// notice in one commit, and the release comes after (#186). Focus is on `<body>` by then, so a
+		// held swap falls back to the seed heading, next to the panel that held it.
+		setPendingFocus(
+			focusKey(document.activeElement, tab) ?? (held ? { column: 'seed', kind: 'column' } : null),
+		);
+		setHeld(false);
 		setNarrow(viewportNarrow);
 	}
 	const mainRoot = useRef<HTMLElement | null>(null);
@@ -249,6 +261,20 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 		setPendingFocus(null);
 	}, [pendingFocus, narrow, tab]);
 
+	// A first version generated on the landing page ends in a route change that unmounts the status
+	// line holding focus, so focus arrives here on `<body>` (#186). The seed heading takes it, the
+	// same destination a first version generated in the workspace gets. A cold load also starts on
+	// `<body>`, but nothing dropped there, and taking focus would put the first Tab past the skip
+	// links. The document's own load URL tells the two apart: only a client-side route change has
+	// moved the address on since.
+	useLayoutEffect(() => {
+		const active = document.activeElement;
+		if (active !== null && active !== document.body) return;
+		const [load] = performance.getEntriesByType('navigation');
+		if (!load || load.name === window.location.href) return;
+		document.getElementById(SEED_HEADING_ID)?.focus();
+	}, []);
+
 	// Below md the bar is sticky and opaque, so a control the browser scrolls to the top edge, as
 	// Shift+Tab does, would land under it (WCAG 2.4.11, #174). The page is the only scroller here, so
 	// its scroll padding is what focus scrolling stops short of. Measured, since the tabs wrap on a
@@ -298,9 +324,8 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	// also means crossing 768px, on a rotated tablet or a resized window, remounts everything, so
 	// the token filter and open categories don't survive it. Focus does: the render that swaps
 	// records where it was, and the layout effect above focuses the same control in the new layout.
-	// The swap waits while a first-version generate is in flight, its key dialog is open, or a
-	// failure notice shows (other than a cancel made before any reply arrived), and catches up once
-	// that clears.
+	// The swap waits while a first-version generate is in flight, its key dialog is open, or any
+	// failure notice shows, and catches up once that clears.
 	const seedColumn = (
 		<>
 			{/* The seed's field list scrolls inside half the rail at most from md up, so a fully stated

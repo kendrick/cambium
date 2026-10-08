@@ -14,6 +14,7 @@ import {
 	mockAnthropic,
 	saveOneRecord,
 	serveFontTable,
+	submitKeyDialog,
 	successResponseBody,
 	waitForGenerateReady,
 } from './keyed-flow';
@@ -173,6 +174,87 @@ test('a rejected key after md was crossed mid-request keeps its notice and the k
 	excuseNetworkDiagnostics(consoleErrors);
 });
 
+/** Where focus sits, by tag and id, so a failure says more than "not focused". */
+async function focusHolder(page: Page): Promise<string> {
+	return page.evaluate(() => {
+		const active = document.activeElement;
+		if (!active) return 'null';
+		return `${active.tagName.toLowerCase()}${active.id ? `#${active.id}` : ''}`;
+	});
+}
+
+/**
+ * The held layout has just caught up with the viewport after a dialog that unmounted the control
+ * focus came from. Focus has to be on the seed heading, `Shell`'s fallback for a resumed swap,
+ * rather than left on `<body>`.
+ */
+async function expectCaughtUpOntoSeedHeading(page: Page): Promise<void> {
+	await expect(page.getByRole('tablist', { name: 'Output' })).toBeVisible();
+	await twoFrames(page);
+	expect(await focusHolder(page), 'focus after the held layout caught up').not.toBe('body');
+	await expect(page.getByRole('heading', { level: 2, name: 'Seed', exact: true })).toBeFocused();
+}
+
+/**
+ * A 401 after md was crossed mid-request, with the hold still on. Every later request succeeds, so a
+ * path that quietly started a run would show up as a second entry in `sent`.
+ */
+async function rejectedKeyAfterCrossing(page: Page): Promise<readonly unknown[]> {
+	await serveFontTable(page);
+	const recordId = await saveOneRecord(page);
+
+	const { held, release } = gate();
+	const sent = await mockAnthropic(page, async (body, attempt) => {
+		if (attempt > 1) return { status: 200, body: successResponseBody(imageIdFromRequest(body)) };
+		await held;
+		return { status: 401, body: error401Fixture.body };
+	});
+
+	await startAtPhoneThenCross(page, recordId, sent);
+	release();
+	await expect(keyDialog(page)).toBeVisible();
+	await expectShownAndHeld(page, page.locator('[data-outcome="credentials"]'));
+	return sent;
+}
+
+test('a replacement key typed into the reopened dialog after an md crossing leaves focus on the seed heading', async ({
+	page,
+	consoleErrors,
+}) => {
+	const sent = await rejectedKeyAfterCrossing(page);
+
+	// `acceptKey` clears the dialog and the notice and starts no run, so the hold lets go with the
+	// control focus came from already gone.
+	await submitKeyDialog(page, TEST_KEY);
+	await expectCaughtUpOntoSeedHeading(page);
+	expect(sent).toHaveLength(1);
+
+	excuseNetworkDiagnostics(consoleErrors);
+});
+
+test('dismissing the reopened dialog keeps the hold, and Update API key then leaves focus on the seed heading', async ({
+	page,
+	consoleErrors,
+}) => {
+	const sent = await rejectedKeyAfterCrossing(page);
+	const notice = page.locator('[data-outcome="credentials"]');
+
+	// Escape closes the dialog but leaves the notice, which keeps holding the layout.
+	await page.keyboard.press('Escape');
+	await expect(keyDialog(page)).toHaveCount(0);
+	await expectShownAndHeld(page, notice);
+	expect(await focusHolder(page), 'focus after the reopened dialog was dismissed').not.toBe('body');
+
+	// The notice's own button reopens it, and a key submitted there clears the notice.
+	await notice.getByRole('button', { name: 'Update API key' }).focus();
+	await page.keyboard.press('Enter');
+	await submitKeyDialog(page, TEST_KEY);
+	await expectCaughtUpOntoSeedHeading(page);
+	expect(sent).toHaveLength(1);
+
+	excuseNetworkDiagnostics(consoleErrors);
+});
+
 test('a record deleted in another tab mid-generate keeps its notice across an md crossing', async ({
 	page,
 }) => {
@@ -227,7 +309,7 @@ test('the first key dialog keeps a half-typed key across an md crossing', async 
 	await expect(page.getByRole('tablist', { name: 'Output' })).toBeVisible();
 });
 
-test('a cancel made before any reply arrived lets the layout follow the viewport', async ({
+test('a cancel made after md was crossed mid-request keeps its notice and its billing warning', async ({
 	page,
 	consoleErrors,
 }) => {
@@ -240,23 +322,19 @@ test('a cancel made before any reply arrived lets the layout follow the viewport
 		return { status: 200, body: successResponseBody(imageIdFromRequest(body)) };
 	});
 
-	await page.setViewportSize({ width: 390, height: 844 });
-	await page.goto(`/workspace?record=${recordId}`);
-	await waitForGenerateReady(page);
-	await generateWithFreshKey(page, TEST_KEY);
-	await expect.poll(() => sent.length).toBe(1);
-
+	// The order Codex named on #186: the viewport crosses while the request is out, then the person
+	// cancels before any reply could supply a request id.
+	await startAtPhoneThenCross(page, recordId, sent);
 	await page.getByRole('button', { name: 'Cancel' }).click();
-	const notice = page.locator('[data-outcome="cancelled"]');
-	await expect(notice).toBeVisible();
-	await expect(notice).toContainText('Generation cancelled');
-	// No reply arrived, so there's no request id to keep and the notice may go with the swap.
-	await expect(notice).not.toContainText('Anthropic request id');
 
-	await page.setViewportSize({ width: 1024, height: 844 });
-	await twoFrames(page);
-	await expect(page.getByRole('tablist', { name: 'Output' })).toBeVisible();
-	await expect(page.getByRole('tablist', { name: 'Workspace' })).toHaveCount(0);
+	const notice = page.locator('[data-outcome="cancelled"]');
+	await expectShownAndHeld(page, notice);
+	await expect(notice).toContainText('Generation cancelled');
+	// No reply arrived, so there's no request id, and this notice is the only place that says
+	// Anthropic may still bill for work it had already started.
+	await expect(notice).not.toContainText('Anthropic request id');
+	await expect(notice).toContainText('Anthropic may still bill');
+	await expect(notice.getByRole('button', { name: 'Retry' })).toBeVisible();
 
 	// The aborted fetch is a failed load to Chromium, which logs it. Only that line is excused.
 	excuseNetworkDiagnostics(consoleErrors);

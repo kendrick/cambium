@@ -138,8 +138,19 @@ test('with the keyed flow driven by keyboard only, focus never falls to the page
 	await expect(page.locator('[data-generate-status]')).toBeFocused();
 	await expectNeverOnBody(page, 'after the key dialog closed into a run');
 
+	// The success, still watched. The route change unmounts the focused status line with the whole
+	// landing page, and the workspace's "Opening that record…" line takes no focus, so `<body>` holds
+	// it until `Shell` mounts. What this asserts is where it ends up: the seed heading, the same
+	// destination a first version generated inside the workspace gets, and nowhere else after that.
+	await arm(page);
 	release();
 	await expect(page).toHaveURL(/\/workspace\?record=/);
+	const seedHeading = page.getByRole('heading', { level: 2, name: 'Seed', exact: true });
+	await expect(seedHeading).toBeFocused();
+	const { seen } = await disarm(page);
+	expect(seen.at(-1), `after the workspace opened: focus went ${seen.join(' → ')}`).toBe(
+		'h2#seed-heading',
+	);
 });
 
 test('generating the first version from the workspace leaves focus on the seed heading', async ({

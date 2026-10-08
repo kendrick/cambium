@@ -30,7 +30,7 @@ export type GeneratePanelProps = {
 	onGenerated?: (record: BrandRecord) => void;
 	/**
 	 * Told when the panel starts or stops holding something a remount would lose: a request in
-	 * flight, or a failure whose way forward reuses a paid answer. Told `false` on unmount too, so a
+	 * flight, the key dialog open, or any failure notice showing. Told `false` on unmount too, so a
 	 * caller that holds its layout still for this is never left holding it for a panel that's gone.
 	 */
 	onBusyChange?: (busy: boolean) => void;
@@ -401,16 +401,12 @@ export function GeneratePanel({
 	}
 
 	// A layout swap remounts this panel fresh, so anything it shows would be gone before anyone read
-	// it: a failure's message, the request id support needs, Retry, a paid answer to reuse, or a key
-	// dialog with a half-typed key in it. So all of those hold the layout. The one notice that doesn't
-	// is a cancel made before any reply arrived: it has no request id to keep and no answer to reuse,
-	// so a remount loses nothing. A notice with no way forward holds until the page is left. It was a
-	// dead end already, and now it's the same one on both sides of md.
-	const cancelledBeforeReply =
-		shown?.kind === 'described' &&
-		shown.descriptor.kind === 'cancelled' &&
-		!shown.descriptor.requestId;
-	const busy = running || dialog !== null || (shown !== null && !cancelledBeforeReply);
+	// it: a failure's message, the request id support needs, Retry, a paid answer to reuse, a key
+	// dialog with a half-typed key in it, or a cancel's warning that Anthropic may still bill for work
+	// it had started. So a run in flight, the key dialog open, or any failure notice showing holds
+	// the layout. A notice with no way forward holds until the page is left. It was a dead end
+	// already, and now it's the same one on both sides of md.
+	const busy = running || dialog !== null || shown !== null;
 
 	useEffect(() => {
 		if (!onBusyChange) return;
