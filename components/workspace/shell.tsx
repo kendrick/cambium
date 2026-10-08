@@ -187,6 +187,7 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const [scheme, setScheme] = useState<SchemeName>('light');
 	const panels = useRef<Partial<Record<WorkspaceTab, HTMLDivElement | null>>>({});
 	const phoneTabs = useRef<HTMLDivElement | null>(null);
+	const bar = useRef<HTMLDivElement | null>(null);
 
 	// `flushSync` so the panel is mounted and no longer `hidden` before `focus()` runs: base-ui
 	// mounts an opening panel during the same render, and a plain `setTab` would leave the
@@ -245,6 +246,28 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 		target.focus();
 		setPendingFocus(null);
 	}, [pendingFocus, narrow, tab]);
+
+	// Below md the bar is sticky and opaque, so a control the browser scrolls to the top edge, as
+	// Shift+Tab does, would land under it (WCAG 2.4.11, #174). The page is the only scroller here, so
+	// its scroll padding is what focus scrolling stops short of. Measured, since the tabs wrap on a
+	// narrow screen and the scheme row comes and goes with the token set, and set on `<html>` directly
+	// so this branch mounting stays the one below-md condition.
+	useLayoutEffect(() => {
+		const node = bar.current;
+		if (!narrow || !node) return;
+
+		const page = document.documentElement;
+		const reserve = () => {
+			page.style.scrollPaddingTop = `${Math.ceil(node.getBoundingClientRect().height)}px`;
+		};
+		reserve();
+		const observer = new ResizeObserver(reserve);
+		observer.observe(node);
+		return () => {
+			observer.disconnect();
+			page.style.removeProperty('scroll-padding-top');
+		};
+	}, [narrow]);
 
 	const active =
 		record && activeOrdinal !== null ? (record.versions[activeOrdinal - 1] ?? null) : null;
@@ -462,6 +485,7 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 				    overflowing tab list off the left edge, where no one can scroll to it and
 				    `scrollWidth` never sees it. */}
 				<div
+					ref={bar}
 					data-workspace-bar
 					className="bg-background sticky top-0 z-20 flex flex-wrap items-center"
 				>
