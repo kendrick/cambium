@@ -13,7 +13,7 @@ import {
 	type InterpretationParams,
 } from '../../core/interpretation';
 import { createOklchScaleEngine, OKLCH_SCALE_ENGINE_ID } from '../../core/oklch-scale-engine';
-import type { RampSet, ScaleEngine, ScaleEngineResult } from '../../core/scale-engine';
+import type { RampSet, ScaleEngine, ScaleEngineResult, SchemeName } from '../../core/scale-engine';
 import { defaultSeedPins, repairPinsFor } from '../../core/seed-pins';
 import { buildTokenSet } from '../../core/semantic-layer';
 import { overrideKey, type TokenOverride } from '../../core/token-overrides';
@@ -2032,6 +2032,10 @@ describe('pins (#25)', () => {
 	});
 });
 
+function brandNine(set: TokenSet | null | undefined, scheme: SchemeName) {
+	return set?.schemes[scheme].primitives.brand?.[8];
+}
+
 describe('a pinned key colour and contrast repair (#25)', () => {
 	it('hands repair the seed’s own pinned set rather than defaultPins, and drops it once unpinned', () => {
 		const seed = seedWith(259.8);
@@ -2053,28 +2057,17 @@ describe('a pinned key colour and contrast repair (#25)', () => {
 
 	/**
 	 * #25's acceptance criterion as worded: "a pinned field is unchanged by an applied contrast
-	 * repair." It holds here without the pin doing any work. `repairPinsFor` only ever names a
-	 * ramp's step 9, and both pairs `core/contrast/pairs.ts` declares against it (`primary` on
-	 * `primary-foreground`, and `sidebar-primary` on `sidebar-primary-foreground`, both aliased to
-	 * `brand.9` in `semantic-map.ts`) try their foreground first, the step `resolveScheme` already
-	 * chose for its own best contrast. That search clears any target this repo declares even at the
-	 * grayscale boundary, so step 9 never moves for either pair, pinned or not. Unpinning it here
-	 * shows no move was needed, an outcome #25's plan allows. The test above catches a store that
-	 * stops wiring the pin through; this one guards the plainer, output-level claim.
+	 * repair." Until #146 it held without the pin doing any work, because repair always tried the
+	 * foreground first and never reached step 9 on the background. ADR-0010 changed that: with the
+	 * key colour unpinned, repair moves `brand.9` when that is the smaller lightness change, so the
+	 * criterion now has a case that fails without the pin. This seed (brand L 0.62) is one. The
+	 * unrepaired base is the reference for step 9 because pinned-equals-unpinned alone would also
+	 * pass a repair that moved it identically on both runs.
 	 */
-	it('leaves the repaired token set unchanged whether the key colour is pinned or not', () => {
+	it('repairs around a pinned key colour, and moves brand step 9 once it’s unpinned', () => {
 		const seed = seedWith(259.8);
 		const { store } = openWorkspace(makeRecord([makeVersion({ seed })]));
 		const pinnedTokenSet = store.getState().tokenSet;
-
-		store.getState().togglePin('keyColors.0');
-
-		expect(store.getState().tokenSet).toEqual(pinnedTokenSet);
-
-		// Pinned-equals-unpinned alone would also pass a repair that moved brand step 9 in lockstep
-		// on both runs. `unrepairedBase`, built the same way `unrepairedReport` above builds its
-		// baseline, is what step 9 was before repair touched it, so comparing against that catches a
-		// repair that drifts both runs together, not just one that treats them differently.
 		const unrepairedResult = createOklchScaleEngine().generate(seed, BALANCED);
 
 		if (!unrepairedResult.ok) {
@@ -2082,12 +2075,22 @@ describe('a pinned key colour and contrast repair (#25)', () => {
 		}
 
 		const unrepairedBase = buildTokenSet(unrepairedResult.schemes, seed, BALANCED);
-
 		for (const scheme of ['light', 'dark'] as const) {
-			expect(pinnedTokenSet?.schemes[scheme].primitives.brand?.[8]).toEqual(
-				unrepairedBase.schemes[scheme].primitives.brand?.[8],
-			);
+			expect(brandNine(pinnedTokenSet, scheme)).toEqual(brandNine(unrepairedBase, scheme));
 		}
+
+		store.getState().togglePin('keyColors.0');
+
+		const unpinnedTokenSet = store.getState().tokenSet;
+
+		expect(
+			(['light', 'dark'] as const).some(
+				// Lightness rather than the whole step: repair only ever moves lightness, and a JSON
+				// comparison of the step reads two equal objects as different when their keys come out
+				// in a different order, which passed this check on a repair that never moved step 9.
+				(scheme) => brandNine(unpinnedTokenSet, scheme)?.l !== brandNine(unrepairedBase, scheme)?.l,
+			),
+		).toBe(true);
 	});
 });
 

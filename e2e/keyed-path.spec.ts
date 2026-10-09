@@ -146,8 +146,6 @@ test('the keyed path: upload, generate, edit, pin, and download', async ({ page 
 		expect(h).toBeCloseTo(expectedH, 3);
 	});
 
-	let primaryAfterFirstEdit: string | null = null;
-
 	await test.step("3. edit re-derives: the brand key colour's lightness moves the primary token, with no request", async () => {
 		const before = await primaryTokenValue(page);
 
@@ -157,43 +155,52 @@ test('the keyed path: upload, generate, edit, pin, and download', async ({ page 
 		await editKeyColorLightness(page, 'brand key colour', '0.25');
 
 		await expect.poll(() => primaryTokenValue(page)).not.toBe(before);
-		primaryAfterFirstEdit = await primaryTokenValue(page);
 
 		// The route guard above and `mockAnthropic`'s own capture already prove no real call landed
 		// anywhere in this test; this checks the narrower claim that the edit itself sent nothing.
 		expect(requestUrls).toEqual([]);
 	});
 
-	await test.step('4. pin survives: the brand key colour holds while an unrelated edit re-derives around it', async () => {
-		// v1 ships exactly one consumer of a pin: contrast repair (`core/seed-pins.ts`'s
-		// `repairPinsFor`, read by `app/state/workspace-store.ts`'s `withContrastRepairs`). A sweep of
-		// this seed's brand and accent lightness across the chroma range never found repair moving step
-		// 9, pinned or not, so this step passes whether or not the pin below does anything—it can show
-		// that the brand key colour survives a re-derivation it has nothing to do with, not that the
-		// pin is what holds it there. #146 gives a pin a case repair can actually decide.
+	await test.step('4. pin decides: repair keeps the pinned brand colour, and moves it once unpinned', async () => {
+		// At brand lightness 0.62 the light `primary-foreground` fails on `primary`. Repair can darken
+		// the text (`brand.1`) or the fill (`brand.9`) and takes the smaller move, unless the brand key
+		// colour is pinned and rules out the fill (ADR-0010). Unpinned, `primary` lands near 0.587.
 		const brandPin = page.getByRole('button', { name: 'Pin brand key colour' });
 		// Generation pins every key colour by default (`defaultSeedPins`); confirmed rather than
 		// assumed, in case something upstream ever unpinned it.
 		if ((await brandPin.getAttribute('aria-pressed')) !== 'true') await brandPin.click();
 		await expect(brandPin).toHaveAttribute('aria-pressed', 'true');
 
-		const brandSwatch = keyColorRailSwatch(page, 'keyColors.0');
-		const brandValueBeforeAccentEdit = await brandSwatch.textContent();
+		await editKeyColorLightness(page, 'brand key colour', '0.62');
+
+		const primaryL = async () => parseOklchChannels((await primaryTokenValue(page)) ?? '')[0];
+
+		await expect.poll(primaryL).toBeCloseTo(0.62, 3);
+		const pinnedPrimary = await primaryTokenValue(page);
+
+		// If unpinning changed nothing, `primary` would stay at 0.62 and this poll would time out. The
+		// bound is half the printed precision, so only a real move clears it.
+		await brandPin.click();
+		await expect(brandPin).toHaveAttribute('aria-pressed', 'false');
+		await expect.poll(primaryL).toBeLessThan(0.62 - 0.0005);
+
+		await brandPin.click();
+		await expect(brandPin).toHaveAttribute('aria-pressed', 'true');
+		await expect.poll(() => primaryTokenValue(page)).toBe(pinnedPrimary);
 
 		// The accent ramp is anchored on the accent key colour's own channels
 		// (`core/oklch-scale-engine.ts`'s `accentAnchor`), so this is the token an accent edit has to
-		// move to prove the re-derivation actually ran, while `primary` (aliased to `brand.9`) has no
-		// reason to follow it.
+		// move to prove the re-derivation ran, while `primary` has no reason to follow it.
+		const brandSwatch = keyColorRailSwatch(page, 'keyColors.0');
+		const brandValueBeforeAccentEdit = await brandSwatch.textContent();
 		const accentSwatch = page.locator('[data-token="primitive.accent.9"] [data-swatch-value]');
 		const accentBeforeEdit = await accentSwatch.textContent();
 
 		await editKeyColorLightness(page, 'accent key colour', '0.4');
 
 		await expect.poll(() => accentSwatch.textContent()).not.toBe(accentBeforeEdit);
-
 		expect(await brandSwatch.textContent()).toBe(brandValueBeforeAccentEdit);
-		await expect(brandPin).toHaveAttribute('aria-pressed', 'true');
-		expect(await primaryTokenValue(page)).toBe(primaryAfterFirstEdit);
+		expect(await primaryTokenValue(page)).toBe(pinnedPrimary);
 
 		const save = page.getByRole('button', { name: 'Save', exact: true });
 		await save.click();
@@ -205,7 +212,7 @@ test('the keyed path: upload, generate, edit, pin, and download', async ({ page 
 
 		await expect(brandSwatch).toHaveText(brandValueBeforeAccentEdit ?? '');
 		await expect(brandPin).toHaveAttribute('aria-pressed', 'true');
-		await expect.poll(() => primaryTokenValue(page)).toBe(primaryAfterFirstEdit);
+		await expect.poll(() => primaryTokenValue(page)).toBe(pinnedPrimary);
 	});
 
 	await test.step('5. downloads: the exported DTCG documents and stylesheet carry the post-edit value', async () => {

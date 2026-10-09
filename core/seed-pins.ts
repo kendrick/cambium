@@ -59,6 +59,10 @@ function placedIndices(keyColors: readonly KeyColor[]): { brand: number; accent:
  * The steps contrast repair must leave alone for these seed pins. Only a key colour the engine
  * places lands on a step, and it lands on step 9 of its ramp in both schemes. A pinned key colour
  * the engine never placed, or a pin on any other field, protects nothing repair could move.
+ *
+ * `core/contrast/repair.ts` restates the two ramps below as `KEY_COLOUR_RAMPS`, since it can't import
+ * from here without a cycle. Change both together, or repair's smaller-move rule (ADR-0010) stops
+ * matching the steps a pin protects.
  */
 export function repairPinsFor(seed: BrandSeed, pins: Iterable<SeedPinPath>): Set<PinKey> {
 	const keyColors = seed.keyColors ?? [];

@@ -175,11 +175,12 @@ const NO_KEY_COLORS_SEED: BrandSeed = seedWith([0.6, 0.15, 200], { keyColors: nu
 /**
  * A literal copy of every digest that has ever shipped, kept apart from `ENGINE_DIGESTS` so that
  * editing the fixture cannot carry this pin along with it. Append only: a shipped id's entry never
- * changes here, so the only way to ship changed output is a new id with a new fixture entry, pinned
- * here in its own turn once it ships.
+ * changes here, so the only way to ship changed output is a new id with a new fixture entry,
+ * mirrored here in the same change that ships it, as the "keeps every pinned digest" case demands.
  */
 const PINNED_DIGESTS: Readonly<Record<string, string>> = {
 	'cambium-oklch-2': '5c33f508696b0466ada2a2eefa6d7134a7053cfb9d1f429a43bcefef27833711',
+	'cambium-oklch-3': '5c33f508696b0466ada2a2eefa6d7134a7053cfb9d1f429a43bcefef27833711',
 };
 
 export function testScaleEngineContract(createEngine: () => ScaleEngine) {
@@ -392,7 +393,7 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 			).toBeDefined();
 			expect(
 				digest,
-				`output changed under engine id ${engine.id}. Either the change is unintended (revert it), or it is intended: move the engine id, add a new digest entry beside the existing one (leaving the old entry in place), pin it in PINNED_DIGESTS once it ships, and update the id literal asserted in core/oklch-scale-engine.test.ts.`,
+				`output changed under engine id ${engine.id}. Either the change is unintended (revert it), or it is intended: move the engine id, add a new digest entry beside the existing one (leaving the old entry in place), mirror it into PINNED_DIGESTS in the same change, and update the id literal asserted in core/oklch-scale-engine.test.ts.`,
 			).toBe(pinned);
 		});
 
@@ -418,7 +419,7 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 			for (const [id, digest] of Object.entries(PINNED_DIGESTS)) {
 				expect(
 					ENGINE_DIGESTS[id],
-					`pinned digest for ${id} no longer matches ENGINE_DIGESTS. Editing a shipped digest in place is not allowed: ship changed output under a new engine id and a new digest entry, then pin it here once it ships.`,
+					`pinned digest for ${id} no longer matches ENGINE_DIGESTS. Editing a shipped digest in place is not allowed: ship changed output under a new engine id and a new digest entry, and mirror that entry here in the same change.`,
 				).toBe(digest);
 			}
 
