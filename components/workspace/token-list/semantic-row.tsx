@@ -2,6 +2,7 @@ import { CAMBIUM_NAMESPACE } from '../../../core/provenance';
 import { STEP_ROLES } from '../../../core/step-roles';
 import type { OverrideIssue } from '../../../core/token-overrides';
 import type { SemanticEntry } from '../../../core/token-set';
+import type { Swatch } from './format';
 import { TokenRow } from './token-row';
 
 /**
@@ -23,8 +24,8 @@ export function SemanticRow({
 }: {
 	token: string;
 	entry: SemanticEntry;
-	/** The resolved colour as CSS, painted on the row's swatch and printed beside it. */
-	swatch: string;
+	/** The resolved colour, painted on the row's swatch at full precision and printed beside it at three decimals. */
+	swatch: Swatch;
 	/** Every `ramp.step` in the current scheme, in ramp order. */
 	rampOptions: readonly string[];
 	overridden: boolean;

@@ -4,7 +4,6 @@ import { useMemo, useState, type ReactNode } from 'react';
 
 import { OverrideRejectedError } from '../../app/state/workspace-store';
 import type { ContrastEntry } from '../../core/contrast/check';
-import { toOklchCss } from '../../core/css/oklch-css';
 import { resolveScheme } from '../../core/resolve-scheme';
 import type { ScaleEngineResult } from '../../core/scale-engine';
 import type { TokenSet } from '../../core/token-set';
@@ -18,6 +17,7 @@ import {
 } from '../../core/token-overrides';
 import { CategoryGroup } from './token-list/category-group';
 import { matchesFilter } from './token-list/filter';
+import { swatchOf } from './token-list/format';
 import { RampStrip } from './token-list/ramp-strip';
 import { SemanticRow } from './token-list/semantic-row';
 import { ValueRow } from './token-list/value-row';
@@ -247,7 +247,7 @@ export function TokenList({
 										key={token}
 										token={token}
 										entry={entry}
-										swatch={toOklchCss(resolved[token]!)}
+										swatch={swatchOf(resolved[token]!)}
 										rampOptions={rampOptions}
 										overridden={overridden}
 										issues={issuesFor(key)}

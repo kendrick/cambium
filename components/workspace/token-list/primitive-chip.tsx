@@ -1,10 +1,10 @@
 import { useState } from 'react';
 
-import { toOklchCss } from '../../../core/css/oklch-css';
 import { CAMBIUM_NAMESPACE } from '../../../core/provenance';
 import type { OverrideIssue, SchemeName, TokenOverride } from '../../../core/token-overrides';
 import { overrideKey } from '../../../core/token-overrides';
 import type { RampStep } from '../../../core/token-set';
+import { swatchOf } from './format';
 import { NumberInput, useFieldIssues } from './number-input';
 import { TokenEditor } from './token-editor';
 
@@ -69,7 +69,7 @@ export function PrimitiveChip({
 		h: channel === 'h' ? value : step.h,
 	});
 
-	const swatch = toOklchCss({ l: step.l, c: step.c, h: step.h });
+	const swatch = swatchOf({ l: step.l, c: step.c, h: step.h });
 
 	return (
 		<TokenEditor
@@ -101,17 +101,17 @@ export function PrimitiveChip({
 							aria-hidden
 							data-swatch
 							className="absolute inset-0 rounded-sm"
-							style={{ backgroundColor: swatch }}
+							style={{ backgroundColor: swatch.paint }}
 						/>
 						<span data-swatch-value className="sr-only">
-							{swatch}
+							{swatch.text}
 						</span>
 					</>
 				),
 			}}
 		>
 			<span data-editor-swatch-value className="w-full font-mono text-xs">
-				{swatch}
+				{swatch.text}
 			</span>
 			{CHANNELS.map((channel) => (
 				<label
