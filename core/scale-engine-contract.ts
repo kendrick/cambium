@@ -393,7 +393,7 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 			).toBeDefined();
 			expect(
 				digest,
-				`output changed under engine id ${engine.id}. Either the change is unintended (revert it), or it is intended: move the engine id, add a new digest entry beside the existing one (leaving the old entry in place), pin it in PINNED_DIGESTS once it ships, and update the id literal asserted in core/oklch-scale-engine.test.ts.`,
+				`output changed under engine id ${engine.id}. Either the change is unintended (revert it), or it is intended: move the engine id, add a new digest entry beside the existing one (leaving the old entry in place), mirror it into PINNED_DIGESTS in the same change, and update the id literal asserted in core/oklch-scale-engine.test.ts.`,
 			).toBe(pinned);
 		});
 
@@ -419,7 +419,7 @@ export function testScaleEngineContract(createEngine: () => ScaleEngine) {
 			for (const [id, digest] of Object.entries(PINNED_DIGESTS)) {
 				expect(
 					ENGINE_DIGESTS[id],
-					`pinned digest for ${id} no longer matches ENGINE_DIGESTS. Editing a shipped digest in place is not allowed: ship changed output under a new engine id and a new digest entry, then pin it here once it ships.`,
+					`pinned digest for ${id} no longer matches ENGINE_DIGESTS. Editing a shipped digest in place is not allowed: ship changed output under a new engine id and a new digest entry, and mirror that entry here in the same change.`,
 				).toBe(digest);
 			}
 

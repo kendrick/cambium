@@ -29,25 +29,11 @@ import {
  * actual failures get fixed, not failures a hand-built fixture was shaped to have.
  */
 function fixtureFor(oklch: [number, number, number]): TokenSet {
-	const seed = BrandSeedSchema.parse({
-		keyColors: [{ oklch, proposedRole: 'brand', sourceImageId: 'img-1', sourceRegion: null }],
-		neutralTemperature: null,
-		radiusCharacter: null,
-		shadowCharacter: null,
-		trackingFeel: null,
-		typeClassification: null,
-		suggestedPairing: null,
-		typeScaleRatio: null,
-		imageClassifications: null,
-		expressive: null,
-	});
-
-	const result = createOklchScaleEngine().generate(seed, BALANCED);
-
-	if (!result.ok)
-		throw new Error(`the scale engine rejected the fixture seed: ${result.error.kind}`);
-
-	return buildTokenSet(result.schemes, seed);
+	return baseFor(
+		seedOf({
+			keyColors: [{ oklch, proposedRole: 'brand', sourceImageId: 'img-1', sourceRegion: null }],
+		}),
+	);
 }
 
 const SWEEP: [string, [number, number, number]][] = [
