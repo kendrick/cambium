@@ -4,7 +4,7 @@ Until #146, a pin on a key colour changed nothing contrast repair produced. Pins
 
 Now, when one side of a failing pair is step 9 of `brand` or `accent`, and neither side is pinned, repair solves both sides and moves the one that needs the smaller lightness change. A tie goes to the foreground. A pinned key colour leaves only the foreground to move, which is the old behaviour. Every other pair still moves its foreground first, and moves its background only when the foreground is pinned or no lightness clears there.
 
-Both sides are solved on every turn of the loop, where the old loop solved the background only after the foreground failed. `solve` is pure, so a pair whose order doesn't change gets the same override as before. The cost is one extra `solve` per move, in a loop bounded at twice the number of pairs.
+On such a pair both unpinned sides are solved on every turn of the loop, where the old loop solved the background only after the foreground failed. `solve` is pure, so a pair whose order doesn't change gets the same override as before. The cost is one extra `solve` per move, in a loop bounded at twice the number of pairs.
 
 A prototype of this rule, run against `main` at 090aaf1, measured the effect on the eight demo fixtures in `app/demo/fixtures/` under `BALANCED`. With each record's own pins, and again under `defaultPins`, the overrides are byte-identical to the old rule's in all eight. With no pins, four of the eight differ: `artwork-blocks`, `photo-window`, `ui-devtools` and `ui-wikipedia` each move `brand.9` where the old rule moved the text step `brand.1` or `brand.12` instead. Those text moves ranged from 0.03 L in `ui-wikipedia` to 0.82 L in `photo-window`'s light scheme and 0.80 L in `ui-devtools`'s dark one, and those two largest flipped `primary-foreground` from one end of the ramp to the other. On the seed `core/contrast/repair.test.ts` uses, brand `[0.62, 0.21, 35.2]`, the unpinned move takes `brand.9` down 0.0334 L where the old rule took `brand.1` down 0.79 L.
 
@@ -36,6 +36,6 @@ A pin on the `brand` key colour now decides what repair moves on the `primary` p
 
 #27 renders this report. It relies on one entry per moved step, with `achieved` taken from the set the export ships.
 
-The `both-pinned` reason still can't be reached. Pins only ever cover step 9 of `brand` or `accent`, and no declared pair holds one of those on each side.
+The `both-pinned` reason still can't be reached from seed pins. `repairPinsFor` only ever covers step 9 of `brand` or `accent`, and no declared pair holds one of those on each side. A caller passing its own `pinned` set can still reach it, as `core/contrast/repair.test.ts` does.
 
 A pin on any field other than a key colour still maps to no step, so it changes nothing repair does.

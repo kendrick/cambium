@@ -346,8 +346,8 @@ describe('repairs as the stylesheet prints them', () => {
 
 describe('the repair report', () => {
 	/**
-	 * `achieved` is what the pair measured right after that move. A later move can touch the same
-	 * pair again, so the check here is against the target rather than against the final report.
+	 * `achieved` is what the pair measures in the set repair returns, so every entry has to clear its
+	 * target there, whatever a later move did to the pair's other side.
 	 */
 	it.each(SWEEP.map(([name]) => name))(
 		'%s: every entry names a measured failure, a move, and a passing result',
@@ -671,6 +671,41 @@ describe('a pinned key colour decides the move (#146)', () => {
 	});
 });
 
+describe('a pinned accent key colour decides the move too (#146)', () => {
+	// No declared pair aliases an accent step, so `primary` is pointed at `accent.9` by hand. That's
+	// the only way to reach the accent half of `KEY_COLOUR_RAMPS`, and without it dropping `accent`
+	// from that set leaves every other test green while the accent pin quietly decides nothing.
+	const seed = seedOf({
+		keyColors: [
+			{
+				oklch: [0.71, 0.14, 145],
+				proposedRole: 'brand',
+				sourceImageId: 'img-1',
+				sourceRegion: null,
+			},
+			{
+				oklch: [0.62, 0.21, 35.2],
+				proposedRole: 'accent',
+				sourceImageId: 'img-1',
+				sourceRegion: null,
+			},
+		],
+	});
+	const onAccent = applied(
+		baseFor(seed),
+		SCHEME_NAMES.map(
+			(scheme) => ({ kind: 'alias', scheme, token: 'primary', alias: 'accent.9' }) as const,
+		),
+	);
+	const run = (pins: SeedPinPath[]) =>
+		repairContrast(onAccent, { pinned: repairPinsFor(seed, pins) });
+
+	it('moves the text while the accent key colour is pinned, and accent.9 once it is not', () => {
+		expect(moved(run(['keyColors.0', 'keyColors.1']).overrides)).not.toContain('light:accent.9');
+		expect(moved(run(['keyColors.0']).overrides)).toContain('light:accent.9');
+	});
+});
+
 describe('the smaller-move rule stays on key-colour pairs (#146)', () => {
 	// `artwork-dashboard`'s brand and neutral temperature. Its light `muted-foreground` fails on
 	// `muted`, and the background (`neutral.3`, +0.006227) is the smaller move there, so a rule
@@ -730,9 +765,12 @@ const forcedDoubleMove = (() => {
 
 describe('a step repair moves twice (#146, PR #180 r4146678515)', () => {
 	it('reports one entry for the step, carrying the colour its override ships', () => {
-		const { overrides, report } = repairContrast(forcedDoubleMove, {
+		const { overrides, report, unrepaired } = repairContrast(forcedDoubleMove, {
 			pinned: defaultPins(forcedDoubleMove),
 		});
+
+		// A loop that stopped after the first move would also leave one entry matching its override.
+		expect(unrepaired).toEqual([]);
 		const entries = report.filter(
 			(e) => e.scheme === 'light' && e.ramp === 'neutral' && e.step === 12,
 		);
