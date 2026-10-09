@@ -28,6 +28,12 @@ export default defineConfig({
 	// no report directory, and traces, videos and screenshots stay off. A failing run still writes
 	// its error context under `test-results/`, which `.gitignore` covers.
 	reporter: 'list',
+	// The only snapshots here are byte goldens, which don't vary by OS, so the default template's
+	// platform suffix would make a golden recorded on macOS read as missing on Linux.
+	snapshotPathTemplate: '{testDir}/__snapshots__/{testFileName}/{arg}{ext}',
+	// A missing golden fails the run instead of being written by it. Recording one takes an explicit
+	// `--update-snapshots`, and the diff it leaves is what gets reviewed.
+	updateSnapshots: 'none',
 	use: { baseURL: BASE_URL },
 	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 	webServer: {

@@ -1,0 +1,2868 @@
+{
+  "color": {
+    "primitive": {
+      "brand": {
+        "1": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.188,
+              0.014476,
+              259.8
+            ],
+            "hex": "#10141a"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 1, the page background, curved from the brand key colour's hue and chroma",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "2": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.211,
+              0.019364,
+              259.8
+            ],
+            "hex": "#131922"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 2, the subtle background, curved from the brand key colour's hue and chroma",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "3": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.267,
+              0.049444,
+              259.8
+            ],
+            "hex": "#17263e"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 3, the component background at rest, curved from the brand key colour's hue and chroma",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "4": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.309,
+              0.073884,
+              259.8
+            ],
+            "hex": "#182f55"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 4, the component background on hover, curved from the brand key colour's hue and chroma",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "5": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.345,
+              0.082156,
+              259.8
+            ],
+            "hex": "#1e3863"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 5, the component background when active, curved from the brand key colour's hue and chroma",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "6": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.389,
+              0.090992,
+              259.8
+            ],
+            "hex": "#264475"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 6, the subtle border, curved from the brand key colour's hue and chroma",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "7": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.452,
+              0.099264,
+              259.8
+            ],
+            "hex": "#33558c"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 7, the border, curved from the brand key colour's hue and chroma",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "8": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.537,
+              0.12032,
+              259.8
+            ],
+            "hex": "#426db3"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 8, the strong border, curved from the brand key colour's hue and chroma",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "9": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.6231,
+              0.188,
+              259.8
+            ],
+            "hex": "#3b82f6"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "observed",
+              "rationale": "Step 9 is the brand key colour the seed placed, carried through only sRGB gamut mapping",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "10": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.6621,
+              0.179986,
+              259.8
+            ],
+            "hex": "#4b8fff"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 10, the solid fill on hover, curved from the brand key colour's hue and chroma",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "11": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.785,
+              0.109191,
+              259.8
+            ],
+            "hex": "#8fbaff"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 11, the low-contrast text, curved from the brand key colour's hue and chroma",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "12": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.911,
+              0.043021,
+              259.8
+            ],
+            "hex": "#d1e3ff"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 12, the high-contrast text, curved from the brand key colour's hue and chroma",
+              "seedField": "keyColors"
+            }
+          }
+        }
+      },
+      "accent": {
+        "1": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.188,
+              0.014476,
+              357.8
+            ],
+            "hex": "#191113"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 1, the page background, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "2": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.211,
+              0.019364,
+              357.8
+            ],
+            "hex": "#201518"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 2, the subtle background, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "3": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.267,
+              0.049444,
+              357.8
+            ],
+            "hex": "#391b26"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 3, the component background at rest, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "4": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.309,
+              0.073884,
+              357.8
+            ],
+            "hex": "#4c1e30"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 4, the component background on hover, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "5": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.345,
+              0.082156,
+              357.8
+            ],
+            "hex": "#5a2439"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 5, the component background when active, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "6": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.389,
+              0.090992,
+              357.8
+            ],
+            "hex": "#6a2d45"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 6, the subtle border, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "7": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.452,
+              0.099264,
+              357.8
+            ],
+            "hex": "#803c56"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 7, the border, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "8": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.537,
+              0.12032,
+              357.8
+            ],
+            "hex": "#a34c6e"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 8, the strong border, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "9": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.6231,
+              0.188,
+              357.8
+            ],
+            "hex": "#da4987"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 9, the solid fill, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "10": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.6621,
+              0.180292,
+              357.8
+            ],
+            "hex": "#e55a93"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 10, the solid fill on hover, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "11": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.785,
+              0.137616,
+              357.8
+            ],
+            "hex": "#ff92b9"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 11, the low-contrast text, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "12": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.911,
+              0.050384,
+              357.8
+            ],
+            "hex": "#ffd4e1"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 12, the high-contrast text, taking the brand key colour's lightness and chroma at a rotated hue, the seed having proposed no accent",
+              "seedField": "keyColors"
+            }
+          }
+        }
+      },
+      "neutral": {
+        "1": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.188,
+              0.000905,
+              259.8
+            ],
+            "hex": "#131314"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 1, the page background, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "2": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.211,
+              0.00121,
+              259.8
+            ],
+            "hex": "#181819"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 2, the subtle background, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "3": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.267,
+              0.00309,
+              259.8
+            ],
+            "hex": "#252627"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 3, the component background at rest, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "4": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.309,
+              0.004618,
+              259.8
+            ],
+            "hex": "#2f3032"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 4, the component background on hover, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "5": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.345,
+              0.005135,
+              259.8
+            ],
+            "hex": "#38393c"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 5, the component background when active, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "6": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.389,
+              0.005687,
+              259.8
+            ],
+            "hex": "#434548"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 6, the subtle border, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "7": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.452,
+              0.006204,
+              259.8
+            ],
+            "hex": "#545659"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 7, the border, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "8": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.537,
+              0.00752,
+              259.8
+            ],
+            "hex": "#6b6e72"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 8, the strong border, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "9": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.536,
+              0.01175,
+              259.8
+            ],
+            "hex": "#6a6e75"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 9, the solid fill, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "10": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.575,
+              0.011268,
+              259.8
+            ],
+            "hex": "#757980"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 10, the solid fill on hover, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "11": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.785,
+              0.008601,
+              259.8
+            ],
+            "hex": "#b6b9bf"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 11, the low-contrast text, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        },
+        "12": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.911,
+              0.003466,
+              259.8
+            ],
+            "hex": "#e0e2e4"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "derived",
+              "rationale": "Step 12, the high-contrast text, tinted from the brand key colour, the seed having stated no neutral temperature",
+              "seedField": "keyColors"
+            }
+          }
+        }
+      },
+      "danger": {
+        "1": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.188,
+              0.014884,
+              23
+            ],
+            "hex": "#1a1110"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 1, the page background, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "2": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.211,
+              0.01991,
+              23
+            ],
+            "hex": "#211514"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 2, the subtle background, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "3": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.267,
+              0.050838,
+              23
+            ],
+            "hex": "#3b1b1a"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 3, the component background at rest, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "4": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.309,
+              0.075967,
+              23
+            ],
+            "hex": "#501e1d"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 4, the component background on hover, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "5": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.345,
+              0.084472,
+              23
+            ],
+            "hex": "#5e2424"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 5, the component background when active, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "6": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.389,
+              0.093557,
+              23
+            ],
+            "hex": "#6e2d2c"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 6, the subtle border, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "7": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.452,
+              0.102062,
+              23
+            ],
+            "hex": "#853c3a"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 7, the border, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "8": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.537,
+              0.123712,
+              23
+            ],
+            "hex": "#aa4c4b"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 8, the strong border, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "9": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.6256,
+              0.1933,
+              23
+            ],
+            "hex": "#e5484d"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 9, the solid fill, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "10": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.6646,
+              0.185375,
+              23
+            ],
+            "hex": "#f05a5b"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 10, the solid fill on hover, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "11": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.785,
+              0.124795,
+              23
+            ],
+            "hex": "#ff9893"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 11, the low-contrast text, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "12": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.911,
+              0.04573,
+              23
+            ],
+            "hex": "#ffd6d3"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 12, the high-contrast text, built on the canonical danger hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        }
+      },
+      "warning": {
+        "1": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.188,
+              0.012104,
+              84.1
+            ],
+            "hex": "#16130d"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 1, the page background, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "2": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.211,
+              0.016192,
+              84.1
+            ],
+            "hex": "#1c1810"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 2, the subtle background, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "3": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.267,
+              0.041344,
+              84.1
+            ],
+            "hex": "#2f240c"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 3, the component background at rest, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "4": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.309,
+              0.06178,
+              84.1
+            ],
+            "hex": "#3f2d02"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 4, the component background on hover, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "5": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.345,
+              0.068696,
+              84.1
+            ],
+            "hex": "#4a3603"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 5, the component background when active, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "6": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.389,
+              0.076085,
+              84.1
+            ],
+            "hex": "#584107"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 6, the subtle border, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "7": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.452,
+              0.083002,
+              84.1
+            ],
+            "hex": "#6b5114"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 7, the border, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "8": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.537,
+              0.100608,
+              84.1
+            ],
+            "hex": "#896819"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 8, the strong border, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "9": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.8537,
+              0.157068,
+              84.1
+            ],
+            "hex": "#ffc53d"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 9, the solid fill, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "10": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.8927,
+              0.113191,
+              84.1
+            ],
+            "hex": "#ffd681"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 10, the solid fill on hover, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "11": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.785,
+              0.11507,
+              84.1
+            ],
+            "hex": "#dcb35c"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 11, the low-contrast text, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "12": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.911,
+              0.046374,
+              84.1
+            ],
+            "hex": "#f0e0bf"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 12, the high-contrast text, built on the canonical warning hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        }
+      },
+      "success": {
+        "1": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.188,
+              0.010233,
+              157.7
+            ],
+            "hex": "#101512"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 1, the page background, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "2": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.211,
+              0.013689,
+              157.7
+            ],
+            "hex": "#131a16"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 2, the subtle background, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "3": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.267,
+              0.034953,
+              157.7
+            ],
+            "hex": "#162b1f"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 3, the component background at rest, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "4": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.309,
+              0.05223,
+              157.7
+            ],
+            "hex": "#163826"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 4, the component background on hover, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "5": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.345,
+              0.058077,
+              157.7
+            ],
+            "hex": "#1b422d"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 5, the component background when active, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "6": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.389,
+              0.064324,
+              157.7
+            ],
+            "hex": "#234f37"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 6, the subtle border, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "7": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.452,
+              0.070171,
+              157.7
+            ],
+            "hex": "#316246"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 7, the border, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "8": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.537,
+              0.085056,
+              157.7
+            ],
+            "hex": "#3e7d5a"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 8, the strong border, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "9": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.6406,
+              0.1329,
+              157.7
+            ],
+            "hex": "#30a46c"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 9, the solid fill, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "10": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.6796,
+              0.127451,
+              157.7
+            ],
+            "hex": "#46af79"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 10, the solid fill on hover, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "11": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.785,
+              0.097283,
+              157.7
+            ],
+            "hex": "#82cca1"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 11, the low-contrast text, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "12": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.911,
+              0.039206,
+              157.7
+            ],
+            "hex": "#cdead8"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 12, the high-contrast text, built on the canonical success hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        }
+      },
+      "info": {
+        "1": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.188,
+              0.014861,
+              251.8
+            ],
+            "hex": "#0f141a"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 1, the page background, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "2": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.211,
+              0.019879,
+              251.8
+            ],
+            "hex": "#121922"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 2, the subtle background, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "3": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.267,
+              0.050759,
+              251.8
+            ],
+            "hex": "#12273e"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 3, the component background at rest, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "4": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.309,
+              0.075849,
+              251.8
+            ],
+            "hex": "#0e3155"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 4, the component background on hover, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "5": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.345,
+              0.084341,
+              251.8
+            ],
+            "hex": "#123a63"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 5, the component background when active, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "6": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.389,
+              0.093412,
+              251.8
+            ],
+            "hex": "#184675"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 6, the subtle border, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "7": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.452,
+              0.101904,
+              251.8
+            ],
+            "hex": "#25588c"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 7, the border, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "8": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.537,
+              0.12352,
+              251.8
+            ],
+            "hex": "#3070b3"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 8, the strong border, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "9": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.6493,
+              0.193,
+              251.8
+            ],
+            "hex": "#0190ff"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 9, the solid fill, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "10": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.6883,
+              0.16905,
+              251.8
+            ],
+            "hex": "#3d9eff"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 10, the solid fill on hover, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "11": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.785,
+              0.112367,
+              251.8
+            ],
+            "hex": "#82bdff"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 11, the low-contrast text, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        },
+        "12": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.911,
+              0.044306,
+              251.8
+            ],
+            "hex": "#cde4ff"
+          },
+          "$extensions": {
+            "com.cambium": {
+              "provenance": "invented",
+              "rationale": "Step 12, the high-contrast text, built on the canonical info hue, which no field of the seed informs",
+              "seedField": null
+            }
+          }
+        }
+      }
+    },
+    "semantic": {
+      "background": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.1}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.1, the neutral ramp's page background",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "foreground": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.12}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.12, the neutral ramp's high-contrast text",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "card": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.2}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.2, the neutral ramp's subtle background",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "card-foreground": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.12}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.12, the neutral ramp's high-contrast text",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "popover": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.2}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.2, the neutral ramp's subtle background",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "popover-foreground": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.12}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.12, the neutral ramp's high-contrast text",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "primary": {
+        "$type": "color",
+        "$value": "{color.primitive.brand.9}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "observed",
+            "rationale": "Takes brand.9, the brand ramp's solid fill",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "primary-foreground": {
+        "$type": "color",
+        "$value": "{color.primitive.brand.1}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes brand.1, the brand ramp's page background, which out-contrasts brand.12 on the brand.9 fill",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "secondary": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.3}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.3, the neutral ramp's component background at rest",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "secondary-foreground": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.12}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.12, the neutral ramp's high-contrast text",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "muted": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.3}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.3, the neutral ramp's component background at rest",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "muted-foreground": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.11}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.11, the neutral ramp's low-contrast text",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "accent": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.4}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.4, the neutral ramp's component background on hover",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "accent-foreground": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.12}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.12, the neutral ramp's high-contrast text",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "destructive": {
+        "$type": "color",
+        "$value": "{color.primitive.danger.11}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "Takes danger.11, the danger ramp's low-contrast text",
+            "seedField": null
+          }
+        }
+      },
+      "border": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.6}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.6, the neutral ramp's subtle border",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "input": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.7}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.7, the neutral ramp's border",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "ring": {
+        "$type": "color",
+        "$value": "{color.primitive.brand.11}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes brand.11, the brand ramp's low-contrast text",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "sidebar": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.2}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.2, the neutral ramp's subtle background",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "sidebar-foreground": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.12}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.12, the neutral ramp's high-contrast text",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "sidebar-primary": {
+        "$type": "color",
+        "$value": "{color.primitive.brand.9}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "observed",
+            "rationale": "Takes brand.9, the brand ramp's solid fill",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "sidebar-primary-foreground": {
+        "$type": "color",
+        "$value": "{color.primitive.brand.1}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes brand.1, the brand ramp's page background, which out-contrasts brand.12 on the brand.9 fill",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "sidebar-accent": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.4}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.4, the neutral ramp's component background on hover",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "sidebar-accent-foreground": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.12}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.12, the neutral ramp's high-contrast text",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "sidebar-border": {
+        "$type": "color",
+        "$value": "{color.primitive.neutral.6}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes neutral.6, the neutral ramp's subtle border",
+            "seedField": "keyColors"
+          }
+        }
+      },
+      "sidebar-ring": {
+        "$type": "color",
+        "$value": "{color.primitive.brand.11}",
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "derived",
+            "rationale": "Takes brand.11, the brand ramp's low-contrast text",
+            "seedField": "keyColors"
+          }
+        }
+      }
+    }
+  },
+  "radius": {
+    "sm": {
+      "$type": "dimension",
+      "$value": {
+        "value": 0.375,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no radius character, so this scale falls back to the vendored default",
+          "seedField": null
+        }
+      }
+    },
+    "md": {
+      "$type": "dimension",
+      "$value": {
+        "value": 0.5,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no radius character, so this scale falls back to the vendored default",
+          "seedField": null
+        }
+      }
+    },
+    "lg": {
+      "$type": "dimension",
+      "$value": {
+        "value": 0.625,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no radius character, so this scale falls back to the vendored default",
+          "seedField": null
+        }
+      }
+    },
+    "xl": {
+      "$type": "dimension",
+      "$value": {
+        "value": 0.875,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no radius character, so this scale falls back to the vendored default",
+          "seedField": null
+        }
+      }
+    },
+    "2xl": {
+      "$type": "dimension",
+      "$value": {
+        "value": 1.125,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no radius character, so this scale falls back to the vendored default",
+          "seedField": null
+        }
+      }
+    },
+    "3xl": {
+      "$type": "dimension",
+      "$value": {
+        "value": 1.375,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no radius character, so this scale falls back to the vendored default",
+          "seedField": null
+        }
+      }
+    },
+    "4xl": {
+      "$type": "dimension",
+      "$value": {
+        "value": 1.625,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no radius character, so this scale falls back to the vendored default",
+          "seedField": null
+        }
+      }
+    }
+  },
+  "spacing": {
+    "none": {
+      "$type": "dimension",
+      "$value": {
+        "value": 0,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An evenly stepped scale invented for the prototype; no seed field speaks to spacing",
+          "seedField": null
+        }
+      }
+    },
+    "xs": {
+      "$type": "dimension",
+      "$value": {
+        "value": 0.25,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An evenly stepped scale invented for the prototype; no seed field speaks to spacing",
+          "seedField": null
+        }
+      }
+    },
+    "sm": {
+      "$type": "dimension",
+      "$value": {
+        "value": 0.5,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An evenly stepped scale invented for the prototype; no seed field speaks to spacing",
+          "seedField": null
+        }
+      }
+    },
+    "md": {
+      "$type": "dimension",
+      "$value": {
+        "value": 1,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An evenly stepped scale invented for the prototype; no seed field speaks to spacing",
+          "seedField": null
+        }
+      }
+    },
+    "lg": {
+      "$type": "dimension",
+      "$value": {
+        "value": 1.5,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An evenly stepped scale invented for the prototype; no seed field speaks to spacing",
+          "seedField": null
+        }
+      }
+    },
+    "xl": {
+      "$type": "dimension",
+      "$value": {
+        "value": 2,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An evenly stepped scale invented for the prototype; no seed field speaks to spacing",
+          "seedField": null
+        }
+      }
+    },
+    "2xl": {
+      "$type": "dimension",
+      "$value": {
+        "value": 3,
+        "unit": "rem"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An evenly stepped scale invented for the prototype; no seed field speaks to spacing",
+          "seedField": null
+        }
+      }
+    }
+  },
+  "typography": {
+    "size": {
+      "xs": {
+        "$type": "dimension",
+        "$value": {
+          "value": 0.6944444444444445,
+          "unit": "rem"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "The seed measured no type scale ratio, so this scale falls back to a minor third",
+            "seedField": null
+          }
+        }
+      },
+      "sm": {
+        "$type": "dimension",
+        "$value": {
+          "value": 0.8333333333333334,
+          "unit": "rem"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "The seed measured no type scale ratio, so this scale falls back to a minor third",
+            "seedField": null
+          }
+        }
+      },
+      "base": {
+        "$type": "dimension",
+        "$value": {
+          "value": 1,
+          "unit": "rem"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "The scale anchors at the page's own root size, which no stated ratio moves",
+            "seedField": null
+          }
+        }
+      },
+      "lg": {
+        "$type": "dimension",
+        "$value": {
+          "value": 1.2,
+          "unit": "rem"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "The seed measured no type scale ratio, so this scale falls back to a minor third",
+            "seedField": null
+          }
+        }
+      },
+      "xl": {
+        "$type": "dimension",
+        "$value": {
+          "value": 1.44,
+          "unit": "rem"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "The seed measured no type scale ratio, so this scale falls back to a minor third",
+            "seedField": null
+          }
+        }
+      },
+      "2xl": {
+        "$type": "dimension",
+        "$value": {
+          "value": 1.7279999999999998,
+          "unit": "rem"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "The seed measured no type scale ratio, so this scale falls back to a minor third",
+            "seedField": null
+          }
+        }
+      },
+      "3xl": {
+        "$type": "dimension",
+        "$value": {
+          "value": 2.0736,
+          "unit": "rem"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "The seed measured no type scale ratio, so this scale falls back to a minor third",
+            "seedField": null
+          }
+        }
+      },
+      "4xl": {
+        "$type": "dimension",
+        "$value": {
+          "value": 2.4883199999999994,
+          "unit": "rem"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "The seed measured no type scale ratio, so this scale falls back to a minor third",
+            "seedField": null
+          }
+        }
+      }
+    },
+    "weight": {
+      "regular": {
+        "$type": "fontWeight",
+        "$value": 400,
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "A Brand Seed measures no weight axis, so this weight is the pipeline's own default",
+            "seedField": null
+          }
+        }
+      },
+      "medium": {
+        "$type": "fontWeight",
+        "$value": 500,
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "A Brand Seed measures no weight axis, so this weight is the pipeline's own default",
+            "seedField": null
+          }
+        }
+      },
+      "semibold": {
+        "$type": "fontWeight",
+        "$value": 600,
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "A Brand Seed measures no weight axis, so this weight is the pipeline's own default",
+            "seedField": null
+          }
+        }
+      },
+      "bold": {
+        "$type": "fontWeight",
+        "$value": 700,
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "A Brand Seed measures no weight axis, so this weight is the pipeline's own default",
+            "seedField": null
+          }
+        }
+      }
+    },
+    "lineHeight": {
+      "tight": {
+        "$type": "number",
+        "$value": 1.1,
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "A Brand Seed measures no leading, so this line height is the pipeline's own default",
+            "seedField": null
+          }
+        }
+      },
+      "snug": {
+        "$type": "number",
+        "$value": 1.3,
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "A Brand Seed measures no leading, so this line height is the pipeline's own default",
+            "seedField": null
+          }
+        }
+      },
+      "normal": {
+        "$type": "number",
+        "$value": 1.5,
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "A Brand Seed measures no leading, so this line height is the pipeline's own default",
+            "seedField": null
+          }
+        }
+      },
+      "relaxed": {
+        "$type": "number",
+        "$value": 1.75,
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "A Brand Seed measures no leading, so this line height is the pipeline's own default",
+            "seedField": null
+          }
+        }
+      }
+    }
+  },
+  "tracking": {
+    "tighter": {
+      "$type": "number",
+      "$value": -0.05,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no tracking feel, so this scale falls back to Tailwind's normal tracking",
+          "seedField": null
+        },
+        "com.cambium.dtcg": {
+          "unit": "em"
+        }
+      }
+    },
+    "tight": {
+      "$type": "number",
+      "$value": -0.025,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no tracking feel, so this scale falls back to Tailwind's normal tracking",
+          "seedField": null
+        },
+        "com.cambium.dtcg": {
+          "unit": "em"
+        }
+      }
+    },
+    "normal": {
+      "$type": "number",
+      "$value": 0,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no tracking feel, so this scale falls back to Tailwind's normal tracking",
+          "seedField": null
+        },
+        "com.cambium.dtcg": {
+          "unit": "em"
+        }
+      }
+    },
+    "wide": {
+      "$type": "number",
+      "$value": 0.025,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no tracking feel, so this scale falls back to Tailwind's normal tracking",
+          "seedField": null
+        },
+        "com.cambium.dtcg": {
+          "unit": "em"
+        }
+      }
+    },
+    "wider": {
+      "$type": "number",
+      "$value": 0.05,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "The seed measured no tracking feel, so this scale falls back to Tailwind's normal tracking",
+          "seedField": null
+        },
+        "com.cambium.dtcg": {
+          "unit": "em"
+        }
+      }
+    }
+  },
+  "shadow": {
+    "xs": {
+      "$type": "shadow",
+      "$value": {
+        "color": {
+          "colorSpace": "oklch",
+          "components": [
+            0.0282,
+            0.01144518956542015,
+            259.8
+          ],
+          "alpha": 0.31796,
+          "hex": "#000000"
+        },
+        "offsetX": {
+          "value": 0,
+          "unit": "px"
+        },
+        "offsetY": {
+          "value": 1,
+          "unit": "px"
+        },
+        "blur": {
+          "value": 2.8120000000000003,
+          "unit": "px"
+        },
+        "spread": {
+          "value": 0,
+          "unit": "px"
+        }
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "derived",
+          "rationale": "Colour tints from the page surface, which traces to keyColors, while depth and blur fall back to the module constants",
+          "seedField": "keyColors"
+        }
+      }
+    },
+    "sm": {
+      "$type": "shadow",
+      "$value": {
+        "color": {
+          "colorSpace": "oklch",
+          "components": [
+            0.0282,
+            0.01144518956542015,
+            259.8
+          ],
+          "alpha": 0.40292,
+          "hex": "#000000"
+        },
+        "offsetX": {
+          "value": 0,
+          "unit": "px"
+        },
+        "offsetY": {
+          "value": 2,
+          "unit": "px"
+        },
+        "blur": {
+          "value": 5.6240000000000006,
+          "unit": "px"
+        },
+        "spread": {
+          "value": -1,
+          "unit": "px"
+        }
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "derived",
+          "rationale": "Colour tints from the page surface, which traces to keyColors, while depth and blur fall back to the module constants",
+          "seedField": "keyColors"
+        }
+      }
+    },
+    "md": {
+      "$type": "shadow",
+      "$value": {
+        "color": {
+          "colorSpace": "oklch",
+          "components": [
+            0.0282,
+            0.01144518956542015,
+            259.8
+          ],
+          "alpha": 0.506,
+          "hex": "#000000"
+        },
+        "offsetX": {
+          "value": 0,
+          "unit": "px"
+        },
+        "offsetY": {
+          "value": 4,
+          "unit": "px"
+        },
+        "blur": {
+          "value": 8.436,
+          "unit": "px"
+        },
+        "spread": {
+          "value": -1,
+          "unit": "px"
+        }
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "derived",
+          "rationale": "Colour tints from the page surface, which traces to keyColors, while depth and blur fall back to the module constants",
+          "seedField": "keyColors"
+        }
+      }
+    },
+    "lg": {
+      "$type": "shadow",
+      "$value": {
+        "color": {
+          "colorSpace": "oklch",
+          "components": [
+            0.0282,
+            0.01144518956542015,
+            259.8
+          ],
+          "alpha": 0.5909599999999999,
+          "hex": "#000000"
+        },
+        "offsetX": {
+          "value": 0,
+          "unit": "px"
+        },
+        "offsetY": {
+          "value": 10,
+          "unit": "px"
+        },
+        "blur": {
+          "value": 21.090000000000003,
+          "unit": "px"
+        },
+        "spread": {
+          "value": -3,
+          "unit": "px"
+        }
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "derived",
+          "rationale": "Colour tints from the page surface, which traces to keyColors, while depth and blur fall back to the module constants",
+          "seedField": "keyColors"
+        }
+      }
+    },
+    "xl": {
+      "$type": "shadow",
+      "$value": {
+        "color": {
+          "colorSpace": "oklch",
+          "components": [
+            0.0282,
+            0.01144518956542015,
+            259.8
+          ],
+          "alpha": 0.71028,
+          "hex": "#000000"
+        },
+        "offsetX": {
+          "value": 0,
+          "unit": "px"
+        },
+        "offsetY": {
+          "value": 20,
+          "unit": "px"
+        },
+        "blur": {
+          "value": 35.150000000000006,
+          "unit": "px"
+        },
+        "spread": {
+          "value": -5,
+          "unit": "px"
+        }
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "derived",
+          "rationale": "Colour tints from the page surface, which traces to keyColors, while depth and blur fall back to the module constants",
+          "seedField": "keyColors"
+        }
+      }
+    }
+  },
+  "motion": {
+    "duration": {
+      "instant": {
+        "$type": "duration",
+        "$value": {
+          "value": 0,
+          "unit": "ms"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "Durations and easings are invented interaction defaults, not read from any seed field",
+            "seedField": null
+          }
+        }
+      },
+      "fast": {
+        "$type": "duration",
+        "$value": {
+          "value": 150,
+          "unit": "ms"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "Durations and easings are invented interaction defaults, not read from any seed field",
+            "seedField": null
+          }
+        }
+      },
+      "normal": {
+        "$type": "duration",
+        "$value": {
+          "value": 250,
+          "unit": "ms"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "Durations and easings are invented interaction defaults, not read from any seed field",
+            "seedField": null
+          }
+        }
+      },
+      "slow": {
+        "$type": "duration",
+        "$value": {
+          "value": 400,
+          "unit": "ms"
+        },
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "Durations and easings are invented interaction defaults, not read from any seed field",
+            "seedField": null
+          }
+        }
+      }
+    },
+    "easing": {
+      "standard": {
+        "$type": "cubicBezier",
+        "$value": [
+          0.2,
+          0,
+          0,
+          1
+        ],
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "Durations and easings are invented interaction defaults, not read from any seed field",
+            "seedField": null
+          }
+        }
+      },
+      "enter": {
+        "$type": "cubicBezier",
+        "$value": [
+          0,
+          0,
+          0.2,
+          1
+        ],
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "Durations and easings are invented interaction defaults, not read from any seed field",
+            "seedField": null
+          }
+        }
+      },
+      "exit": {
+        "$type": "cubicBezier",
+        "$value": [
+          0.4,
+          0,
+          1,
+          1
+        ],
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "Durations and easings are invented interaction defaults, not read from any seed field",
+            "seedField": null
+          }
+        }
+      },
+      "linear": {
+        "$type": "cubicBezier",
+        "$value": [
+          0,
+          0,
+          1,
+          1
+        ],
+        "$extensions": {
+          "com.cambium": {
+            "provenance": "invented",
+            "rationale": "Durations and easings are invented interaction defaults, not read from any seed field",
+            "seedField": null
+          }
+        }
+      }
+    }
+  },
+  "opacity": {
+    "disabled": {
+      "$type": "number",
+      "$value": 0.5,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "Disabled and ring are vendored from components/ui/button.tsx's opacity classes; muted and overlay are stated defaults nobody has measured",
+          "seedField": null
+        }
+      }
+    },
+    "ring": {
+      "$type": "number",
+      "$value": 0.5,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "Disabled and ring are vendored from components/ui/button.tsx's opacity classes; muted and overlay are stated defaults nobody has measured",
+          "seedField": null
+        }
+      }
+    },
+    "muted": {
+      "$type": "number",
+      "$value": 0.7,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "Disabled and ring are vendored from components/ui/button.tsx's opacity classes; muted and overlay are stated defaults nobody has measured",
+          "seedField": null
+        }
+      }
+    },
+    "overlay": {
+      "$type": "number",
+      "$value": 0.8,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "Disabled and ring are vendored from components/ui/button.tsx's opacity classes; muted and overlay are stated defaults nobody has measured",
+          "seedField": null
+        }
+      }
+    }
+  },
+  "zIndex": {
+    "base": {
+      "$type": "number",
+      "$value": 0,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An invented layering default assigned by role, not read from any seed field",
+          "seedField": null
+        }
+      }
+    },
+    "dropdown": {
+      "$type": "number",
+      "$value": 1000,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An invented layering default assigned by role, not read from any seed field",
+          "seedField": null
+        }
+      }
+    },
+    "sticky": {
+      "$type": "number",
+      "$value": 1100,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An invented layering default assigned by role, not read from any seed field",
+          "seedField": null
+        }
+      }
+    },
+    "overlay": {
+      "$type": "number",
+      "$value": 1200,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An invented layering default assigned by role, not read from any seed field",
+          "seedField": null
+        }
+      }
+    },
+    "modal": {
+      "$type": "number",
+      "$value": 1300,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An invented layering default assigned by role, not read from any seed field",
+          "seedField": null
+        }
+      }
+    },
+    "popover": {
+      "$type": "number",
+      "$value": 1400,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An invented layering default assigned by role, not read from any seed field",
+          "seedField": null
+        }
+      }
+    },
+    "toast": {
+      "$type": "number",
+      "$value": 1500,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An invented layering default assigned by role, not read from any seed field",
+          "seedField": null
+        }
+      }
+    },
+    "tooltip": {
+      "$type": "number",
+      "$value": 1600,
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "An invented layering default assigned by role, not read from any seed field",
+          "seedField": null
+        }
+      }
+    }
+  },
+  "focusRing": {
+    "width": {
+      "$type": "dimension",
+      "$value": {
+        "value": 3,
+        "unit": "px"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "Width is vendored from components/ui/button.tsx's focus ring; offset is 0 because that component sets no ring offset",
+          "seedField": null
+        }
+      }
+    },
+    "offset": {
+      "$type": "dimension",
+      "$value": {
+        "value": 0,
+        "unit": "px"
+      },
+      "$extensions": {
+        "com.cambium": {
+          "provenance": "invented",
+          "rationale": "Width is vendored from components/ui/button.tsx's focus ring; offset is 0 because that component sets no ring offset",
+          "seedField": null
+        }
+      }
+    }
+  }
+}

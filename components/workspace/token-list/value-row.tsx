@@ -8,9 +8,8 @@ import type {
 	ValueCategory,
 	ValuePath,
 } from '../../../core/token-overrides';
-import { toOklchCss } from '../../../core/css/oklch-css';
 import { overrideKey } from '../../../core/token-overrides';
-import { leafLabel } from './format';
+import { leafLabel, swatchOf, type Swatch } from './format';
 import { NumberInput, useFieldIssues } from './number-input';
 import { TokenRow } from './token-row';
 import type { CategoryToken } from './walk-category';
@@ -102,7 +101,7 @@ export function ValueRow({
  * leaves the walker already collected. Reading the swatch off those leaves ties it to the numbers
  * the inputs show, so an override on `color.alpha` repaints it too.
  */
-function shadowSwatch(token: CategoryToken): string | undefined {
+function shadowSwatch(token: CategoryToken): Swatch | undefined {
 	const channel = (name: string) =>
 		token.leaves.find(
 			(leaf) => leaf.suffix.length === 2 && leaf.suffix[0] === 'color' && leaf.suffix[1] === name,
@@ -111,5 +110,5 @@ function shadowSwatch(token: CategoryToken): string | undefined {
 
 	if (l === undefined || c === undefined || h === undefined) return undefined;
 
-	return toOklchCss({ l, c, h, alpha });
+	return swatchOf({ l, c, h, alpha });
 }

@@ -6,6 +6,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useSta
 
 import { KeyIndicator } from '@/components/landing/generate/key-indicator';
 import { TAG_LABELS, UploadForm } from '@/components/landing/upload-form';
+import { ReferenceThumbnail } from '@/components/reference-thumbnail';
 import { isSchemaRejection, Outcome, RECORD_PARAM } from '@/components/stored-record';
 
 import type { BrandRecord } from '../../core/brand-record';
@@ -163,8 +164,8 @@ function LandingOutcome({ onKeyStored }: { onKeyStored: (stored: boolean) => voi
 	}
 
 	// Reading the record back rather than trusting the id in the address bar. A URL somebody pasted
-	// from another browser resolves to nothing here, and showing an id for a record that is not
-	// stored would make the addressing decorative.
+	// from another browser finds nothing here, and listing images for a record that isn't stored
+	// would describe something that isn't there.
 	if (saved.kind === 'loading') {
 		return <LookingUp />;
 	}
@@ -227,14 +228,14 @@ function LandingOutcome({ onKeyStored }: { onKeyStored: (stored: boolean) => voi
 	return (
 		<Outcome action="Add another brand">
 			<SavedHeading />
-			<p className="text-sm">
-				{count} stored in this browser under{' '}
-				<code className="bg-muted rounded px-1 py-0.5 text-xs">{recordId}</code>.
-			</p>
-			<ul className="flex flex-col gap-0.5">
-				{images.map((image) => (
-					<li className="text-muted-foreground text-sm" key={image.id}>
-						{TAG_LABELS[image.tag]}
+			<p className="text-sm">{count} stored in this browser.</p>
+			<ul className="flex flex-col gap-2">
+				{images.map((image, index) => (
+					<li className="text-muted-foreground flex items-center gap-3 text-sm" key={image.id}>
+						{/* Empty alt because the caption beside it names the image already, and a filled one
+						    would be read twice. */}
+						<ReferenceThumbnail alt="" src={image.downscaled} />
+						<span>{`Image ${index + 1}: ${TAG_LABELS[image.tag]}`}</span>
 					</li>
 				))}
 			</ul>

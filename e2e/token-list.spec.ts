@@ -822,15 +822,18 @@ test('the primary swatch paints the brand step its alias names, measured in scre
 	expect(paintDistance(await paintedCentre(swatch), expected)).toBeLessThanOrEqual(1);
 
 	// The printed value is read back as numbers, so the check is on what a reader copies out of it
-	// rather than on the serializer's exact spelling.
+	// rather than on the serializer's exact spelling. It prints at three decimals since #159, so each
+	// channel sits within half a unit of that place of the ramp's own number. The ramp's value is the
+	// reference, not a rounding of it.
 	const printed = await page
 		.locator('[data-token="semantic.primary"] [data-swatch-value]')
 		.textContent();
 	const channels = /^oklch\(([^ ]+) ([^ ]+) ([^ )]+)\)$/.exec(printed ?? '');
 	expect(channels, `swatch value ${printed}`).not.toBeNull();
-	expect(Number(channels![1])).toBeCloseTo(brand9.l, 6);
-	expect(Number(channels![2])).toBeCloseTo(brand9.c, 6);
-	expect(Number(channels![3])).toBeCloseTo(brand9.h, 6);
+	for (const [index, channel] of (['l', 'c', 'h'] as const).entries()) {
+		const printedChannel = Number(channels![index + 1]);
+		expect(Math.abs(printedChannel - brand9[channel]), channel).toBeLessThanOrEqual(0.0005 + 1e-12);
+	}
 });
 
 test("a dark-scheme shadow swatch paints that scheme's own shadow colour, alpha included", async ({
@@ -1790,4 +1793,72 @@ test('the Accessibility tab lists a failing pair instead of the placeholder', as
 
 	await expect(panel.getByText('light: foreground on background:', { exact: false })).toBeVisible();
 	await expect(placeholder).toHaveCount(0);
+});
+
+/** Every `oklch(…)` in `text`, with its chroma exactly as printed. */
+function printedChromas(text: string): string[] {
+	return [...text.matchAll(/oklch\((\S+) (\S+) /g)].map((match) => match[2]!);
+}
+
+/**
+ * Every number inside every printed `oklch(…)`: lightness, chroma, hue and any alpha percentage.
+ * Decision 3 rounds all of them, and the criterion's chroma is only one.
+ */
+function printedOklchNumbers(text: string): string[] {
+	return [...text.matchAll(/oklch\(([^)]*)\)/g)].flatMap(
+		(match) => match[1]!.match(/-?\d+(?:\.\d+)?/g) ?? [],
+	);
+}
+
+function decimalPlaces(printed: string): number {
+	const dot = printed.indexOf('.');
+	return dot === -1 ? 0 : printed.length - dot - 1;
+}
+
+test('no OKLCH chroma the token list prints has more than three decimal places', async ({
+	page,
+}) => {
+	const record = buildRecordWithSeed(SEED);
+	await seedWorkspaceRecord(page, record);
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const tokensSection = page.getByRole('region', { name: 'Tokens' });
+	await expect(tokensSection.locator('[data-token="semantic.primary"]')).toBeVisible();
+
+	// Open every collapsed category, so shadow swatches print too.
+	// `first()` re-resolves on each click, since an opened category drops out of the selector.
+	const collapsed = tokensSection.locator('[data-category] h3 button[aria-expanded="false"]');
+	const collapsedCount = await collapsed.count();
+	for (let index = 0; index < collapsedCount; index += 1) {
+		// oxlint-disable-next-line no-await-in-loop
+		await collapsed.first().click();
+	}
+	await expect(collapsed).toHaveCount(0);
+
+	// `textContent` rather than `innerText`: the chips print their value `sr-only`, which `innerText`
+	// skips, and a value printed there at six places is still on the page.
+	const chromas = printedChromas((await tokensSection.textContent()) ?? '');
+
+	// Every colour row plus every shadow, so the check can't pass by finding nothing.
+	expect(chromas).toHaveLength(EXPECTED_COLOUR_ROWS + EXPECTED_ROWS.shadow);
+	expect(chromas.filter((chroma) => decimalPlaces(chroma) > 3)).toEqual([]);
+	expect(
+		printedOklchNumbers((await tokensSection.textContent()) ?? '').filter(
+			(value) => decimalPlaces(value) > 3,
+		),
+	).toEqual([]);
+
+	// The chip's editor portals out of the region, so it's read on its own.
+	await tokensSection.locator('[data-token="primitive.brand.9"]').click();
+	const editorValue = page.locator('[data-editor="primitive.brand.9"] [data-editor-swatch-value]');
+	await expect(editorValue).toBeVisible();
+
+	const editorChromas = printedChromas(`${(await editorValue.textContent()) ?? ''} `);
+	expect(editorChromas).toHaveLength(1);
+	expect(decimalPlaces(editorChromas[0]!)).toBeLessThanOrEqual(3);
+	expect(
+		printedOklchNumbers((await editorValue.textContent()) ?? '').filter(
+			(value) => decimalPlaces(value) > 3,
+		),
+	).toEqual([]);
 });

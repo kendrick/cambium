@@ -81,9 +81,18 @@ function keyColorRailSwatch(page: Page, path: `keyColors.${number}`) {
 }
 
 /**
- * `semantic.primary`'s rendered swatch, `oklch(l c h)` at the precision `token-list.tsx` prints it
- * (`toOklchCss(resolved[token]!)`, no `places` override). Read fresh on every call so a caller can
- * poll it for a change without racing the store's own recompute.
+ * Half a unit in the last place the token list prints an OKLCH channel at, three decimals since
+ * #159. A value printed there sits within this of the one it was rounded from. The 1e-12 absorbs
+ * binary round-off at the exact half-way point and loosens nothing else.
+ */
+function expectWithinPrinted(actual: number, printed: number, label: string): void {
+	expect(Math.abs(actual - printed), label).toBeLessThanOrEqual(0.0005 + 1e-12);
+}
+
+/**
+ * `semantic.primary`'s rendered swatch text, `oklch(l c h)` as the token list prints it: three
+ * decimals per channel, rounded for reading. Read fresh on every call so a caller can poll it for a
+ * change without racing the store's own recompute.
  */
 function primaryTokenValue(page: Page): Promise<string | null> {
 	return page.locator('[data-token="semantic.primary"] [data-swatch-value]').textContent();
@@ -268,9 +277,9 @@ test('the keyed path: upload, generate, edit, pin, and download', async ({ page 
 		const lightToken = light.color.primitive[rampName]?.[step];
 		if (!lightToken) throw new Error(`${rampName}.${step} is missing from the light document`);
 		const [lightL, lightC, lightH] = lightToken.$value.components;
-		expect(lightL).toBeCloseTo(expectedL, 6);
-		expect(lightC).toBeCloseTo(expectedC, 6);
-		expect(lightH).toBeCloseTo(expectedH, 6);
+		expectWithinPrinted(lightL, expectedL, 'light l');
+		expectWithinPrinted(lightC, expectedC, 'light c');
+		expectWithinPrinted(lightH, expectedH, 'light h');
 
 		// The dark document derives its own ramp independently, so only the path's presence is
 		// checked here—its value is asserted nowhere, and asserting it against the light reading
@@ -280,6 +289,18 @@ test('the keyed path: upload, generate, edit, pin, and download', async ({ page 
 		// Literal rather than `cssNaming().semanticProperty('primary')`: that call is the same naming
 		// logic the CSS adapter itself uses to write the property, so asserting against it would only
 		// prove the adapter agrees with itself.
-		expect(files[cssName]).toContain(`--primary: ${finalPrimaryValue};`);
+		// The first `--primary` is the light scheme's: the stylesheet writes `:root` before `.dark`.
+		const cssPrimary = /--primary: (oklch\([^;]+\));/.exec(files[cssName]!);
+		if (!cssPrimary) throw new Error('tokens.css declares no --primary colour');
+		const [cssL, cssC, cssH] = parseOklchChannels(cssPrimary[1]!);
+		expectWithinPrinted(cssL, expectedL, 'tokens.css l');
+		expectWithinPrinted(cssC, expectedC, 'tokens.css c');
+		expectWithinPrinted(cssH, expectedH, 'tokens.css h');
+
+		// The rounded text can't show whether the two exports agree past three decimals, so check that
+		// directly: the stylesheet and the light document carry the same colour.
+		expect(cssL).toBeCloseTo(lightL, 6);
+		expect(cssC).toBeCloseTo(lightC, 6);
+		expect(cssH).toBeCloseTo(lightH, 6);
 	});
 });

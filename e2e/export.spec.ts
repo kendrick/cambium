@@ -560,3 +560,26 @@ test('a per-file download clicked before the listing catches up with an edit sti
 	);
 	expect(bytes.equals(Buffer.from(expectedLight!.contents, 'utf-8'))).toBe(true);
 });
+
+/**
+ * The three downloads for the fixture seed, pinned to the bytes `main` produced before #159 moved
+ * number formatting in the interface. #159 rounds what the token list and the preview print, and
+ * this is what proves none of that reached an export. Recorded from real downloads on the unchanged
+ * tree at 4fa44f6, so the golden is the file a person saves, not an adapter call.
+ *
+ * A deliberate export change regenerates it: `pnpm build && pnpm test:e2e export
+ * --update-snapshots=changed`, then review the diff under `e2e/__snapshots__/`.
+ */
+test('the three downloads match the bytes recorded on main for the fixture seed', async ({
+	page,
+}) => {
+	await openExportTab(page, buildRecord(null));
+	await spyOnBlobTypes(page);
+
+	for (const filename of ['light.tokens.json', 'dark.tokens.json', 'tokens.css']) {
+		// One download at a time, for the reason `expectArtifactsMatch` gives.
+		// oxlint-disable-next-line no-await-in-loop
+		const { bytes } = await downloadArtifact(page, filename);
+		expect(bytes).toMatchSnapshot([filename]);
+	}
+});

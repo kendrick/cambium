@@ -31,6 +31,7 @@ import {
 	TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
+import { formatLengthForDisplay } from '../token-list/format';
 
 const BUTTON_VARIANTS = [
 	{ variant: 'default', label: 'Save changes' },
@@ -204,18 +205,27 @@ export function Gallery({
 
 			<Specimen title="Type scale">
 				<dl className="flex flex-col gap-3">
-					{TYPE_STEPS.map((step) => (
-						<div
-							key={step}
-							className="flex flex-col gap-1 border-b pb-3 @xl:flex-row @xl:items-baseline @xl:gap-6"
-						>
-							<dt className="text-muted-foreground flex gap-2 text-xs @xl:w-36 @xl:shrink-0">
-								<span className="text-foreground font-medium">{step}</span>
-								<span>{scalars[naming.prefixedProperty(step)] ?? 'not set'}</span>
-							</dt>
-							<dd className={`${step} leading-tight`}>Ship the order today</dd>
-						</div>
-					))}
+					{TYPE_STEPS.map((step) => {
+						const declared = scalars[naming.prefixedProperty(step)];
+
+						return (
+							<div
+								key={step}
+								data-type-step={step}
+								className="flex flex-col gap-1 border-b pb-3 @xl:flex-row @xl:items-baseline @xl:gap-6"
+							>
+								<dt className="text-muted-foreground flex gap-2 text-xs @xl:w-36 @xl:shrink-0">
+									<span className="text-foreground font-medium">{step}</span>
+									{/* Rounded for reading only. The `dd` below takes its size from the declaration
+									    itself, at full precision. */}
+									<span data-type-size>
+										{declared === undefined ? 'not set' : formatLengthForDisplay(declared)}
+									</span>
+								</dt>
+								<dd className={`${step} leading-tight`}>Ship the order today</dd>
+							</div>
+						);
+					})}
 				</dl>
 			</Specimen>
 		</section>

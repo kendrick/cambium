@@ -1,6 +1,7 @@
 import { useRef, type ReactNode } from 'react';
 
 import type { TokenProvenance } from '../../../core/token-set';
+import type { Swatch } from './format';
 import { type ListedIssue, TokenEditor } from './token-editor';
 
 /**
@@ -11,7 +12,8 @@ import { type ListedIssue, TokenEditor } from './token-editor';
  * whenever the override map holds this token, whether or not the current base still accepts it.
  *
  * `swatch` prints as text beside the chip as well, so a row shows a colour value a reader can copy
- * without opening anything.
+ * without opening anything. It prints `swatch.text`, rounded for reading, while the chip paints
+ * `swatch.paint`.
  *
  * A semantic row's AA verdict (#153) and its Revert stay here rather than in the popover: the
  * verdict has to show without opening anything, and its live region has to be mounted before the
@@ -34,7 +36,7 @@ export function TokenRow({
 	provenance: TokenProvenance;
 	resolvesTo?: string;
 	stepRole?: string;
-	swatch?: string;
+	swatch?: Swatch;
 	overridden: boolean;
 	onReset?: () => void;
 	issues: ListedIssue[];
@@ -63,7 +65,7 @@ export function TokenRow({
 						aria-hidden
 						data-swatch
 						className="size-4 shrink-0 rounded border"
-						style={{ backgroundColor: swatch }}
+						style={{ backgroundColor: swatch.paint }}
 					/>
 				) : null}
 				<span className="font-mono text-xs">{id}</span>
@@ -88,7 +90,7 @@ export function TokenRow({
 			<div className="flex flex-wrap items-center gap-2">
 				{swatch ? (
 					<span data-swatch-value className="font-mono text-xs">
-						{swatch}
+						{swatch.text}
 					</span>
 				) : null}
 				<span className="text-muted-foreground text-xs">{provenance.provenance}</span>

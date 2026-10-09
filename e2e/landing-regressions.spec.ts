@@ -397,7 +397,7 @@ test('a tag chosen at upload and a brand URL entered at upload survive a reload'
 
 	await page.reload();
 
-	await expect(page.getByText('Logo', { exact: true })).toBeVisible();
+	await expect(page.getByText('Image 1: Logo', { exact: true })).toBeVisible();
 	await expect(page.getByText('acme.com')).toBeVisible();
 
 	const records = await readStoredRecords(page);
@@ -444,4 +444,45 @@ test('each picked file shows a thumbnail whose alt names the file and its curren
 	await expect(stagedRow(page, 'mark.png')).toHaveCount(0);
 	await expect(shotThumbnail).toHaveAttribute('alt', 'shot.png, Automatic');
 	await expect.poll(() => naturalSize(shotThumbnail)).toEqual([30, 60]);
+});
+
+/** Any RFC 4122 UUID, the shape `crypto.randomUUID()` gives a record id. */
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+test('the saved screen shows each image by thumbnail, position and tag, and no UUID', async ({
+	page,
+}) => {
+	await page.goto('/');
+
+	await page
+		.getByLabel('Reference images')
+		.setInputFiles([pngFile('mark.png', makePng(2, 2)), pngFile('shot.png', makePng(3, 3))]);
+	await expect(stagedRow(page, 'mark.png')).toBeVisible();
+	await expect(stagedRow(page, 'shot.png')).toBeVisible();
+
+	await page.getByLabel('Type of mark.png').selectOption('logo');
+	await page.getByLabel(/Brand site/).fill('acme.com');
+	await page.getByRole('button', { name: 'Save these references' }).click();
+	await expectSaved(page);
+
+	// The id is a UUID, so the pattern below is known to match the thing it's looking for.
+	expect(new URL(page.url()).searchParams.get('record')).toMatch(UUID);
+
+	await expect(page.getByText('Image 1: Logo', { exact: true })).toBeVisible();
+	await expect(page.getByText('Image 2: Automatic', { exact: true })).toBeVisible();
+	await expect(page.getByText('Brand site: acme.com')).toBeVisible();
+	await expect(page.locator('li img')).toHaveCount(2);
+	// Each row shows its own image, not the first one twice.
+	const sources = await page
+		.locator('li img')
+		.evaluateAll((images) => images.map((image) => image.getAttribute('src')));
+	expect(new Set(sources).size).toBe(2);
+
+	expect(await page.locator('body').innerText()).not.toMatch(UUID);
+
+	// Alt text isn't part of `innerText`, and a screen reader reads it as text.
+	const alts = await page
+		.locator('img')
+		.evaluateAll((images) => images.map((image) => image.getAttribute('alt') ?? ''));
+	for (const alt of alts) expect(alt).not.toMatch(UUID);
 });
