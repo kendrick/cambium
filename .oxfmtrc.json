@@ -12,6 +12,7 @@
 		"package.json",
 		"components.json",
 		"core/dtcg/format.2025.10.json",
-		"core/dtcg/*.generated.*"
+		"core/dtcg/*.generated.*",
+		"e2e/__snapshots__/**"
 	]
 }
