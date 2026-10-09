@@ -674,3 +674,29 @@ test('an axe scan of the preview in both schemes, reported rather than asserted'
 		});
 	}
 });
+
+test('the type scale specimen prints each size to at most three significant figures', async ({
+	page,
+}) => {
+	const preview = await openPreview(page);
+
+	// `SEED` states no type scale ratio, so the scale falls back to a minor third: 1.2^n rem from
+	// n = -2 (xs) to n = 5 (4xl). Each is rounded here by hand to three significant figures.
+	const expected: Record<string, string> = {
+		'text-4xl': '2.49rem',
+		'text-3xl': '2.07rem',
+		'text-2xl': '1.73rem',
+		'text-xl': '1.44rem',
+		'text-lg': '1.2rem',
+		'text-base': '1rem',
+		'text-sm': '0.833rem',
+		'text-xs': '0.694rem',
+	};
+
+	await expect(preview.locator('[data-type-step]')).toHaveCount(Object.keys(expected).length);
+
+	for (const [step, size] of Object.entries(expected)) {
+		// oxlint-disable-next-line no-await-in-loop
+		await expect(preview.locator(`[data-type-step="${step}"] [data-type-size]`)).toHaveText(size);
+	}
+});
