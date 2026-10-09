@@ -6,7 +6,7 @@ Now, when one side of a failing pair is step 9 of `brand` or `accent`, and neith
 
 Both sides are solved on every turn of the loop, where the old loop solved the background only after the foreground failed. `solve` is pure, so a pair whose order doesn't change gets the same override as before. The cost is one extra `solve` per move, in a loop bounded at twice the number of pairs.
 
-A prototype of this rule, run against `main` at 090aaf1, measured the effect on the eight demo fixtures in `app/demo/fixtures/` under `BALANCED`. With each record's own pins, and again under `defaultPins`, the overrides are byte-identical to the old rule's in all eight. With no pins, four of the eight differ: `artwork-blocks`, `photo-window`, `ui-devtools` and `ui-wikipedia` each move `brand.9` where the old rule moved `brand.1` or `brand.12` by about 0.8 L. On the seed `core/contrast/repair.test.ts` uses, brand `[0.62, 0.21, 35.2]`, the unpinned move takes `brand.9` down 0.0334 L where the old rule took `brand.1` down 0.79 L.
+A prototype of this rule, run against `main` at 090aaf1, measured the effect on the eight demo fixtures in `app/demo/fixtures/` under `BALANCED`. With each record's own pins, and again under `defaultPins`, the overrides are byte-identical to the old rule's in all eight. With no pins, four of the eight differ: `artwork-blocks`, `photo-window`, `ui-devtools` and `ui-wikipedia` each move `brand.9` where the old rule moved the text step `brand.1` or `brand.12` instead. Those text moves ranged from 0.03 L in `ui-wikipedia` to 0.82 L in `photo-window`'s light scheme and 0.80 L in `ui-devtools`'s dark one, and those two largest flipped `primary-foreground` from one end of the ramp to the other. On the seed `core/contrast/repair.test.ts` uses, brand `[0.62, 0.21, 35.2]`, the unpinned move takes `brand.9` down 0.0334 L where the old rule took `brand.1` down 0.79 L.
 
 The repair report changed in the same pass. Codex found on PR #180 (r4146678515) that when the loop moves one step twice, `overrides` keeps only the last colour while the report kept both entries. `DESIGN.md` then printed a `to` and a ratio that no exported file holds. In the forced case the tests build, light `neutral.12` moves to L 0.563641 with 4.529:1 recorded, then to 0.461723, and the shipped `foreground`/`background` ratio is 6.993:1. The report now holds one entry per moved step, the last one, in the same order as `overrides`. Repair recomputes each entry's `achieved` against the set it returns, so the ratio `DESIGN.md` prints is the one the export paints. `measured` stays the failing ratio at the moment repair took the pair. Recomputed against the input set, a pair that only failed after an earlier move would show as passing before repair, and `DESIGN.md` would print a repair that lowered contrast.
 
@@ -28,7 +28,7 @@ Change the pin tooltip, close #146 until a declared pair reaches step 9 another 
 
 ### Leave the Engine Id Where It Is
 
-A repair-only change could move no id and let the ADR say why. Ruling §3 rejected that on 2026-09-29. Once #99 merged with a digest over the engine result alone, a shared digest under a new id became a legal update, so the bump costs nothing and marks which rule committed a version.
+A repair-only change could move no id and let the ADR say why. The owner's ruling on #146 rejected that on 2026-09-29. Once #99 merged with a digest over the engine result alone, a shared digest under a new id became a legal update, so the bump costs nothing and marks which rule committed a version.
 
 ## Consequences
 

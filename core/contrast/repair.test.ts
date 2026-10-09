@@ -670,7 +670,7 @@ describe('a pinned key colour decides the move (#146)', () => {
 		const { overrides } = run(['keyColors.0', 'keyColors.1']);
 
 		expect(moved(overrides)).toContain('light:brand.1');
-		expect(moved(overrides)).not.toContain('light:brand.9');
+		expect(moved(overrides).filter((step) => step.endsWith(':brand.9'))).toEqual([]);
 	});
 
 	it('moves brand.9 instead once the brand key colour is unpinned', () => {
@@ -715,20 +715,21 @@ describe('the smaller-move rule stays on key-colour pairs (#146)', () => {
 
 // `neutral.12` at 0.6 fails on `background`. The first move clears that but still fails on a
 // `card` darkened to 0.85, so the loop moves `neutral.12` a second time.
+const blueNeutral = (step: number) => stepOf(sweptSet('blue'), 'light', 'neutral', step);
+const midToneText: TokenOverride = {
+	kind: 'primitive',
+	scheme: 'light',
+	ramp: 'neutral',
+	step: 12,
+	l: 0.6,
+	c: blueNeutral(12).c,
+	h: blueNeutral(12).h,
+};
 const forcedDoubleMove = (() => {
-	const blue = sweptSet('blue');
-	const at = (step: number) => stepOf(blue, 'light', 'neutral', step);
+	const at = blueNeutral;
 
-	return applied(blue, [
-		{
-			kind: 'primitive',
-			scheme: 'light',
-			ramp: 'neutral',
-			step: 12,
-			l: 0.6,
-			c: at(12).c,
-			h: at(12).h,
-		},
+	return applied(sweptSet('blue'), [
+		midToneText,
 		{
 			kind: 'primitive',
 			scheme: 'light',
@@ -756,6 +757,23 @@ describe('a step repair moves twice (#146, PR #180 r4146678515)', () => {
 
 		expect(entries).toHaveLength(1);
 		expect(override).toMatchObject(entries[0]!.to);
+	});
+
+	// Without this the case above could pass on a fixture that only ever moved `neutral.12` once.
+	// The first move solves against `background` alone, the same solve as on a set with `card` left
+	// alone, so that set's override is the first move's colour, and it has to fail the darkened card.
+	it('needs that second move: the colour clearing `background` alone still fails `card`', () => {
+		const backgroundOnly = applied(sweptSet('blue'), [midToneText]);
+		const first = repairContrast(backgroundOnly, {
+			pinned: defaultPins(backgroundOnly),
+		}).overrides.find(
+			(o) =>
+				o.kind === 'primitive' && o.scheme === 'light' && o.ramp === 'neutral' && o.step === 12,
+		);
+		const card = resolveScheme(forcedDoubleMove.schemes.light).card!;
+
+		expect(first).toBeDefined();
+		expect(renderedContrast(first as Oklch, card)).toBeLessThan(4.5);
 	});
 });
 

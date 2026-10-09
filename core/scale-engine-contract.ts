@@ -175,8 +175,8 @@ const NO_KEY_COLORS_SEED: BrandSeed = seedWith([0.6, 0.15, 200], { keyColors: nu
 /**
  * A literal copy of every digest that has ever shipped, kept apart from `ENGINE_DIGESTS` so that
  * editing the fixture cannot carry this pin along with it. Append only: a shipped id's entry never
- * changes here, so the only way to ship changed output is a new id with a new fixture entry, pinned
- * here in its own turn once it ships.
+ * changes here, so the only way to ship changed output is a new id with a new fixture entry,
+ * mirrored here in the same change that ships it, as the "keeps every pinned digest" case demands.
  */
 const PINNED_DIGESTS: Readonly<Record<string, string>> = {
 	'cambium-oklch-2': '5c33f508696b0466ada2a2eefa6d7134a7053cfb9d1f429a43bcefef27833711',

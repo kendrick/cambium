@@ -36,7 +36,7 @@ import type { Ramp, RampStep, TokenExtensions } from './token-set';
  * their stamp, which is honest about them: they came from some earlier engine.
  *
  * `-3` marks the repair side-choice change in #146 (ADR-0010): contrast repair moves an unpinned
- * brand or accent step 9 when that is the smaller lightness move. The ramps didn't move, so `-3`
+ * brand or accent step 9 when that is the smaller lightness move. The engine's result didn't move, so `-3`
  * shares `-2`'s digest. Tokens are never stored, so a version stamped `-2` re-derives under the new
  * rule.
  */
