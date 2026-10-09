@@ -452,7 +452,7 @@ test('the tuned save note\'s "Reset to <preset>" button clears tuning on a Balan
 	// `change` when the chosen option is already selected, so re-picking "balanced" from the
 	// Interpretation dropdown can't be what clears a Balanced session's own tuning. This button is
 	// the only way to reset onto the preset that's already active.
-	const resetButton = page.getByRole('button', { name: 'Reset to balanced', exact: true });
+	const resetButton = page.getByRole('button', { name: 'Reset to Balanced', exact: true });
 	await expect(resetButton).toBeVisible();
 
 	await resetButton.click();
@@ -502,7 +502,7 @@ test('the reset button leaves a prior seed edit in place and Save enabled', asyn
 	await expect(tunedMarker).toBeVisible();
 	await expect(save).toBeDisabled();
 
-	await page.getByRole('button', { name: 'Reset to balanced', exact: true }).click();
+	await page.getByRole('button', { name: 'Reset to Balanced', exact: true }).click();
 
 	await expect(tunedMarker).toHaveCount(0);
 	// `selectPreset` keeps draft state (`app/state/workspace-store.ts`), so the reset only ever
@@ -1073,4 +1073,35 @@ test('an empty classification list still offers every reference image, and a cla
 	await expect(page.getByLabel('Image 2 classification')).toHaveValue('');
 	const cleared = await readStoredRecord(page, record.id);
 	expect(cleared?.versions.at(-1)?.seed?.imageClassifications).toEqual([]);
+});
+
+test('the seed rail names presets and tags in words over unchanged stored values', async ({
+	page,
+}) => {
+	// Neutral temperature cleared so the tinting slider below has a token to move, for the reason
+	// the slider scenario above gives.
+	const record = buildRecordWithSeed({ ...SEED, neutralTemperature: null });
+	await seedWorkspaceRecord(page, record);
+	await page.goto(`/workspace?${RECORD_PARAM}=${record.id}`);
+
+	const options = page.getByLabel('Interpretation').locator('option');
+
+	// Both lists are the criterion's words, written out. The values are what `main` stores.
+	await expect(options).toHaveText(['Faithful', 'Balanced', 'Expressive']);
+	expect(
+		await options.evaluateAll((nodes) => nodes.map((node) => (node as HTMLOptionElement).value)),
+	).toEqual(['faithful', 'balanced', 'expressive']);
+
+	// IMAGE_2 is tagged `ui`, which the picker shows as "Interface". The accent colour was read from it.
+	await page.getByRole('button', { name: 'Show source of accent key colour' }).click();
+	await expect(page.locator('[data-source-image] img')).toHaveAttribute(
+		'alt',
+		'The reference this colour was read from, tagged Interface',
+	);
+	await page.getByRole('button', { name: 'Close' }).click();
+
+	// The tuned note's reset button names the preset the way the select does.
+	await page.getByRole('button', { name: 'Advanced parameters' }).click();
+	await page.getByLabel('Neutral tinting', { exact: true }).fill('0.9');
+	await expect(page.getByRole('button', { name: 'Reset to Balanced', exact: true })).toBeVisible();
 });

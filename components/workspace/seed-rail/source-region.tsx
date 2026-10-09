@@ -1,5 +1,6 @@
 import type { ReferenceImage } from '../../../core/brand-record';
 import type { Rect } from '../../../core/brand-seed';
+import { TAG_LABELS } from '@/components/image-tag-labels';
 import { RegionFrame } from '@/components/reference-thumbnail';
 import { Button } from '@/components/ui/button';
 import {
@@ -49,7 +50,7 @@ export function SourceRegion({
 						<RegionFrame
 							data-source-image
 							src={image.downscaled}
-							alt={`The reference this colour was read from, tagged ${image.tag}`}
+							alt={`The reference this colour was read from, tagged ${TAG_LABELS[image.tag]}`}
 							imageClassName="max-h-[60vh] max-w-full"
 							outlines={region ? [{ id: 'source', region }] : []}
 						/>

@@ -38,6 +38,13 @@ import { SourceRegion } from '@/components/workspace/seed-rail/source-region';
 
 const PRESETS: readonly Interpretation[] = ['faithful', 'balanced', 'expressive'];
 
+/** What the select and the reset button show. The option values stay the stored `Interpretation` strings. */
+const PRESET_LABELS: Record<Interpretation, string> = {
+	faithful: 'Faithful',
+	balanced: 'Balanced',
+	expressive: 'Expressive',
+};
+
 /**
  * The rail's heading id. Exported because the empty workspace sends focus here after its first
  * generate, and `Shell` uses it to tell which column a focused control sits in and where to fall
@@ -266,7 +273,7 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 										presetSelectRef.current?.focus();
 									}}
 								>
-									Reset to {preset}
+									Reset to {PRESET_LABELS[preset]}
 								</Button>{' '}
 								or pick another preset to save.
 							</p>
@@ -302,7 +309,7 @@ export function SeedRail({ store }: { store: StoreApi<WorkspaceState> }) {
 							>
 								{PRESETS.map((option) => (
 									<option key={option} value={option}>
-										{option}
+										{PRESET_LABELS[option]}
 									</option>
 								))}
 							</select>
