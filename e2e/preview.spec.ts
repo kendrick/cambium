@@ -699,4 +699,24 @@ test('the type scale specimen prints each size to at most three significant figu
 		// oxlint-disable-next-line no-await-in-loop
 		await expect(preview.locator(`[data-type-step="${step}"] [data-type-size]`)).toHaveText(size);
 	}
+
+	// Rounded for reading only: the specimen still renders at the unrounded 1.2^n rem, which the
+	// browser resolves against the 16px root. `text-4xl` at 2.49rem would paint 39.84px, not 39.81.
+	const steps = [
+		'text-xs',
+		'text-sm',
+		'text-base',
+		'text-lg',
+		'text-xl',
+		'text-2xl',
+		'text-3xl',
+		'text-4xl',
+	];
+	for (const [index, step] of steps.entries()) {
+		// oxlint-disable-next-line no-await-in-loop
+		const painted = await preview
+			.locator(`[data-type-step="${step}"] dd`)
+			.evaluate((node) => Number.parseFloat(getComputedStyle(node).fontSize));
+		expect(painted, step).toBeCloseTo(16 * 1.2 ** (index - 2), 3);
+	}
 });

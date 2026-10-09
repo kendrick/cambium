@@ -50,9 +50,7 @@ export function swatchOf(color: OklchCssColor): Swatch {
  * and so a trailing zero drops (`2.10` prints `2.1`, the way `formatCssNumber` writes the file).
  */
 export function formatSignificant(value: number, figures = DISPLAY_SIGNIFICANT_FIGURES): string {
-	const rounded = Number(value.toPrecision(figures));
-
-	return rounded === 0 ? '0' : String(rounded);
+	return String(Number(value.toPrecision(figures)));
 }
 
 const CSS_LENGTH = /^(-?\d+(?:\.\d+)?)([a-z%]*)$/;

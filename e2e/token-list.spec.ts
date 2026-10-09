@@ -1800,6 +1800,16 @@ function printedChromas(text: string): string[] {
 	return [...text.matchAll(/oklch\((\S+) (\S+) /g)].map((match) => match[2]!);
 }
 
+/**
+ * Every number inside every printed `oklch(…)`: lightness, chroma, hue and any alpha percentage.
+ * Decision 3 rounds all of them, and the criterion's chroma is only one.
+ */
+function printedOklchNumbers(text: string): string[] {
+	return [...text.matchAll(/oklch\(([^)]*)\)/g)].flatMap(
+		(match) => match[1]!.match(/-?\d+(?:\.\d+)?/g) ?? [],
+	);
+}
+
 function decimalPlaces(printed: string): number {
 	const dot = printed.indexOf('.');
 	return dot === -1 ? 0 : printed.length - dot - 1;
@@ -1832,6 +1842,11 @@ test('no OKLCH chroma the token list prints has more than three decimal places',
 	// Every colour row plus every shadow, so the check can't pass by finding nothing.
 	expect(chromas).toHaveLength(EXPECTED_COLOUR_ROWS + EXPECTED_ROWS.shadow);
 	expect(chromas.filter((chroma) => decimalPlaces(chroma) > 3)).toEqual([]);
+	expect(
+		printedOklchNumbers((await tokensSection.textContent()) ?? '').filter(
+			(value) => decimalPlaces(value) > 3,
+		),
+	).toEqual([]);
 
 	// The chip's editor portals out of the region, so it's read on its own.
 	await tokensSection.locator('[data-token="primitive.brand.9"]').click();
@@ -1841,4 +1856,9 @@ test('no OKLCH chroma the token list prints has more than three decimal places',
 	const editorChromas = printedChromas(`${(await editorValue.textContent()) ?? ''} `);
 	expect(editorChromas).toHaveLength(1);
 	expect(decimalPlaces(editorChromas[0]!)).toBeLessThanOrEqual(3);
+	expect(
+		printedOklchNumbers((await editorValue.textContent()) ?? '').filter(
+			(value) => decimalPlaces(value) > 3,
+		),
+	).toEqual([]);
 });

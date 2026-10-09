@@ -1,7 +1,7 @@
 import { useRef, type ReactNode } from 'react';
 
 import type { TokenProvenance } from '../../../core/token-set';
-import { type Swatch } from './format';
+import type { Swatch } from './format';
 import { type ListedIssue, TokenEditor } from './token-editor';
 
 /**
