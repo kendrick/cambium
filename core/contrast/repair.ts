@@ -2,7 +2,9 @@ import { converter } from 'culori/fn';
 
 import { type Oklch, quantizeToSrgb, renderedContrast, toSrgbHex } from '../oklch';
 import { CAMBIUM_NAMESPACE } from '../provenance';
+import { resolveScheme } from '../resolve-scheme';
 import { SCHEME_NAMES, type SchemeName } from '../scale-engine';
+import { BRAND_STEP } from '../step-roles';
 import { applyOverrides, overrideKey, type TokenOverride } from '../token-overrides';
 import type { TokenSet } from '../token-set';
 import { type ContrastEntry, checkContrast } from './check';
@@ -52,7 +54,7 @@ export type RepairEntry = {
 	to: Oklch;
 	/** The 8-bit sRGB hex `to` paints as, the same bytes `achieved` was measured on. */
 	hex: string;
-	/** `renderedContrast` of the pair right after this move. */
+	/** `renderedContrast` of the pair in the set repair returns. */
 	achieved: number;
 	/** True when `to.c` sits below `from.c` because the new lightness can't hold it in sRGB. */
 	chromaReduced: boolean;
@@ -224,13 +226,52 @@ function pairId(entry: ContrastEntry): string {
 }
 
 /**
+ * Ramps whose step 9 a seed pin can protect, mirroring `repairPinsFor` in `core/seed-pins.ts`.
+ * Restated rather than imported because `seed-pins.ts` imports this module.
+ */
+const KEY_COLOUR_RAMPS: ReadonlySet<string> = new Set(['brand', 'accent']);
+
+function holdsKeyColour(side: Side): boolean {
+	return KEY_COLOUR_RAMPS.has(side.ramp) && side.step === BRAND_STEP;
+}
+
+type Solved = {
+	role: 'foreground' | 'background';
+	side: Side;
+	other: Side;
+	original: Oklch;
+	to: Oklch | null;
+};
+
+/**
+ * Foreground first, except on a pair where one side is a key colour's step and both are free to
+ * move: there the smaller lightness change goes first, ties to the foreground (ADR-0010). Without
+ * this a key colour's step never moves, so a pin on it decides nothing, and an unpinned brand gets
+ * its text colour moved across most of the ramp where a few hundredths on the fill would clear
+ * (#146).
+ */
+function moveOrder(solved: Solved[]): Solved[] {
+	const [first, second] = solved;
+
+	if (!first?.to || !second?.to || !(holdsKeyColour(first.side) || holdsKeyColour(second.side))) {
+		return solved;
+	}
+
+	const distance = (entry: Solved) => Math.abs(entry.to!.l - entry.original.l);
+
+	return distance(second) < distance(first) ? [second, first] : solved;
+}
+
+/**
  * Proposes `primitive` overrides that lift every declared pair to its AA target, measured with
  * `renderedContrast`, moving lightness only (and chroma only as far as sRGB forces; see
  * `colourAt`).
  *
  * Moves the foreground's step first. When that step is pinned, or no lightness clears there, the
- * background's step moves instead. When neither can move, the pair is reported unrepaired and
- * nothing is touched.
+ * background's step moves instead. A pair with step 9 of `brand` or `accent` on one side and
+ * neither side pinned is the exception: whichever side needs the smaller lightness change moves,
+ * ties to the foreground (see `moveOrder`). When neither side can move, the pair is reported
+ * unrepaired and nothing is touched.
  *
  * A step moved for one pair moves every token aliased to it, which can break a pair that passed.
  * So each move is followed by a fresh check of every pair, always taking the first failure in
@@ -240,6 +281,8 @@ function pairId(entry: ContrastEntry): string {
  *
  * Each new colour is solved from the step's colour in `tokenSet`, never from a colour an earlier
  * move left behind, so the hue and chroma tolerance is measured against what the generator made.
+ *
+ * The report holds one entry per moved step, matching `overrides` entry for entry.
  */
 export function repairContrast(tokenSet: TokenSet, options: RepairOptions = {}): RepairResult {
 	const pinned: ReadonlySet<PinKey> = options.pinned ?? defaultPins(tokenSet);
@@ -279,10 +322,19 @@ export function repairContrast(tokenSet: TokenSet, options: RepairOptions = {}):
 
 		let moved = false;
 
-		for (const [role, side, other] of candidates) {
+		const solved = candidates.map(([role, side, other]): Solved => {
 			const original = channels(tokenSet, scheme, side);
-			const to = solve(original, channels(current, scheme, other), failing.target);
 
+			return {
+				role,
+				side,
+				other,
+				original,
+				to: solve(original, channels(current, scheme, other), failing.target),
+			};
+		});
+
+		for (const { role, side, other, original, to } of moveOrder(solved)) {
 			if (!to) continue;
 
 			const override: TokenOverride = {
@@ -333,12 +385,30 @@ export function repairContrast(tokenSet: TokenSet, options: RepairOptions = {}):
 			reason: stuck.get(pairId(entry)) ?? (converged ? 'no-lightness-clears' : 'did-not-converge'),
 		}));
 
-	// Recomputed against the final `current` rather than trusted from the moment of each move: a
-	// later move can shift a step's neighbours, which changes what "in order" means for an earlier
-	// entry, and a reader of the report only ever sees the set this returns, not the set as it stood
-	// mid-loop.
-	const finalReport = report.map((entry) => ({
+	// One entry per moved step, the last, kept in the order `moves` keeps the overrides: an earlier
+	// move of the same step names a colour and a ratio no exported file carries (PR #180,
+	// r4146678515). `achieved` and `outOfOrder` are recomputed against the final `current`, since a
+	// later move can shift the other side of the pair or the step's neighbours, and a reader only
+	// ever sees the set this returns.
+	const lastMove = new Map<PinKey, RepairEntry>();
+
+	for (const entry of report) {
+		const key = pinKey(entry.scheme, entry.ramp, entry.step);
+
+		lastMove.delete(key);
+		lastMove.set(key, entry);
+	}
+
+	const resolved = {
+		light: resolveScheme(current.schemes.light),
+		dark: resolveScheme(current.schemes.dark),
+	};
+	const finalReport = [...lastMove.values()].map((entry) => ({
 		...entry,
+		achieved: renderedContrast(
+			resolved[entry.scheme][entry.foreground]!,
+			resolved[entry.scheme][entry.background]!,
+		),
 		outOfOrder: isOutOfOrder(current, entry.scheme, entry.ramp, entry.step),
 	}));
 

@@ -1,13 +1,15 @@
 import { converter } from 'culori/fn';
 import { describe, expect, it } from 'vitest';
 
-import { BrandSeedSchema } from '../brand-seed';
+import { type BrandSeed, BrandSeedSchema } from '../brand-seed';
 import { toOklchCss } from '../css/oklch-css';
 import { BALANCED } from '../interpretation';
 import { createOklchScaleEngine } from '../oklch-scale-engine';
-import { isInSrgb, type Oklch } from '../oklch';
+import { isInSrgb, type Oklch, renderedContrast } from '../oklch';
 import { CAMBIUM_NAMESPACE } from '../provenance';
+import { resolveScheme } from '../resolve-scheme';
 import { SCHEME_NAMES, type SchemeName } from '../scale-engine';
+import { repairPinsFor, type SeedPinPath } from '../seed-pins';
 import { buildTokenSet } from '../semantic-layer';
 import { applyOverrides, type TokenOverride } from '../token-overrides';
 import type { TokenSet } from '../token-set';
@@ -613,4 +615,172 @@ describe('withContrastRepairs', () => {
 		// `repairContrast` and isn't a no-op that happened to match.
 		expect(withContrastRepairs(base)).not.toEqual(withContrastRepairs(base, { pinned }));
 	});
+});
+
+function seedOf(overrides: Partial<BrandSeed>): BrandSeed {
+	return BrandSeedSchema.parse({
+		keyColors: null,
+		neutralTemperature: null,
+		radiusCharacter: null,
+		shadowCharacter: null,
+		trackingFeel: null,
+		typeClassification: null,
+		suggestedPairing: null,
+		typeScaleRatio: null,
+		imageClassifications: null,
+		expressive: null,
+		...overrides,
+	});
+}
+
+function baseFor(seed: BrandSeed): TokenSet {
+	const result = createOklchScaleEngine().generate(seed, BALANCED);
+
+	if (!result.ok) throw new Error(`the scale engine rejected the seed: ${result.error.kind}`);
+
+	return buildTokenSet(result.schemes, seed, BALANCED);
+}
+
+const moved = (overrides: readonly TokenOverride[]) =>
+	overrides.map((o) => (o.kind === 'primitive' ? `${o.scheme}:${o.ramp}.${o.step}` : o.kind));
+
+describe('a pinned key colour decides the move (#146)', () => {
+	// At lightness 0.62 the light `primary-foreground` fails on `primary`. Darkening the text
+	// (`brand.1`) takes 0.79 L, and darkening the fill (`brand.9`) takes 0.033.
+	const seed = seedOf({
+		keyColors: [
+			{
+				oklch: [0.62, 0.21, 35.2],
+				proposedRole: 'brand',
+				sourceImageId: 'img-1',
+				sourceRegion: null,
+			},
+			{
+				oklch: [0.71, 0.14, 145],
+				proposedRole: 'accent',
+				sourceImageId: 'img-1',
+				sourceRegion: null,
+			},
+		],
+	});
+	const base = baseFor(seed);
+	const run = (pins: SeedPinPath[]) => repairContrast(base, { pinned: repairPinsFor(seed, pins) });
+
+	it('moves the text, never brand.9, while the brand key colour is pinned', () => {
+		const { overrides } = run(['keyColors.0', 'keyColors.1']);
+
+		expect(moved(overrides)).toContain('light:brand.1');
+		expect(moved(overrides)).not.toContain('light:brand.9');
+	});
+
+	it('moves brand.9 instead once the brand key colour is unpinned', () => {
+		const { overrides } = run(['keyColors.1']);
+
+		expect(moved(overrides)).toContain('light:brand.9');
+		expect(moved(overrides)).not.toContain('light:brand.1');
+	});
+
+	it('gives an accent-only pin the same overrides as no pin at all', () => {
+		expect(run(['keyColors.1']).overrides).toEqual(run([]).overrides);
+	});
+});
+
+describe('the smaller-move rule stays on key-colour pairs (#146)', () => {
+	// `artwork-dashboard`'s brand and neutral temperature. Its light `muted-foreground` fails on
+	// `muted`, and the background (`neutral.3`, +0.006227) is the smaller move there, so a rule
+	// applied to every pair would move it rather than `neutral.11` (−0.006324).
+	it('keeps foreground-first on a pair with no key colour step', () => {
+		const seed = seedOf({
+			keyColors: [
+				{
+					oklch: [0.76, 0.19, 198],
+					proposedRole: 'brand',
+					sourceImageId: 'img-1',
+					sourceRegion: null,
+				},
+			],
+			neutralTemperature: { hue: 255, chroma: 0.018 },
+		});
+		const { report } = repairContrast(baseFor(seed), { pinned: new Set() });
+		const muted = report.find((entry) => entry.foreground === 'muted-foreground');
+
+		expect(muted).toMatchObject({
+			scheme: 'light',
+			moved: 'foreground',
+			ramp: 'neutral',
+			step: 11,
+		});
+	});
+});
+
+// `neutral.12` at 0.6 fails on `background`. The first move clears that but still fails on a
+// `card` darkened to 0.85, so the loop moves `neutral.12` a second time.
+const forcedDoubleMove = (() => {
+	const blue = sweptSet('blue');
+	const at = (step: number) => stepOf(blue, 'light', 'neutral', step);
+
+	return applied(blue, [
+		{
+			kind: 'primitive',
+			scheme: 'light',
+			ramp: 'neutral',
+			step: 12,
+			l: 0.6,
+			c: at(12).c,
+			h: at(12).h,
+		},
+		{
+			kind: 'primitive',
+			scheme: 'light',
+			ramp: 'neutral',
+			step: 2,
+			l: 0.85,
+			c: at(2).c,
+			h: at(2).h,
+		},
+	]);
+})();
+
+describe('a step repair moves twice (#146, PR #180 r4146678515)', () => {
+	it('reports one entry for the step, carrying the colour its override ships', () => {
+		const { overrides, report } = repairContrast(forcedDoubleMove, {
+			pinned: defaultPins(forcedDoubleMove),
+		});
+		const entries = report.filter(
+			(e) => e.scheme === 'light' && e.ramp === 'neutral' && e.step === 12,
+		);
+		const override = overrides.find(
+			(o) =>
+				o.kind === 'primitive' && o.scheme === 'light' && o.ramp === 'neutral' && o.step === 12,
+		);
+
+		expect(entries).toHaveLength(1);
+		expect(override).toMatchObject(entries[0]!.to);
+	});
+});
+
+describe('the report matches the set it describes (#146)', () => {
+	const cases = [
+		...swept.map(({ name, tokenSet }) => [name, tokenSet] as const),
+		['forced double move', forcedDoubleMove] as const,
+	];
+
+	it.each(cases)(
+		'names the overrides in order, each achieved ratio painted by the result, for %s',
+		(_name, input) => {
+			const pinned = defaultPins(input);
+			const { overrides, report } = repairContrast(input, { pinned });
+			const { tokenSet } = withContrastRepairs(input, { pinned });
+
+			expect(report.map((e) => `${e.scheme}:${e.ramp}.${e.step}`)).toEqual(moved(overrides));
+
+			for (const entry of report) {
+				const colours = resolveScheme(tokenSet.schemes[entry.scheme]);
+
+				expect(entry.achieved).toBe(
+					renderedContrast(colours[entry.foreground]!, colours[entry.background]!),
+				);
+			}
+		},
+	);
 });
