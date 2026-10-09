@@ -23,4 +23,6 @@ export const ENGINE_DIGESTS: Readonly<Record<string, string>> = {
 	// The first id the pin covers. `cambium-oklch-1` gets no entry, because it named several outputs
 	// (see `OKLCH_SCALE_ENGINE_ID`), so no single digest describes it.
 	'cambium-oklch-2': '5c33f508696b0466ada2a2eefa6d7134a7053cfb9d1f429a43bcefef27833711',
+	// Same digest on purpose: #146 changed repair, not the ramps this sample sees.
+	'cambium-oklch-3': '5c33f508696b0466ada2a2eefa6d7134a7053cfb9d1f429a43bcefef27833711',
 };

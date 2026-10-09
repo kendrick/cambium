@@ -34,8 +34,13 @@ import type { Ramp, RampStep, TokenExtensions } from './token-set';
  * ramps without moving it, so a record stamped `-1` can't say which of those outputs it had. The
  * digest pin starts here, under an id that has only ever meant one output. Records stamped `-1` keep
  * their stamp, which is honest about them: they came from some earlier engine.
+ *
+ * `-3` marks the repair side-choice change in #146 (ADR-0010): contrast repair moves an unpinned
+ * brand or accent step 9 when that is the smaller lightness move. The ramps didn't move, so `-3`
+ * shares `-2`'s digest. Tokens are never stored, so a version stamped `-2` re-derives under the new
+ * rule.
  */
-export const OKLCH_SCALE_ENGINE_ID = 'cambium-oklch-2';
+export const OKLCH_SCALE_ENGINE_ID = 'cambium-oklch-3';
 
 /**
  * Lightness per step, measured as the median across the sixty-two solid Radix scales and rounded.
