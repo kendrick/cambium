@@ -472,6 +472,11 @@ test('the saved screen shows each image by thumbnail, position and tag, and no U
 	await expect(page.getByText('Image 2: Automatic', { exact: true })).toBeVisible();
 	await expect(page.getByText('Brand site: acme.com')).toBeVisible();
 	await expect(page.locator('li img')).toHaveCount(2);
+	// Each row shows its own image, not the first one twice.
+	const sources = await page
+		.locator('li img')
+		.evaluateAll((images) => images.map((image) => image.getAttribute('src')));
+	expect(new Set(sources).size).toBe(2);
 
 	expect(await page.locator('body').innerText()).not.toMatch(UUID);
 

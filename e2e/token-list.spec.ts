@@ -1835,8 +1835,8 @@ test('no OKLCH chroma the token list prints has more than three decimal places',
 	}
 	await expect(collapsed).toHaveCount(0);
 
-	// `textContent` rather than `innerText`: the chips print their value `sr-only`, and a screen
-	// reader reads that text aloud.
+	// `textContent` rather than `innerText`: the chips print their value `sr-only`, which `innerText`
+	// skips, and a value printed there at six places is still on the page.
 	const chromas = printedChromas((await tokensSection.textContent()) ?? '');
 
 	// Every colour row plus every shadow, so the check can't pass by finding nothing.

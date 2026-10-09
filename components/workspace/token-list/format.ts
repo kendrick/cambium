@@ -57,8 +57,8 @@ const CSS_LENGTH = /^(-?\d+(?:\.\d+)?)([a-z%]*)$/;
 
 /**
  * A CSS length as the preview prints it. The declaration it came from keeps full precision and is
- * what the specimen paints with. Anything that isn't one number and a unit comes back unchanged,
- * since printing it as written beats printing a guess.
+ * what the specimen paints with. Anything that isn't one plain number, with or without a unit,
+ * comes back unchanged (`calc(…)`, say), since printing it as written beats printing a guess.
  */
 export function formatLengthForDisplay(css: string): string {
 	const match = CSS_LENGTH.exec(css);
