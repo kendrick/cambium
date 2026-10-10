@@ -10,6 +10,7 @@ import type { WorkspaceState } from '../../app/state/workspace-store';
 import { attributeContrastFailures } from '../../core/contrast/attribute';
 import { buildTokenSet } from '../../core/semantic-layer';
 import type { SchemeName } from '../../core/token-overrides';
+import { AccessibilityPanel } from '@/components/workspace/accessibility/accessibility-panel';
 import { FirstVersion, showsFirstVersion } from '@/components/workspace/first-version';
 import { RawResponse } from '@/components/workspace/raw-response';
 import { SchemeControl } from '@/components/workspace/scheme-control';
@@ -161,7 +162,6 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const overrideIssues = useStore(store, (state) => state.overrideIssues);
 	const setOverride = useStore(store, (state) => state.setOverride);
 	const clearOverride = useStore(store, (state) => state.clearOverride);
-	const contrast = useStore(store, (state) => state.contrast);
 	const draftSeed = useStore(store, (state) => state.draftSeed);
 
 	const viewportNarrow = useNarrowViewport();
@@ -300,24 +300,21 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const active =
 		record && activeOrdinal !== null ? (record.versions[activeOrdinal - 1] ?? null) : null;
 
-	// `null` only means no tokens yet (see `ContrastState`), so a non-null report with nothing
-	// failing is a distinct, and much more common, state worth its own message.
-	const failingContrast = contrast?.report.filter((entry) => !entry.passes) ?? [];
-
 	// The store keeps its repaired, pre-override base to itself, so the aliases an override replaced
 	// are rebuilt here from the same ramps and seed. Only aliases are read off it, and repair never
-	// moves one, so skipping the repair pass costs nothing in accuracy.
-	const contrastByOverride = useMemo(() => {
-		if (!tokenSet || !derived?.ok || !draftSeed) return {};
-		// Only alias overrides get a verdict, and rebuilding the baseline is a second full derivation,
-		// so skip it on the common keystroke where no alias is overridden.
-		if (!Object.values(overrides).some((override) => override.kind === 'alias')) return {};
-		return attributeContrastFailures(
-			tokenSet,
-			Object.values(overrides),
-			buildTokenSet(derived.schemes, draftSeed),
-		);
+	// moves one, so skipping the repair pass costs nothing in accuracy. With no alias override the
+	// final set's aliases are already the pre-override ones, which skips a second full derivation on
+	// the common keystroke.
+	const aliasBaseline = useMemo(() => {
+		if (!tokenSet || !derived?.ok || !draftSeed) return tokenSet;
+		if (!Object.values(overrides).some((override) => override.kind === 'alias')) return tokenSet;
+		return buildTokenSet(derived.schemes, draftSeed);
 	}, [tokenSet, derived, draftSeed, overrides]);
+
+	const contrastByOverride = useMemo(() => {
+		if (!tokenSet || !aliasBaseline || aliasBaseline === tokenSet) return {};
+		return attributeContrastFailures(tokenSet, Object.values(overrides), aliasBaseline);
+	}, [tokenSet, aliasBaseline, overrides]);
 
 	// Built once and placed by whichever layout is mounted. Only one layout mounts at a time, so
 	// each panel, id, ref, lazy chunk and scheme control exists once in the DOM at any width. It
@@ -393,25 +390,17 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 					ref={(node) => {
 						panels.current.accessibility = node;
 					}}
-					className={cn('text-muted-foreground text-sm', padding)}
+					// The report runs several screens long. From md up it scrolls inside the Output row, as
+					// the token list does, because left to grow it spills over the raw-response row below.
+					// Below md the page is the scroller (#157).
+					className={cn('text-muted-foreground min-h-0 text-sm md:overflow-y-auto', padding)}
 				>
 					{heading ? <h2 className="sr-only">Accessibility</h2> : null}
-					{contrast === null ? (
-						<p>
-							There are no tokens to check yet. They show up here once the seed produces a token
-							set.
-						</p>
-					) : failingContrast.length === 0 ? (
-						<p>Every declared pair passes AA in both schemes.</p>
-					) : (
-						<ul className="list-none space-y-1">
-							{failingContrast.map((entry) => (
-								<li key={`${entry.scheme}-${entry.foreground}-${entry.background}`}>
-									{`${entry.scheme}: ${entry.foreground} on ${entry.background}: ${entry.wcag.toFixed(2)}:1, needs ${entry.target}`}
-								</li>
-							))}
-						</ul>
-					)}
+					<AccessibilityPanel
+						store={store}
+						attributed={contrastByOverride}
+						aliasBaseline={aliasBaseline}
+					/>
 				</TabsPanel>
 				<TabsPanel
 					value="export"

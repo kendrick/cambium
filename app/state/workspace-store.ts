@@ -235,11 +235,15 @@ type CommitRequest = {
  * later did to an unrelated token. `repairs` is the repair pass's report, less any entry whose moved
  * step, foreground, or background a user override changed. The export archive's DESIGN.md reads it
  * from here, so it doesn't document a move or a ratio the user's own edit has since overwritten.
+ * `applied` is that same pass report before any user override, cached with the derivation. A decline
+ * is a primitive override on the moved step, which `repairs` drops by design, so the Accessibility tab
+ * reads `applied` to keep a declined repair listed and restorable.
  */
 export type ContrastState = {
 	report: ContrastEntry[];
 	unrepaired: UnrepairedEntry[];
 	repairs: RepairEntry[];
+	applied: RepairEntry[];
 };
 
 export type WorkspaceState = {
@@ -563,6 +567,7 @@ function tokensFor(
 			report: checkContrast(tokenSet),
 			unrepaired,
 			repairs: repairsStillHeld(repairs, repaired, tokenSet),
+			applied: repairs,
 		},
 	};
 }
