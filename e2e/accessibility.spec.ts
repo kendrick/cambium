@@ -61,6 +61,26 @@ const restore = (page: Page, name: string) =>
 
 const ALL_PASS = 'Every declared pair passes AA in both schemes.';
 
+/** Typed out from `CONTRAST_PAIRS` rather than imported, so a pair dropped from the table fails here. */
+const DECLARED_PAIRS = [
+	'foreground on background',
+	'card-foreground on card',
+	'popover-foreground on popover',
+	'primary-foreground on primary',
+	'secondary-foreground on secondary',
+	'muted-foreground on muted',
+	'accent-foreground on accent',
+	'sidebar-foreground on sidebar',
+	'sidebar-primary-foreground on sidebar-primary',
+	'sidebar-accent-foreground on sidebar-accent',
+	'destructive on background',
+	'ring on background',
+	'sidebar-ring on background',
+];
+
+/** #174's floor (WCAG 2.2 SC 2.5.8), the same one `e2e/target-size.spec.ts` holds the other tabs to. */
+const MIN_TARGET = 24;
+
 test('the report lists every pair in both schemes with AA and advisory APCA columns', async ({
 	page,
 }) => {
@@ -74,6 +94,7 @@ test('the report lists every pair in both schemes with AA and advisory APCA colu
 			const rows = table(page, scheme).locator('tbody tr');
 
 			await expect(rows).toHaveCount(13);
+			expect(await rows.locator('td:nth-child(1)').allTextContents()).toEqual(DECLARED_PAIRS);
 			await expect(
 				table(page, scheme).getByRole('columnheader', { name: 'APCA Lc (advisory)' }),
 			).toBeVisible();
@@ -249,4 +270,30 @@ test('a declined repair survives save and reload', async ({ page }) => {
 		'data-overridden',
 		'',
 	);
+});
+
+// `e2e/target-size.spec.ts` only opens the Seed and Tokens tabs, so the panel's controls get their
+// own check against the same floor.
+test('every control in the Accessibility tab meets the 24px target size', async ({ page }) => {
+	await openDemo(page);
+	await openAccessibility(page);
+
+	const buttons = await page
+		.getByRole('tabpanel', { name: 'Accessibility' })
+		.getByRole('button')
+		.all();
+
+	expect(buttons.length).toBeGreaterThan(0);
+
+	const measured = await Promise.all(
+		buttons.map(async (button) => ({
+			name: (await button.getAttribute('aria-label')) ?? (await button.textContent()),
+			box: await button.boundingBox(),
+		})),
+	);
+
+	for (const { name, box } of measured) {
+		expect(box, `${name} has no box`).not.toBeNull();
+		expect(Math.min(box!.width, box!.height), `${name}`).toBeGreaterThanOrEqual(MIN_TARGET);
+	}
 });
