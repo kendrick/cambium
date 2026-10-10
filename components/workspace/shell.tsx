@@ -10,6 +10,7 @@ import type { WorkspaceState } from '../../app/state/workspace-store';
 import { attributeContrastFailures } from '../../core/contrast/attribute';
 import { buildTokenSet } from '../../core/semantic-layer';
 import type { SchemeName } from '../../core/token-overrides';
+import { AccessibilityPanel } from '@/components/workspace/accessibility/accessibility-panel';
 import { FirstVersion, showsFirstVersion } from '@/components/workspace/first-version';
 import { RawResponse } from '@/components/workspace/raw-response';
 import { SchemeControl } from '@/components/workspace/scheme-control';
@@ -161,7 +162,6 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const overrideIssues = useStore(store, (state) => state.overrideIssues);
 	const setOverride = useStore(store, (state) => state.setOverride);
 	const clearOverride = useStore(store, (state) => state.clearOverride);
-	const contrast = useStore(store, (state) => state.contrast);
 	const draftSeed = useStore(store, (state) => state.draftSeed);
 
 	const viewportNarrow = useNarrowViewport();
@@ -300,10 +300,6 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 	const active =
 		record && activeOrdinal !== null ? (record.versions[activeOrdinal - 1] ?? null) : null;
 
-	// `null` only means no tokens yet (see `ContrastState`), so a non-null report with nothing
-	// failing is a distinct, and much more common, state worth its own message.
-	const failingContrast = contrast?.report.filter((entry) => !entry.passes) ?? [];
-
 	// The store keeps its repaired, pre-override base to itself, so the aliases an override replaced
 	// are rebuilt here from the same ramps and seed. Only aliases are read off it, and repair never
 	// moves one, so skipping the repair pass costs nothing in accuracy.
@@ -396,22 +392,7 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 					className={cn('text-muted-foreground text-sm', padding)}
 				>
 					{heading ? <h2 className="sr-only">Accessibility</h2> : null}
-					{contrast === null ? (
-						<p>
-							There are no tokens to check yet. They show up here once the seed produces a token
-							set.
-						</p>
-					) : failingContrast.length === 0 ? (
-						<p>Every declared pair passes AA in both schemes.</p>
-					) : (
-						<ul className="list-none space-y-1">
-							{failingContrast.map((entry) => (
-								<li key={`${entry.scheme}-${entry.foreground}-${entry.background}`}>
-									{`${entry.scheme}: ${entry.foreground} on ${entry.background}: ${entry.wcag.toFixed(2)}:1, needs ${entry.target}`}
-								</li>
-							))}
-						</ul>
-					)}
+					<AccessibilityPanel store={store} attributed={contrastByOverride} />
 				</TabsPanel>
 				<TabsPanel
 					value="export"
