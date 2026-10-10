@@ -9,7 +9,13 @@ import { createOklchScaleEngine } from '../../../core/oklch-scale-engine';
 import { repairPinsFor } from '../../../core/seed-pins';
 import { buildTokenSet } from '../../../core/semantic-layer';
 import { applyOverrides, overrideKey, type TokenOverride } from '../../../core/token-overrides';
-import { declineFor, failingRows, repairRows, UNREPAIRED_REASON_TEXT } from './model';
+import {
+	COMBINED_CAUSE,
+	declineFor,
+	failingRows,
+	repairRows,
+	UNREPAIRED_REASON_TEXT,
+} from './model';
 
 const seed = BrandSeedSchema.parse(photoWindow.versions[0]!.seed);
 const generated = createOklchScaleEngine().generate(seed, BALANCED);
@@ -78,16 +84,18 @@ function withLightBrandDeclined() {
 	};
 }
 
+const NOTHING = { attributed: {}, overrides: {}, tokenSet: repaired.tokenSet };
+
 describe('failingRows', () => {
 	it('names nothing failing when the repaired set passes', () => {
 		expect(
-			failingRows({ report: checkContrast(repaired.tokenSet), unrepaired: [] }, rowsFor(), {}),
+			failingRows({ report: checkContrast(repaired.tokenSet), unrepaired: [] }, rowsFor(), NOTHING),
 		).toEqual([]);
 	});
 
 	it('blames a declined repair for the two light pairs it backs', () => {
 		const { rows, report } = withLightBrandDeclined();
-		const failing = failingRows({ report, unrepaired: [] }, rows, {});
+		const failing = failingRows({ report, unrepaired: [] }, rows, NOTHING);
 
 		expect(failing.map((f) => f.line)).toEqual([
 			'light: primary-foreground on primary: 4.18:1, needs 4.5',
@@ -99,25 +107,69 @@ describe('failingRows', () => {
 		]);
 	});
 
-	it('falls back to #153 attribution, then to the unrepaired reason, then to null', () => {
+	it('falls back to #153 attribution, then to the unrepaired reason, then to a combined cause', () => {
 		const { report } = withLightBrandDeclined();
 		const [first, second] = report.filter((e) => !e.passes);
-		const key = JSON.stringify(['alias', 'light', 'primary']);
+		const override: TokenOverride = {
+			kind: 'alias',
+			scheme: 'light',
+			token: 'primary',
+			alias: 'brand.1',
+		};
+		const key = overrideKey(override);
 
 		const rows = failingRows(
 			{ report, unrepaired: [{ ...second!, reason: 'no-lightness-clears' }] },
 			[],
-			{ [key]: [first!] },
+			{
+				attributed: { [key]: [first!] },
+				overrides: { [key]: override },
+				tokenSet: repaired.tokenSet,
+			},
 		);
 
 		expect(rows.map((r) => r.cause)).toEqual([
 			'Your override of primary',
 			UNREPAIRED_REASON_TEXT['no-lightness-clears'],
 		]);
-		expect(failingRows({ report, unrepaired: [] }, [], {}).map((r) => r.cause)).toEqual([
-			null,
-			null,
-		]);
+
+		const unexplained = failingRows({ report, unrepaired: [] }, [], {
+			attributed: {},
+			overrides: {},
+			tokenSet: repaired.tokenSet,
+		});
+
+		expect(unexplained.map((r) => r.cause)).toEqual([COMBINED_CAUSE, COMBINED_CAUSE]);
+	});
+
+	it('names a hand-edited primitive step that breaks a pair', () => {
+		const entry = applied.find(
+			(e) => e.scheme === 'light' && e.ramp === 'neutral' && e.step === 11,
+		)!;
+		// Lighter than the pre-repair colour, so not a decline, and further from AA on `muted`.
+		const edit: TokenOverride = {
+			kind: 'primitive',
+			scheme: 'light',
+			ramp: 'neutral',
+			step: 11,
+			...entry.from,
+			l: entry.from.l + 0.03,
+		};
+		const result = applyOverrides(repaired.tokenSet, [edit]);
+		if (!result.ok) throw new Error('edit rejected');
+
+		const overrides = { [overrideKey(edit)]: edit };
+		const failing = failingRows(
+			{ report: checkContrast(result.tokenSet), unrepaired: [] },
+			repairRows(applied, result.tokenSet, overrides),
+			{ attributed: {}, overrides, tokenSet: result.tokenSet },
+		);
+		const muted = failing.find(
+			(f) => f.entry.foreground === 'muted-foreground' && f.entry.background === 'muted',
+		);
+
+		expect(muted?.entry.scheme).toBe('light');
+		expect(muted?.cause).toBe('Your override of light neutral.11');
 	});
 
 	it('leaves the AA verdict to WCAG alone, whatever APCA reads', () => {
@@ -127,8 +179,8 @@ describe('failingRows', () => {
 			Object.assign({}, e, { wcag: 1, passes: false, apca: 108 }),
 		);
 
-		expect(failingRows({ report: lowLc, unrepaired: [] }, [], {})).toEqual([]);
-		expect(failingRows({ report: failingWcag, unrepaired: [] }, [], {})).toHaveLength(26);
+		expect(failingRows({ report: lowLc, unrepaired: [] }, [], NOTHING)).toEqual([]);
+		expect(failingRows({ report: failingWcag, unrepaired: [] }, [], NOTHING)).toHaveLength(26);
 	});
 });
 

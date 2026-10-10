@@ -29,7 +29,7 @@ export type RepairRow = {
 	specimens: Specimen[];
 };
 
-export type FailingRow = { entry: ContrastEntry; line: string; cause: string | null };
+export type FailingRow = { entry: ContrastEntry; line: string; cause: string };
 
 /**
  * `both-pinned` is parked (ADR-0010 keeps it unreachable from the workspace), but the `Record`
@@ -54,7 +54,8 @@ export function declineFor(entry: RepairEntry): TokenOverride {
 
 function statusOf(entry: RepairEntry, held: TokenOverride | undefined): RepairStatus {
 	if (held === undefined) return 'applied';
-	// Exact equality is safe: `from` is already on the grid every ramp step is quantized to.
+	// `declineFor` spreads `entry.from` into the decline, so a held decline carries the same numbers
+	// and exact equality is safe.
 	if (
 		held.kind === 'primitive' &&
 		held.l === entry.from.l &&
@@ -124,21 +125,34 @@ export function repairRows(
 	});
 }
 
+export type FailureContext = {
+	attributed: Readonly<Record<string, readonly ContrastEntry[]>>;
+	overrides: Readonly<Record<string, TokenOverride>>;
+	tokenSet: TokenSet;
+};
+
 /**
- * The line keeps the exact text the tab printed before #27 (two e2e specs find it by substring);
- * the cause rides beside it so those specs stay green.
+ * The cause when no single override or repair reason explains a failure, as with two alias
+ * overrides.
+ */
+export const COMBINED_CAUSE =
+	'Several of your overrides cause this together, so taking back just one won’t fix it.';
+
+/**
+ * `line` keeps the text the tab printed before #27, because `e2e/token-list.spec.ts` and
+ * `e2e/accessibility.spec.ts` both find a failing pair by it.
  */
 export function failingRows(
 	contrast: { report: readonly ContrastEntry[]; unrepaired: readonly UnrepairedEntry[] },
 	rows: readonly RepairRow[],
-	attributed: Readonly<Record<string, readonly ContrastEntry[]>>,
+	context: FailureContext,
 ): FailingRow[] {
 	return contrast.report
 		.filter((entry) => !entry.passes)
 		.map((entry) => ({
 			entry,
 			line: `${entry.scheme}: ${entry.foreground} on ${entry.background}: ${entry.wcag.toFixed(2)}:1, needs ${entry.target}`,
-			cause: causeOf(entry, contrast.unrepaired, rows, attributed),
+			cause: causeOf(entry, contrast.unrepaired, rows, context),
 		}));
 }
 
@@ -151,8 +165,8 @@ function causeOf(
 	entry: ContrastEntry,
 	unrepaired: readonly UnrepairedEntry[],
 	rows: readonly RepairRow[],
-	attributed: Readonly<Record<string, readonly ContrastEntry[]>>,
-): string | null {
+	{ attributed, overrides, tokenSet }: FailureContext,
+): string {
 	const declined = rows.find(
 		(row) =>
 			row.status === 'declined' &&
@@ -166,15 +180,30 @@ function causeOf(
 		return `Repair declined: ${declined.entry.scheme} ${declined.entry.ramp}.${declined.entry.step}`;
 
 	for (const [key, entries] of Object.entries(attributed)) {
-		if (!entries.some((candidate) => same(candidate, entry))) continue;
+		const override = overrides[key];
 
-		// Keys are `overrideKey` JSON; alias keys are `['alias', scheme, token]`.
-		const token = (JSON.parse(key) as unknown[])[2];
+		if (override?.kind !== 'alias' || !entries.some((candidate) => same(candidate, entry)))
+			continue;
 
-		return `Your override of ${String(token)}`;
+		return `Your override of ${override.token}`;
 	}
+
+	// #153 attribution skips primitive overrides, so a hand-edited step needs its own lookup. A
+	// decline on an operand step never reaches this lookup when `rows` and `tokenSet` agree, as they
+	// do in the panel, because the declined check above returns first.
+	const semantic = tokenSet.schemes[entry.scheme].semantic;
+	const operands = [semantic[entry.foreground]?.alias, semantic[entry.background]?.alias];
+	const edited = Object.values(overrides).find(
+		(override) =>
+			override.kind === 'primitive' &&
+			override.scheme === entry.scheme &&
+			operands.includes(`${override.ramp}.${override.step}`),
+	);
+
+	if (edited?.kind === 'primitive')
+		return `Your override of ${edited.scheme} ${edited.ramp}.${edited.step}`;
 
 	const reason = unrepaired.find((candidate) => same(candidate, entry));
 
-	return reason ? UNREPAIRED_REASON_TEXT[reason.reason] : null;
+	return reason ? UNREPAIRED_REASON_TEXT[reason.reason] : COMBINED_CAUSE;
 }

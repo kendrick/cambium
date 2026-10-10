@@ -179,8 +179,9 @@ export function AccessibilityPanel({
 		[contrast, tokenSet, overrides],
 	);
 	const failing = useMemo(
-		() => (contrast ? failingRows(contrast, rows, attributed) : []),
-		[contrast, rows, attributed],
+		() =>
+			contrast && tokenSet ? failingRows(contrast, rows, { attributed, overrides, tokenSet }) : [],
+		[contrast, rows, attributed, overrides, tokenSet],
 	);
 	const resolved = useMemo(
 		() =>
@@ -269,9 +270,9 @@ export function AccessibilityPanel({
 									className="flex flex-col gap-1"
 								>
 									{/* `e2e/token-list.spec.ts` finds this line by substring, so its text stays
-									    fixed and the cause gets an element of its own. */}
+									    fixed. */}
 									<p className="text-foreground">{line}</p>
-									{cause ? <p>{cause}</p> : null}
+									<p>{cause}</p>
 									{fg && bg ? (
 										<Swatch
 											paint={{ fg, bg, kind: entry.target === 3 ? 'non-text' : 'text' }}

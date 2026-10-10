@@ -25,6 +25,12 @@ const BEFORE_RATIO = 4.18;
  */
 const PAINT_PRECISION = 1;
 
+/**
+ * The closeness window above straddles 4.5, so a repair the compositor paints at 4.47 would pass it.
+ * The threshold check catches that drift.
+ */
+const AA_TEXT = 4.5;
+
 const PRIMARY_PAIR = 'primary-foreground on primary';
 
 async function openDemo(page: Page): Promise<void> {
@@ -74,6 +80,14 @@ test('the report lists every pair in both schemes with AA and advisory APCA colu
 			expect(await rows.locator('td:nth-child(4)').allTextContents()).toEqual(
 				Array.from({ length: 13 }, () => 'Pass'),
 			);
+
+			const apca = await rows.locator('td:nth-child(5)').allTextContents();
+
+			expect(apca).toHaveLength(13);
+			for (const lc of apca) {
+				expect(lc.trim(), `${scheme} APCA cell`).not.toBe('');
+				expect(Number.isFinite(Number(lc)), `${scheme} APCA "${lc}"`).toBe(true);
+			}
 		}),
 	);
 });
@@ -113,20 +127,37 @@ test('the toggle swaps the failing and repaired paint in place', async ({ page }
 	await specimen.scrollIntoViewIfNeeded();
 	await settle(page);
 	await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-	expect(await paintedContrast(specimen), 'applied').toBeCloseTo(AFTER_RATIO, PAINT_PRECISION);
+	const applied = await paintedContrast(specimen);
+	expect(applied, 'applied').toBeCloseTo(AFTER_RATIO, PAINT_PRECISION);
 
 	await toggle.click();
 	await expect(toggle).toHaveAttribute('aria-pressed', 'true');
 	await settle(page);
-	expect(await paintedContrast(specimen), 'before repair').toBeCloseTo(
-		BEFORE_RATIO,
-		PAINT_PRECISION,
-	);
+	const before = await paintedContrast(specimen);
+	expect(before, 'before repair').toBeCloseTo(BEFORE_RATIO, PAINT_PRECISION);
+	expect(before, 'before repair').toBeLessThan(AA_TEXT);
 
 	await toggle.click();
 	await expect(toggle).toHaveAttribute('aria-pressed', 'false');
 	await settle(page);
-	expect(await paintedContrast(specimen), 'toggled back').toBeCloseTo(AFTER_RATIO, PAINT_PRECISION);
+	const back = await paintedContrast(specimen);
+	expect(back, 'toggled back').toBeCloseTo(AFTER_RATIO, PAINT_PRECISION);
+});
+
+// #190: repair accepts this pair at 4.511 in core's bytes (#0f0f10 on #647f8a), but Chromium paints
+// the ink one green step off, rgb(15,16,16), and the pair lands at 4.487. `test.fail` keeps the
+// check running: once #190 lands this case starts passing, Playwright reports it, and the marker
+// comes off.
+test('the repaired pair clears AA as Chromium paints it', async ({ page }) => {
+	test.fail(true, '#190');
+	await openDemo(page);
+	await openAccessibility(page);
+
+	const specimen = card(page, LIGHT_BRAND).locator(`[data-specimen="${PRIMARY_PAIR}"]`);
+
+	await specimen.scrollIntoViewIfNeeded();
+	await settle(page);
+	expect(await paintedContrast(specimen), 'applied').toBeGreaterThanOrEqual(AA_TEXT);
 });
 
 test('declining and restoring a repair fails and clears only that scheme', async ({ page }) => {
@@ -141,6 +172,15 @@ test('declining and restoring a repair fails and clears only that scheme', async
 	await expect(page.getByText('2 declared pairs fail AA.')).toBeVisible();
 	await expect(page.getByText(`light: ${PRIMARY_PAIR}: 4.18:1, needs 4.5`)).toBeVisible();
 	await expect(page.getByText(`Repair declined: ${LIGHT_BRAND}`).first()).toBeVisible();
+
+	const failingSpecimen = page.locator(`[data-failing-specimen="light: ${PRIMARY_PAIR}"]`);
+
+	await failingSpecimen.scrollIntoViewIfNeeded();
+	await settle(page);
+	const declined = await paintedContrast(failingSpecimen);
+	expect(declined, 'declined').toBeCloseTo(BEFORE_RATIO, PAINT_PRECISION);
+	expect(declined, 'declined').toBeLessThan(AA_TEXT);
+
 	await expect(fails('light')).toHaveCount(2);
 	await expect(fails('dark')).toHaveCount(0);
 
