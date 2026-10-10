@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import photoWindow from '../../../app/demo/fixtures/photo-window.json';
 import { BrandSeedSchema } from '../../../core/brand-seed';
-import { checkContrast } from '../../../core/contrast/check';
+import { type ContrastEntry, checkContrast } from '../../../core/contrast/check';
 import { withContrastRepairs } from '../../../core/contrast/repair';
 import { BALANCED } from '../../../core/interpretation';
 import { createOklchScaleEngine } from '../../../core/oklch-scale-engine';
 import { repairPinsFor } from '../../../core/seed-pins';
 import { buildTokenSet } from '../../../core/semantic-layer';
+import { stepForAlias } from '../../../core/token-set';
 import { applyOverrides, overrideKey, type TokenOverride } from '../../../core/token-overrides';
 import {
 	COMBINED_CAUSE,
@@ -20,6 +21,7 @@ import {
 const seed = BrandSeedSchema.parse(photoWindow.versions[0]!.seed);
 const generated = createOklchScaleEngine().generate(seed, BALANCED);
 if (!generated.ok) throw new Error(`the scale engine rejected the seed: ${generated.error.kind}`);
+const ramps = generated.schemes;
 
 const base = buildTokenSet(generated.schemes, seed, BALANCED);
 const repaired = withContrastRepairs(base, { pinned: repairPinsFor(seed, ['keyColors.0']) });
@@ -81,10 +83,50 @@ function withLightBrandDeclined() {
 	return {
 		rows: repairRows(applied, result.tokenSet, overrides),
 		report: checkContrast(result.tokenSet),
+		context: { attributed: {}, overrides, tokenSet: result.tokenSet, ramps },
 	};
 }
 
-const NOTHING = { attributed: {}, overrides: {}, tokenSet: repaired.tokenSet };
+const NOTHING = {
+	attributed: {},
+	overrides: {},
+	tokenSet: repaired.tokenSet,
+	ramps,
+};
+
+const same = (a: ContrastEntry, b: ContrastEntry) =>
+	a.scheme === b.scheme && a.foreground === b.foreground && a.background === b.background;
+
+/**
+ * A light-scheme step nudged off its repaired lightness. The nudges here are small, so none lands on
+ * a pre-repair colour and reads as a decline.
+ */
+function primitiveEdit(ramp: string, step: number, dl: number): TokenOverride {
+	const colour = stepForAlias(repaired.tokenSet.schemes.light.primitives, `${ramp}.${step}`)!;
+
+	return {
+		kind: 'primitive',
+		scheme: 'light',
+		ramp,
+		step,
+		l: colour.l + dl,
+		c: colour.c,
+		h: colour.h,
+	};
+}
+
+function failingWith(edits: TokenOverride[]) {
+	const result = applyOverrides(repaired.tokenSet, edits);
+	if (!result.ok) throw new Error('edit rejected');
+
+	const overrides = Object.fromEntries(edits.map((edit) => [overrideKey(edit), edit]));
+
+	return {
+		report: checkContrast(result.tokenSet),
+		rows: repairRows(applied, result.tokenSet, overrides),
+		context: { attributed: {}, overrides, tokenSet: result.tokenSet, ramps },
+	};
+}
 
 describe('failingRows', () => {
 	it('names nothing failing when the repaired set passes', () => {
@@ -94,8 +136,8 @@ describe('failingRows', () => {
 	});
 
 	it('blames a declined repair for the two light pairs it backs', () => {
-		const { rows, report } = withLightBrandDeclined();
-		const failing = failingRows({ report, unrepaired: [] }, rows, NOTHING);
+		const { rows, report, context } = withLightBrandDeclined();
+		const failing = failingRows({ report, unrepaired: [] }, rows, context);
 
 		expect(failing.map((f) => f.line)).toEqual([
 			'light: primary-foreground on primary: 4.18:1, needs 4.5',
@@ -125,6 +167,7 @@ describe('failingRows', () => {
 				attributed: { [key]: [first!] },
 				overrides: { [key]: override },
 				tokenSet: repaired.tokenSet,
+				ramps,
 			},
 		);
 
@@ -133,11 +176,7 @@ describe('failingRows', () => {
 			UNREPAIRED_REASON_TEXT['no-lightness-clears'],
 		]);
 
-		const unexplained = failingRows({ report, unrepaired: [] }, [], {
-			attributed: {},
-			overrides: {},
-			tokenSet: repaired.tokenSet,
-		});
+		const unexplained = failingRows({ report, unrepaired: [] }, [], NOTHING);
 
 		expect(unexplained.map((r) => r.cause)).toEqual([COMBINED_CAUSE, COMBINED_CAUSE]);
 	});
@@ -162,13 +201,91 @@ describe('failingRows', () => {
 		const failing = failingRows(
 			{ report: checkContrast(result.tokenSet), unrepaired: [] },
 			repairRows(applied, result.tokenSet, overrides),
-			{ attributed: {}, overrides, tokenSet: result.tokenSet },
+			{ attributed: {}, overrides, tokenSet: result.tokenSet, ramps },
 		);
 		const muted = failing.find(
 			(f) => f.entry.foreground === 'muted-foreground' && f.entry.background === 'muted',
 		);
 
 		expect(muted?.entry.scheme).toBe('light');
+		expect(muted?.cause).toBe('Your override of light neutral.11');
+	});
+
+	it('explains an unrepaired pair by its reason, not by a later edit to one of its steps', () => {
+		const edit = primitiveEdit('neutral', 11, +0.03);
+		const { report, rows, context } = failingWith([edit]);
+		const muted = report.find(
+			(e) => e.foreground === 'muted-foreground' && e.background === 'muted',
+		)!;
+
+		const failing = failingRows(
+			{ report, unrepaired: [{ ...muted, reason: 'no-lightness-clears' }] },
+			rows,
+			context,
+		);
+
+		expect(failing.find((f) => same(f.entry, muted))?.cause).toBe(
+			UNREPAIRED_REASON_TEXT['no-lightness-clears'],
+		);
+	});
+
+	// photo-window's light `muted-foreground on muted` is neutral.11 on neutral.3. Lighter ink and darker
+	// fill both pull the ratio down, so reverting either edit alone needn't clear it.
+	it('names no single override when both operands are hand-edited', () => {
+		const { report, rows, context } = failingWith([
+			primitiveEdit('neutral', 11, +0.03),
+			primitiveEdit('neutral', 3, -0.05),
+		]);
+		const failing = failingRows({ report, unrepaired: [] }, rows, context);
+		const muted = failing.find(
+			(f) => f.entry.scheme === 'light' && f.entry.foreground === 'muted-foreground',
+		);
+
+		expect(muted?.cause).toBe(COMBINED_CAUSE);
+	});
+
+	// The decline puts back brand.1's near-white ink on brand.9, and Restore brings the dark ink back.
+	// A slightly darker brand.9 sits below AA under either ink, so neither step alone clears the pair.
+	it('names no single override when a declined step also has an edited partner', () => {
+		const { report, rows, context } = failingWith([
+			declineFor(applied[0]!),
+			primitiveEdit('brand', 9, -0.01),
+		]);
+		const failing = failingRows({ report, unrepaired: [] }, rows, context);
+		const primary = failing.find(
+			(f) => f.entry.scheme === 'light' && f.entry.foreground === 'primary-foreground',
+		);
+
+		expect(primary?.cause).toBe(COMBINED_CAUSE);
+	});
+
+	// A lighter brand.9 pushes the near-white ink further below AA, but Restore's dark ink clears it.
+	// So the decline is the override to name, though both steps are edited.
+	it('names the one override whose reversal clears the pair when two sit on it', () => {
+		const { report, rows, context } = failingWith([
+			declineFor(applied[0]!),
+			primitiveEdit('brand', 9, +0.05),
+		]);
+		const failing = failingRows({ report, unrepaired: [] }, rows, context);
+
+		expect(
+			failing.find((f) => f.entry.scheme === 'light' && f.entry.foreground === 'primary-foreground')
+				?.cause,
+		).toBe('Repair declined: light brand.1');
+	});
+
+	// The neutral.3 edit is listed first, so a lookup that only checks operands names it. A lighter
+	// neutral.3 raises the ratio, though, and reverting it leaves the pair failing.
+	it('skips an edit on an operand whose reversal leaves the pair failing', () => {
+		const { report, rows, context } = failingWith([
+			primitiveEdit('neutral', 3, +0.01),
+			primitiveEdit('neutral', 11, +0.03),
+		]);
+		const failing = failingRows({ report, unrepaired: [] }, rows, context);
+		const muted = failing.find(
+			(f) => f.entry.scheme === 'light' && f.entry.foreground === 'muted-foreground',
+		);
+
 		expect(muted?.cause).toBe('Your override of light neutral.11');
 	});
 

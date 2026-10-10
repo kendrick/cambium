@@ -389,7 +389,10 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 					ref={(node) => {
 						panels.current.accessibility = node;
 					}}
-					className={cn('text-muted-foreground text-sm', padding)}
+					// The report runs several screens long. From md up it scrolls inside the Output row, as
+					// the token list does, because left to grow it spills over the raw-response row below.
+					// Below md the page is the scroller (#157).
+					className={cn('text-muted-foreground min-h-0 text-sm md:overflow-y-auto', padding)}
 				>
 					{heading ? <h2 className="sr-only">Accessibility</h2> : null}
 					<AccessibilityPanel store={store} attributed={contrastByOverride} />

@@ -297,3 +297,47 @@ test('every control in the Accessibility tab meets the 24px target size', async 
 		expect(Math.min(box!.width, box!.height), `${name}`).toBeGreaterThanOrEqual(MIN_TARGET);
 	}
 });
+
+// Desktop Chrome's 1280×720. From md up the shell fixes the grid to the viewport, so a report that
+// grows past its row runs over the raw-response row under it instead of scrolling (PR #191 review).
+test('the report scrolls inside the Output pane on desktop', async ({ page }) => {
+	await openDemo(page);
+	await openAccessibility(page);
+
+	const panel = page.getByRole('tabpanel', { name: 'Accessibility' });
+	const raw = page.getByText('Raw model response', { exact: true });
+	const [panelBox, rawBox] = await Promise.all([panel.boundingBox(), raw.boundingBox()]);
+
+	expect(panelBox).not.toBeNull();
+	expect(rawBox).not.toBeNull();
+	expect(panelBox!.y + panelBox!.height, 'panel bottom vs raw response top').toBeLessThanOrEqual(
+		rawBox!.y,
+	);
+
+	const sizes = await panel.evaluate((node) => ({
+		scrollHeight: node.scrollHeight,
+		clientHeight: node.clientHeight,
+		page: document.documentElement.scrollHeight,
+		viewport: window.innerHeight,
+	}));
+
+	expect(sizes.scrollHeight, 'the panel scrolls').toBeGreaterThan(sizes.clientHeight);
+	expect(sizes.page, 'the page itself does not').toBeLessThanOrEqual(sizes.viewport);
+});
+
+// Below md the page is the one scroller (#157), so the panel mustn't trap a thumb in a nested one.
+test('the report leaves scrolling to the page on a phone', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await openDemo(page);
+	await openAccessibility(page);
+
+	const sizes = await page.getByRole('tabpanel', { name: 'Accessibility' }).evaluate((node) => ({
+		scrollHeight: node.scrollHeight,
+		clientHeight: node.clientHeight,
+		page: document.documentElement.scrollHeight,
+		viewport: window.innerHeight,
+	}));
+
+	expect(sizes.scrollHeight, 'the panel grows to its content').toBe(sizes.clientHeight);
+	expect(sizes.page, 'and the page scrolls it').toBeGreaterThan(sizes.viewport);
+});

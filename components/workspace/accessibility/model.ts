@@ -1,10 +1,11 @@
-import { type ContrastEntry } from '../../../core/contrast/check';
+import { type ContrastEntry, checkContrast } from '../../../core/contrast/check';
 import { CONTRAST_PAIRS } from '../../../core/contrast/pairs';
 import type { RepairEntry, UnrepairedEntry, UnrepairedReason } from '../../../core/contrast/repair';
 import { type Oklch, renderedContrast } from '../../../core/oklch';
 import { resolveScheme } from '../../../core/resolve-scheme';
-import { overrideKey, type TokenOverride } from '../../../core/token-overrides';
-import type { TokenSet } from '../../../core/token-set';
+import type { RampSet, SchemeName } from '../../../core/scale-engine';
+import { applyOverrides, overrideKey, type TokenOverride } from '../../../core/token-overrides';
+import { stepForAlias, type TokenSet } from '../../../core/token-set';
 
 export type RepairStatus = 'applied' | 'declined' | 'edited';
 
@@ -129,11 +130,16 @@ export type FailureContext = {
 	attributed: Readonly<Record<string, readonly ContrastEntry[]>>;
 	overrides: Readonly<Record<string, TokenOverride>>;
 	tokenSet: TokenSet;
+	/**
+	 * The scale engine's ramps, before repair. The store doesn't expose its repaired set, so these
+	 * ramps and `rows` rebuild a hand-edited step's colour from before the edit.
+	 */
+	ramps: Readonly<Record<SchemeName, RampSet>>;
 };
 
 /**
- * The cause when no single override or repair reason explains a failure, as with two alias
- * overrides.
+ * The cause when no single override or repair reason explains a failure, as with two overrides
+ * that each keep the pair failing on their own.
  */
 export const COMBINED_CAUSE =
 	'Several of your overrides cause this together, so taking back just one won’t fix it.';
@@ -147,12 +153,14 @@ export function failingRows(
 	rows: readonly RepairRow[],
 	context: FailureContext,
 ): FailingRow[] {
+	const passesWithout = revertChecker(rows, context);
+
 	return contrast.report
 		.filter((entry) => !entry.passes)
 		.map((entry) => ({
 			entry,
 			line: `${entry.scheme}: ${entry.foreground} on ${entry.background}: ${entry.wcag.toFixed(2)}:1, needs ${entry.target}`,
-			cause: causeOf(entry, contrast.unrepaired, rows, context),
+			cause: causeOf(entry, contrast.unrepaired, rows, context, passesWithout),
 		}));
 }
 
@@ -161,24 +169,53 @@ type PairRef = { scheme: string; foreground: string; background: string };
 const same = (a: PairRef, b: PairRef) =>
 	a.scheme === b.scheme && a.foreground === b.foreground && a.background === b.background;
 
+/**
+ * Whether the final set passes a pair once one primitive override is taken back, the same
+ * counterfactual #153 runs for alias overrides. Taking it back means the step's repaired colour:
+ * `to` for a step repair moved, else the engine's own.
+ */
+function revertChecker(
+	rows: readonly RepairRow[],
+	{ tokenSet, ramps }: FailureContext,
+): (override: Extract<TokenOverride, { kind: 'primitive' }>, entry: ContrastEntry) => boolean {
+	const reports = new Map<string, readonly ContrastEntry[] | null>();
+
+	const reportWithout = (override: Extract<TokenOverride, { kind: 'primitive' }>) => {
+		const key = overrideKey(override);
+
+		if (!reports.has(key)) {
+			// Repair reports one entry per moved step, the last move, so `to` is the colour it left.
+			const moved = rows.find(
+				(row) =>
+					row.entry.scheme === override.scheme &&
+					row.entry.ramp === override.ramp &&
+					row.entry.step === override.step,
+			);
+			const before =
+				moved?.entry.to ??
+				stepForAlias(ramps[override.scheme], `${override.ramp}.${override.step}`);
+			const reverted = before
+				? applyOverrides(tokenSet, [{ ...override, l: before.l, c: before.c, h: before.h }])
+				: null;
+
+			reports.set(key, reverted?.ok ? checkContrast(reverted.tokenSet) : null);
+		}
+
+		return reports.get(key);
+	};
+
+	return (override, entry) =>
+		reportWithout(override)?.some((candidate) => same(candidate, entry) && candidate.passes) ??
+		false;
+}
+
 function causeOf(
 	entry: ContrastEntry,
 	unrepaired: readonly UnrepairedEntry[],
 	rows: readonly RepairRow[],
 	{ attributed, overrides, tokenSet }: FailureContext,
+	passesWithout: ReturnType<typeof revertChecker>,
 ): string {
-	const declined = rows.find(
-		(row) =>
-			row.status === 'declined' &&
-			row.entry.scheme === entry.scheme &&
-			row.specimens.some(
-				(s) => s.foreground === entry.foreground && s.background === entry.background,
-			),
-	);
-
-	if (declined)
-		return `Repair declined: ${declined.entry.scheme} ${declined.entry.ramp}.${declined.entry.step}`;
-
 	for (const [key, entries] of Object.entries(attributed)) {
 		const override = overrides[key];
 
@@ -188,22 +225,34 @@ function causeOf(
 		return `Your override of ${override.token}`;
 	}
 
-	// #153 attribution skips primitive overrides, so a hand-edited step needs its own lookup. A
-	// decline on an operand step never reaches this lookup when `rows` and `tokenSet` agree, as they
-	// do in the panel, because the declined check above returns first.
-	const semantic = tokenSet.schemes[entry.scheme].semantic;
-	const operands = [semantic[entry.foreground]?.alias, semantic[entry.background]?.alias];
-	const edited = Object.values(overrides).find(
-		(override) =>
-			override.kind === 'primitive' &&
-			override.scheme === entry.scheme &&
-			operands.includes(`${override.ramp}.${override.step}`),
-	);
-
-	if (edited?.kind === 'primitive')
-		return `Your override of ${edited.scheme} ${edited.ramp}.${edited.step}`;
-
+	// Repair already couldn't clear this pair before any override, so no edit made it fail.
 	const reason = unrepaired.find((candidate) => same(candidate, entry));
 
-	return reason ? UNREPAIRED_REASON_TEXT[reason.reason] : COMBINED_CAUSE;
+	if (reason) return UNREPAIRED_REASON_TEXT[reason.reason];
+
+	// #153 attribution skips primitive overrides, declines included, so they get the same
+	// counterfactual here. Sitting on an operand isn't enough: a second edit can keep the pair failing
+	// after this one is reverted.
+	const semantic = tokenSet.schemes[entry.scheme].semantic;
+	const operands = [semantic[entry.foreground]?.alias, semantic[entry.background]?.alias];
+
+	for (const override of Object.values(overrides)) {
+		if (
+			override.kind !== 'primitive' ||
+			override.scheme !== entry.scheme ||
+			!operands.includes(`${override.ramp}.${override.step}`) ||
+			!passesWithout(override, entry)
+		)
+			continue;
+
+		const declined = rows.find(
+			(row) => row.status === 'declined' && row.key === overrideKey(override),
+		);
+
+		return declined
+			? `Repair declined: ${declined.entry.scheme} ${declined.entry.ramp}.${declined.entry.step}`
+			: `Your override of ${override.scheme} ${override.ramp}.${override.step}`;
+	}
+
+	return COMBINED_CAUSE;
 }

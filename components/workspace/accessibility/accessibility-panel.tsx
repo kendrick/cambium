@@ -170,6 +170,7 @@ export function AccessibilityPanel({
 }) {
 	const contrast = useStore(store, (state) => state.contrast);
 	const tokenSet = useStore(store, (state) => state.tokenSet);
+	const derived = useStore(store, (state) => state.derived);
 	const overrides = useStore(store, (state) => state.overrides);
 	const setOverride = useStore(store, (state) => state.setOverride);
 	const clearOverride = useStore(store, (state) => state.clearOverride);
@@ -180,8 +181,10 @@ export function AccessibilityPanel({
 	);
 	const failing = useMemo(
 		() =>
-			contrast && tokenSet ? failingRows(contrast, rows, { attributed, overrides, tokenSet }) : [],
-		[contrast, rows, attributed, overrides, tokenSet],
+			contrast && tokenSet && derived?.ok
+				? failingRows(contrast, rows, { attributed, overrides, tokenSet, ramps: derived.schemes })
+				: [],
+		[contrast, rows, attributed, overrides, tokenSet, derived],
 	);
 	const resolved = useMemo(
 		() =>
@@ -292,7 +295,9 @@ export function AccessibilityPanel({
 				<h3 className={HEADING}>All pairs</h3>
 				<p>
 					APCA is advisory. The AA verdict reads the WCAG 2 ratio alone, so an APCA figure never
-					changes it.
+					changes it. Cambium measures each ratio on its own 8-bit sRGB conversion, which can land
+					one byte off the browser’s. A pair right at its target can then paint just under it (issue
+					#190).
 				</p>
 				{SCHEME_NAMES.map((scheme) => (
 					<Table key={scheme} className="caption-top">
