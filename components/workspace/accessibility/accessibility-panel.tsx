@@ -9,6 +9,7 @@ import type { ContrastEntry } from '../../../core/contrast/check';
 import { toOklchCss } from '../../../core/css/oklch-css';
 import type { Oklch } from '../../../core/oklch';
 import { resolveScheme } from '../../../core/resolve-scheme';
+import type { TokenSet } from '../../../core/token-set';
 import { SCHEME_NAMES } from '../../../core/scale-engine';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -163,10 +164,13 @@ function RepairCard({
 export function AccessibilityPanel({
 	store,
 	attributed,
+	aliasBaseline,
 }: {
 	store: StoreApi<WorkspaceState>;
 	/** The shell's #153 attribution, shared with the token list rather than derived twice. */
 	attributed: Record<string, ContrastEntry[]>;
+	/** The set before user overrides, whose aliases decide which pairs a repair card shows. */
+	aliasBaseline: TokenSet | null;
 }) {
 	const contrast = useStore(store, (state) => state.contrast);
 	const tokenSet = useStore(store, (state) => state.tokenSet);
@@ -176,8 +180,11 @@ export function AccessibilityPanel({
 	const clearOverride = useStore(store, (state) => state.clearOverride);
 
 	const rows = useMemo(
-		() => (contrast && tokenSet ? repairRows(contrast.applied, tokenSet, overrides) : []),
-		[contrast, tokenSet, overrides],
+		() =>
+			contrast && tokenSet
+				? repairRows(contrast.applied, tokenSet, overrides, aliasBaseline ?? tokenSet)
+				: [],
+		[contrast, tokenSet, overrides, aliasBaseline],
 	);
 	const failing = useMemo(
 		() =>

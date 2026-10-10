@@ -28,7 +28,7 @@ const repaired = withContrastRepairs(base, { pinned: repairPinsFor(seed, ['keyCo
 const applied = repaired.report;
 
 const rowsFor = (overrides: Record<string, TokenOverride> = {}) =>
-	repairRows(applied, repaired.tokenSet, overrides);
+	repairRows(applied, repaired.tokenSet, overrides, repaired.tokenSet);
 
 describe('repairRows on photo-window', () => {
 	it('lists the three moved steps in repair order', () => {
@@ -47,6 +47,24 @@ describe('repairRows on photo-window', () => {
 			'sidebar-primary-foreground on sidebar-primary',
 		]);
 		expect(row!.specimens.every((s) => s.kind === 'text' && s.target === 4.5)).toBe(true);
+	});
+
+	// A card describes the pairs repair moved its step for. Re-aliasing a token afterwards changes the
+	// final set's aliases, not that history, so the card reads membership off the pre-override set.
+	it('keeps a card to the pairs repair moved its step for after re-aliasing (#191)', () => {
+		const realiased = applyOverrides(repaired.tokenSet, [
+			{ kind: 'alias', scheme: 'light', token: 'primary-foreground', alias: 'brand.12' },
+			{ kind: 'alias', scheme: 'light', token: 'foreground', alias: 'brand.1' },
+		]);
+
+		if (!realiased.ok) throw new Error(`applyOverrides refused ${realiased.key}`);
+
+		const [row] = repairRows(applied, realiased.tokenSet, {}, repaired.tokenSet);
+
+		expect(row!.specimens.map((s) => `${s.foreground} on ${s.background}`)).toEqual([
+			'primary-foreground on primary',
+			'sidebar-primary-foreground on sidebar-primary',
+		]);
 	});
 
 	// Figures are the plan's measured Context values for photo-window, not read back from the module.
@@ -81,7 +99,7 @@ function withLightBrandDeclined() {
 	const overrides = { [overrideKey(decline)]: decline };
 
 	return {
-		rows: repairRows(applied, result.tokenSet, overrides),
+		rows: repairRows(applied, result.tokenSet, overrides, repaired.tokenSet),
 		report: checkContrast(result.tokenSet),
 		context: { attributed: {}, overrides, tokenSet: result.tokenSet, ramps },
 	};
@@ -123,7 +141,7 @@ function failingWith(edits: TokenOverride[]) {
 
 	return {
 		report: checkContrast(result.tokenSet),
-		rows: repairRows(applied, result.tokenSet, overrides),
+		rows: repairRows(applied, result.tokenSet, overrides, repaired.tokenSet),
 		context: { attributed: {}, overrides, tokenSet: result.tokenSet, ramps },
 	};
 }
@@ -200,7 +218,7 @@ describe('failingRows', () => {
 		const overrides = { [overrideKey(edit)]: edit };
 		const failing = failingRows(
 			{ report: checkContrast(result.tokenSet), unrepaired: [] },
-			repairRows(applied, result.tokenSet, overrides),
+			repairRows(applied, result.tokenSet, overrides, repaired.tokenSet),
 			{ attributed: {}, overrides, tokenSet: result.tokenSet, ramps },
 		);
 		const muted = failing.find(

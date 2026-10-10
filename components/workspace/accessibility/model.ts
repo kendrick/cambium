@@ -2,7 +2,6 @@ import { type ContrastEntry, checkContrast } from '../../../core/contrast/check'
 import { CONTRAST_PAIRS } from '../../../core/contrast/pairs';
 import type { RepairEntry, UnrepairedEntry, UnrepairedReason } from '../../../core/contrast/repair';
 import { type Oklch, renderedContrast } from '../../../core/oklch';
-import { resolveScheme } from '../../../core/resolve-scheme';
 import type { RampSet, SchemeName } from '../../../core/scale-engine';
 import { applyOverrides, overrideKey, type TokenOverride } from '../../../core/token-overrides';
 import { stepForAlias, type TokenSet } from '../../../core/token-set';
@@ -74,10 +73,19 @@ function statusOf(entry: RepairEntry, held: TokenOverride | undefined): RepairSt
  * `entry.measured`/`achieved`: those describe the pair that triggered the move, and a step often
  * backs more pairs than that one.
  */
-function specimensFor(entry: RepairEntry, tokenSet: TokenSet): Specimen[] {
-	const resolved = resolveScheme(tokenSet.schemes[entry.scheme]);
-	const semantic = tokenSet.schemes[entry.scheme].semantic;
+function specimensFor(entry: RepairEntry, tokenSet: TokenSet, aliases: TokenSet): Specimen[] {
+	const primitives = tokenSet.schemes[entry.scheme].primitives;
+	// The pairs a card shows are the ones repair moved its step for, so membership and the other
+	// operand's alias come from the pre-override set. A later re-alias in the token list changes
+	// what the final set paints, not what this repair did (#191). Colours still come from the final
+	// primitives, so a hand-edited step paints as edited.
+	const semantic = aliases.schemes[entry.scheme].semantic;
 	const alias = `${entry.ramp}.${entry.step}`;
+	const colourOf = (token: string): Oklch => {
+		const step = stepForAlias(primitives, semantic[token]!.alias)!;
+
+		return { l: step.l, c: step.c, h: step.h };
+	};
 	const specimens: Specimen[] = [];
 
 	for (const pair of CONTRAST_PAIRS) {
@@ -87,8 +95,8 @@ function specimensFor(entry: RepairEntry, tokenSet: TokenSet): Specimen[] {
 		if (!onForeground && !onBackground) continue;
 
 		const at = (step: Oklch): Painted => {
-			const fg = onForeground ? step : resolved[pair.foreground]!;
-			const bg = onBackground ? step : resolved[pair.background]!;
+			const fg = onForeground ? step : colourOf(pair.foreground);
+			const bg = onBackground ? step : colourOf(pair.background);
 
 			return { fg, bg, ratio: renderedContrast(fg, bg) };
 		};
@@ -110,6 +118,8 @@ export function repairRows(
 	applied: readonly RepairEntry[],
 	tokenSet: TokenSet,
 	overrides: Readonly<Record<string, TokenOverride>>,
+	/** The set before user overrides, whose aliases decide which pairs each card shows. */
+	aliases: TokenSet,
 ): RepairRow[] {
 	return applied.map((entry) => {
 		const decline = declineFor(entry);
@@ -121,7 +131,7 @@ export function repairRows(
 			status: statusOf(entry, overrides[key]),
 			decline,
 			key,
-			specimens: specimensFor(entry, tokenSet),
+			specimens: specimensFor(entry, tokenSet, aliases),
 		};
 	});
 }

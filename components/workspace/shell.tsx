@@ -302,18 +302,19 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 
 	// The store keeps its repaired, pre-override base to itself, so the aliases an override replaced
 	// are rebuilt here from the same ramps and seed. Only aliases are read off it, and repair never
-	// moves one, so skipping the repair pass costs nothing in accuracy.
-	const contrastByOverride = useMemo(() => {
-		if (!tokenSet || !derived?.ok || !draftSeed) return {};
-		// Only alias overrides get a verdict, and rebuilding the baseline is a second full derivation,
-		// so skip it on the common keystroke where no alias is overridden.
-		if (!Object.values(overrides).some((override) => override.kind === 'alias')) return {};
-		return attributeContrastFailures(
-			tokenSet,
-			Object.values(overrides),
-			buildTokenSet(derived.schemes, draftSeed),
-		);
+	// moves one, so skipping the repair pass costs nothing in accuracy. With no alias override the
+	// final set's aliases are already the pre-override ones, which skips a second full derivation on
+	// the common keystroke.
+	const aliasBaseline = useMemo(() => {
+		if (!tokenSet || !derived?.ok || !draftSeed) return tokenSet;
+		if (!Object.values(overrides).some((override) => override.kind === 'alias')) return tokenSet;
+		return buildTokenSet(derived.schemes, draftSeed);
 	}, [tokenSet, derived, draftSeed, overrides]);
+
+	const contrastByOverride = useMemo(() => {
+		if (!tokenSet || !aliasBaseline || aliasBaseline === tokenSet) return {};
+		return attributeContrastFailures(tokenSet, Object.values(overrides), aliasBaseline);
+	}, [tokenSet, aliasBaseline, overrides]);
 
 	// Built once and placed by whichever layout is mounted. Only one layout mounts at a time, so
 	// each panel, id, ref, lazy chunk and scheme control exists once in the DOM at any width. It
@@ -395,7 +396,11 @@ export function Shell({ store }: { store: StoreApi<WorkspaceState> }) {
 					className={cn('text-muted-foreground min-h-0 text-sm md:overflow-y-auto', padding)}
 				>
 					{heading ? <h2 className="sr-only">Accessibility</h2> : null}
-					<AccessibilityPanel store={store} attributed={contrastByOverride} />
+					<AccessibilityPanel
+						store={store}
+						attributed={contrastByOverride}
+						aliasBaseline={aliasBaseline}
+					/>
 				</TabsPanel>
 				<TabsPanel
 					value="export"
