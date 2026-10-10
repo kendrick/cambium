@@ -1660,6 +1660,42 @@ describe('the workspace store’s contrast repair (#8)', () => {
 		expect(after).toEqual(others);
 	});
 
+	// The Accessibility tab (#27) lists a declined repair so it can offer Restore, but a decline is a
+	// primitive override that `repairs` correctly drops. `applied` is the pre-override pass report.
+	it('keeps a declined repair in applied while repairs drops it, and restores both on clear', () => {
+		const { store } = openWorkspace();
+		const appliedBefore = store.getState().contrast?.applied ?? [];
+		const repairsBefore = store.getState().contrast?.repairs ?? [];
+		const entry = appliedBefore[0];
+
+		if (!entry) throw new Error('expected the default seed to need at least one repair');
+
+		const sameStep = (other: { scheme: string; ramp: string; step: number }) =>
+			other.scheme === entry.scheme && other.ramp === entry.ramp && other.step === entry.step;
+		const decline: TokenOverride = {
+			kind: 'primitive',
+			scheme: entry.scheme,
+			ramp: entry.ramp,
+			step: entry.step,
+			...entry.from,
+		};
+
+		expect(repairsBefore.some(sameStep)).toBe(true);
+
+		store.getState().setOverride(decline);
+
+		const declined = store.getState().contrast;
+
+		expect(declined?.applied).toEqual(appliedBefore);
+		expect(declined?.applied).toBe(appliedBefore);
+		expect(declined?.repairs.some(sameStep)).toBe(false);
+
+		store.getState().clearOverride(overrideKey(decline));
+
+		expect(store.getState().contrast?.repairs.some(sameStep)).toBe(true);
+		expect(store.getState().contrast?.applied).toBe(appliedBefore);
+	});
+
 	// DESIGN.md prints each entry's pair and achieved ratio beside the exported tokens. An override on either operand changes the ratio those tokens paint even when the moved step is untouched, so the entry has to go with it (PR #180 review).
 	describe('drops a repair entry once an override changes either operand of its pair', () => {
 		it('when the primitive on the side the repair did not move is edited', () => {
