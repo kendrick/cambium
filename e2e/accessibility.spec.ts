@@ -341,3 +341,31 @@ test('the report leaves scrolling to the page on a phone', async ({ page }) => {
 	expect(sizes.scrollHeight, 'the panel grows to its content').toBe(sizes.clientHeight);
 	expect(sizes.page, 'and the page scrolls it').toBeGreaterThan(sizes.viewport);
 });
+
+// A card shows the pairs repair moved its step for. Re-aliasing a token in the token list changes the
+// final set, not that history, and the shell has to hand the panel its pre-override set for the card
+// to know the difference (#191).
+test('a repair card keeps its pairs after a token is re-aliased in the token list', async ({
+	page,
+}) => {
+	await openDemo(page);
+
+	const row = page.locator('[data-token="semantic.primary-foreground"]');
+	await page
+		.getByRole('button', { name: /^Edit semantic\.primary-foreground( \(has issues\))?$/ })
+		.click();
+	const editor = page.locator('[data-editor="semantic.primary-foreground"]');
+	await editor.getByLabel('primary-foreground alias', { exact: true }).selectOption('brand.12');
+	await page.keyboard.press('Escape');
+	await expect(editor).toHaveCount(0);
+	await expect(row).toHaveAttribute('data-overridden', '');
+
+	await openAccessibility(page);
+
+	await expect(card(page, LIGHT_BRAND).locator('[data-specimen]')).toHaveCount(2);
+	expect(
+		await card(page, LIGHT_BRAND)
+			.locator('[data-specimen]')
+			.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-specimen'))),
+	).toEqual([PRIMARY_PAIR, 'sidebar-primary-foreground on sidebar-primary']);
+});
